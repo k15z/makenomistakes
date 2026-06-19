@@ -278,6 +278,10 @@ func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 }
 
 func ledgerTaskEvidence(runDir, taskID, relPath string) (EvidenceRecord, bool) {
+	return ledgerTaskEvidenceBefore(runDir, taskID, relPath, maxInt)
+}
+
+func ledgerTaskEvidenceBefore(runDir, taskID, relPath string, beforeIndex int) (EvidenceRecord, bool) {
 	evidence, err := ledgerEvidence(runDir)
 	if err != nil {
 		return EvidenceRecord{}, false
@@ -285,7 +289,7 @@ func ledgerTaskEvidence(runDir, taskID, relPath string) (EvidenceRecord, bool) {
 	var match EvidenceRecord
 	found := false
 	for _, item := range evidence {
-		if item.TaskID == taskID && item.Path == relPath {
+		if item.TaskID == taskID && item.Path == relPath && item.eventIndex < beforeIndex {
 			match = item
 			found = true
 		}
@@ -343,6 +347,15 @@ func ledgerFindingHasValidValidationEvidence(runDir, findingID, taskID string, b
 func ledgerFindingHasValidReviewEvidence(runDir, findingID, taskID string, beforeIndex int) bool {
 	notesRel := reviewNotesRelPath(findingID)
 	item, ok := ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, notesRel, beforeIndex)
+	if !ok {
+		return false
+	}
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyEvidenceFile)
+}
+
+func ledgerFindingHasValidDeduplicateEvidence(runDir, taskID string, beforeIndex int) bool {
+	notesRel := deduplicateNotesRelPath()
+	item, ok := ledgerTaskEvidenceBefore(runDir, taskID, notesRel, beforeIndex)
 	if !ok {
 		return false
 	}
@@ -461,6 +474,8 @@ func ledgerVerdictComplete(runDir string, verdict VerdictRecord) bool {
 	switch verdict.Phase {
 	case "review":
 		return ledgerFindingHasValidReviewEvidence(runDir, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
+	case "deduplicate":
+		return ledgerFindingHasValidDeduplicateEvidence(runDir, verdict.TaskID, verdict.eventIndex)
 	case "validate":
 		return ledgerFindingHasValidValidationEvidence(runDir, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
 	default:

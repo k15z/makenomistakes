@@ -1439,6 +1439,25 @@ func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonic
 			t.Fatal(err)
 		}
 	}
+	if phase == "deduplicate" {
+		notesRel := deduplicateNotesRelPath()
+		writeRunFile(t, runDir, notesRel, "Deduplication evidence for test.")
+		if err := appendLedgerEvent(runDir, LedgerEvent{
+			RunID:    "run_test",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_deduplicate_" + safeFileID(findingID),
+			TaskID:   taskID,
+			Data: map[string]any{
+				"kind":           "markdown",
+				"title":          "Deduplication notes",
+				"path":           notesRel,
+				"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if phase == "validate" {
 		notesRel := validationNotesRelPath(findingID)
 		writeRunFile(t, runDir, notesRel, "Validation evidence for test.")

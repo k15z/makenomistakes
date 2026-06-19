@@ -198,6 +198,7 @@ printf '{"type":"done"}\n'
 func addCanonicalFindingForTest(t *testing.T, runDir, id, bodyRel, body string) FindingRecord {
 	t.Helper()
 	finding := addReviewedFindingForTest(t, runDir, id, bodyRel, body)
+	addDeduplicationEvidenceForTest(t, runDir, "run_validate", "task_deduplicate")
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_validate",
 		Type:     "verdict.recorded",
@@ -228,4 +229,25 @@ func addCanonicalFindingForTest(t *testing.T, runDir, id, bodyRel, body string) 
 		t.Fatal(err)
 	}
 	return finding
+}
+
+func addDeduplicationEvidenceForTest(t *testing.T, runDir, runID, taskID string) {
+	t.Helper()
+	notesRel := deduplicateNotesRelPath()
+	writeRunFile(t, runDir, notesRel, "Deduplication evidence for test.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_deduplicate_" + taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Deduplication notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

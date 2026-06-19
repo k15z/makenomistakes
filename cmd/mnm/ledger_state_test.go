@@ -239,6 +239,23 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 		t.Fatalf("unexpected undeduplicated findings: %#v", pendingDedup)
 	}
 
+	dedupNotesRel := deduplicateNotesRelPath()
+	writeRunFile(t, runDir, dedupNotesRel, "Deduplication proof.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_dedup_one",
+		TaskID:   "task_deduplicate",
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Deduplication notes",
+			"path":           dedupNotesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, dedupNotesRel),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_test",
 		Type:     "verdict.recorded",
