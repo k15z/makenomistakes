@@ -2270,7 +2270,7 @@ func TestEvidenceAddRejectsConflictingMetadataForSameTaskPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected conflicting evidence metadata error")
 	}
-	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata") {
+	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata or content") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
@@ -2306,7 +2306,7 @@ func TestEvidenceAddRejectsChangedContentForSameTaskPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected changed evidence content error")
 	}
-	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata") {
+	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata or content") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
@@ -2365,6 +2365,83 @@ func TestEvidenceAddUsesLatestExistingTaskPathRegistration(t *testing.T) {
 		t.Fatalf("idempotent evidence id = %q, want latest existing event", got)
 	}
 	assertEvidenceEventCount(t, runDir, "task_recon", proofRel, 2)
+}
+
+func TestRegisterTaskEvidenceIsIdempotentForSameMetadata(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "evidence/recon-prompt.md", "prompt")
+	registration := taskEvidenceRegistration{
+		RunID:  "run_test",
+		TaskID: "task_recon",
+		Kind:   "markdown",
+		Title:  "Recon prompt",
+		Path:   "evidence/recon-prompt.md",
+	}
+
+	firstID, err := registerTaskEvidence(runDir, registration)
+	if err != nil {
+		t.Fatalf("first evidence registration failed: %v", err)
+	}
+	secondID, err := registerTaskEvidence(runDir, registration)
+	if err != nil {
+		t.Fatalf("idempotent evidence registration failed: %v", err)
+	}
+	if secondID != firstID {
+		t.Fatalf("idempotent evidence id = %q, want %q", secondID, firstID)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-prompt.md", 1)
+}
+
+func TestRegisterTaskEvidenceAllowsChangedContentForMutablePrompt(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "evidence/recon-prompt.md", "prompt v1")
+	registration := taskEvidenceRegistration{
+		RunID:              "run_test",
+		TaskID:             "task_recon",
+		Kind:               "markdown",
+		Title:              "Recon prompt",
+		Path:               "evidence/recon-prompt.md",
+		AllowContentChange: true,
+	}
+
+	firstID, err := registerTaskEvidence(runDir, registration)
+	if err != nil {
+		t.Fatalf("first evidence registration failed: %v", err)
+	}
+	writeRunFile(t, runDir, "evidence/recon-prompt.md", "prompt v2")
+	secondID, err := registerTaskEvidence(runDir, registration)
+	if err != nil {
+		t.Fatalf("mutable prompt evidence registration failed: %v", err)
+	}
+	if secondID != firstID {
+		t.Fatalf("mutable prompt evidence id = %q, want %q", secondID, firstID)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-prompt.md", 1)
+}
+
+func TestRegisterTaskEvidenceRejectsConflictingMetadata(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "evidence/recon-prompt.md", "prompt")
+	registration := taskEvidenceRegistration{
+		RunID:  "run_test",
+		TaskID: "task_recon",
+		Kind:   "markdown",
+		Title:  "Recon prompt",
+		Path:   "evidence/recon-prompt.md",
+	}
+
+	if _, err := registerTaskEvidence(runDir, registration); err != nil {
+		t.Fatalf("first evidence registration failed: %v", err)
+	}
+	registration.Title = "Different prompt"
+	_, err := registerTaskEvidence(runDir, registration)
+	if err == nil {
+		t.Fatal("expected conflicting evidence registration error")
+	}
+	if !strings.Contains(err.Error(), "already registered evidence path evidence/recon-prompt.md with different metadata or content") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-prompt.md", 1)
 }
 
 func TestLeadCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {

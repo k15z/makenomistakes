@@ -266,17 +266,13 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	if err := os.WriteFile(promptPath, []byte(prompt), filePerm); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":  "markdown",
-			"title": "Recon prompt",
-			"path":  "evidence/recon-prompt.md",
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              runID,
+		TaskID:             task.TaskID,
+		Kind:               "markdown",
+		Title:              "Recon prompt",
+		Path:               "evidence/recon-prompt.md",
+		AllowContentChange: true,
 	}); err != nil {
 		return err
 	}
@@ -295,17 +291,12 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":  "jsonl",
-			"title": "OpenCode Recon transcript",
-			"path":  "evidence/opencode-recon.jsonl",
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:  runID,
+		TaskID: task.TaskID,
+		Kind:   "jsonl",
+		Title:  "OpenCode Recon transcript",
+		Path:   "evidence/opencode-recon.jsonl",
 	}); err != nil {
 		return err
 	}

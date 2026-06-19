@@ -52,17 +52,13 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	if err := os.WriteFile(promptPath, []byte(prompt), filePerm); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":  "markdown",
-			"title": "Finalize prompt",
-			"path":  promptRel,
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              runID,
+		TaskID:             task.TaskID,
+		Kind:               "markdown",
+		Title:              "Finalize prompt",
+		Path:               promptRel,
+		AllowContentChange: true,
 	}); err != nil {
 		return err
 	}
@@ -97,17 +93,12 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	}); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":  "jsonl",
-			"title": "OpenCode Finalize transcript",
-			"path":  logRel,
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:  runID,
+		TaskID: task.TaskID,
+		Kind:   "jsonl",
+		Title:  "OpenCode Finalize transcript",
+		Path:   logRel,
 	}); err != nil {
 		return err
 	}

@@ -436,54 +436,16 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := requireNonEmptyRunFile(runDir, relPath, "evidence file"); err != nil {
-		return err
-	}
-	contentSHA256 := ""
-	if info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(relPath))); err == nil && info.Mode().IsRegular() {
-		contentSHA256, err = evidenceFileSHA256(runDir, relPath)
-		if err != nil {
-			return fmt.Errorf("hash evidence file %s: %w", relPath, err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("stat evidence path %s: %w", relPath, err)
-	}
-	evidenceID := newLedgerID("evidence")
-	event, err := prepareLedgerEvent(runDir, LedgerEvent{
-		RunID:    task.RunID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: evidenceID,
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":           kindText,
-			"title":          titleText,
-			"path":           relPath,
-			"lead_id":        *leadID,
-			"finding_id":     *findingID,
-			"content_sha256": contentSHA256,
-		},
+	evidenceID, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:     task.RunID,
+		TaskID:    task.TaskID,
+		Kind:      kindText,
+		Title:     titleText,
+		Path:      relPath,
+		LeadID:    *leadID,
+		FindingID: *findingID,
 	})
 	if err != nil {
-		return err
-	}
-	unlock, err := lockRunDir(runDir)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	existing, exists, err := ledgerTaskEvidencePathUnlocked(runDir, task.TaskID, relPath)
-	if err != nil {
-		return err
-	}
-	if exists {
-		if existing.Kind == kindText && existing.Title == titleText && existing.LeadID == *leadID && existing.FindingID == *findingID && existing.ContentSHA256 == contentSHA256 {
-			fmt.Fprintln(stdout, existing.ID)
-			return nil
-		}
-		return fmt.Errorf("task %s already registered evidence path %s with different metadata", task.TaskID, relPath)
-	}
-	if err := appendLedgerEventUnlocked(runDir, event); err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, evidenceID)
@@ -794,6 +756,72 @@ func ledgerTaskEvidencePathUnlocked(runDir, taskID, relPath string) (EvidenceRec
 		}
 	}
 	return match, found, nil
+}
+
+type taskEvidenceRegistration struct {
+	RunID              string
+	TaskID             string
+	Kind               string
+	Title              string
+	Path               string
+	LeadID             string
+	FindingID          string
+	AllowContentChange bool
+}
+
+func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) (string, error) {
+	if err := requireNonEmptyRunFile(runDir, registration.Path, "evidence file"); err != nil {
+		return "", err
+	}
+	contentSHA256 := ""
+	if info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(registration.Path))); err == nil && info.Mode().IsRegular() {
+		contentSHA256, err = evidenceFileSHA256(runDir, registration.Path)
+		if err != nil {
+			return "", fmt.Errorf("hash evidence file %s: %w", registration.Path, err)
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("stat evidence path %s: %w", registration.Path, err)
+	}
+	evidenceID := newLedgerID("evidence")
+	event, err := prepareLedgerEvent(runDir, LedgerEvent{
+		RunID:    registration.RunID,
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: evidenceID,
+		TaskID:   registration.TaskID,
+		Data: map[string]any{
+			"kind":           registration.Kind,
+			"title":          registration.Title,
+			"path":           registration.Path,
+			"lead_id":        registration.LeadID,
+			"finding_id":     registration.FindingID,
+			"content_sha256": contentSHA256,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	existing, exists, err := ledgerTaskEvidencePathUnlocked(runDir, registration.TaskID, registration.Path)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		sameMetadata := existing.Kind == registration.Kind && existing.Title == registration.Title && existing.LeadID == registration.LeadID && existing.FindingID == registration.FindingID
+		sameContent := existing.ContentSHA256 == contentSHA256
+		if sameMetadata && (sameContent || registration.AllowContentChange) {
+			return existing.ID, nil
+		}
+		return "", fmt.Errorf("task %s already registered evidence path %s with different metadata or content", registration.TaskID, registration.Path)
+	}
+	if err := appendLedgerEventUnlocked(runDir, event); err != nil {
+		return "", err
+	}
+	return evidenceID, nil
 }
 
 func requiredTextFlag(name, value string) (string, error) {
