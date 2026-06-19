@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,7 +42,9 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 		Stdout:       stdout,
 		Stderr:       stderr,
 	}
-	return analyzeWorkspace(context.Background(), options, newDefaultRunner(stdout, stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return analyzeWorkspace(ctx, options, newDefaultRunner(stdout, stderr))
 }
 
 type AnalyzeOptions struct {
@@ -138,8 +142,11 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 		KeepVM:      options.KeepVM,
 	}); err != nil {
 		status := RunStatusFailed
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded):
 			status = RunStatusTimedOut
+		case errors.Is(err, context.Canceled) || errors.Is(runCtx.Err(), context.Canceled):
+			status = RunStatusStopped
 		}
 		_ = store.UpdateRunStatus(runID, status)
 		return err
