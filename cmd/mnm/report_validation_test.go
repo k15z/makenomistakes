@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestReportBucketForFinding(t *testing.T) {
 	tests := []struct {
@@ -69,6 +72,36 @@ func TestReportBucketForFinding(t *testing.T) {
 				t.Fatalf("bucket = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateMarkdownReportCoversAllFindingsRequiresIDToken(t *testing.T) {
+	state := reportLedgerState{
+		Findings: map[string]FindingRecord{
+			"finding_auth":       {},
+			"finding_auth_extra": {},
+		},
+	}
+
+	err := validateMarkdownReportCoversAllFindings([]byte("# Report\n\nFinding finding_auth_extra\n"), state)
+	if err == nil {
+		t.Fatal("expected prefix finding ID coverage error")
+	}
+	if !strings.Contains(err.Error(), "markdown report missing finding finding_auth") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err = validateMarkdownReportCoversAllFindings([]byte("# Report\n\nFinding finding_auth-extra\nFinding finding_auth_extra\n"), state)
+	if err == nil {
+		t.Fatal("expected hyphen-suffixed finding ID coverage error")
+	}
+	if !strings.Contains(err.Error(), "markdown report missing finding finding_auth") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err = validateMarkdownReportCoversAllFindings([]byte("# Report\n\nFindings: finding_auth, finding_auth_extra.\n"), state)
+	if err != nil {
+		t.Fatalf("expected tokenized finding IDs to pass: %v", err)
 	}
 }
 
