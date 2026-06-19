@@ -1741,6 +1741,190 @@ func TestVerdictRequiresReason(t *testing.T) {
 	}
 }
 
+func TestVerdictRecordIsIdempotentForSameDecision(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+	startReviewTaskWithEvidenceForTest(t, runDir, findingID)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "accepted",
+		"--reason", "Specific and supported.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first verdict failed: %v\nstderr: %s", err, stderr.String())
+	}
+	firstID := strings.TrimSpace(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "accepted",
+		"--reason", "Same decision after retry.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent verdict failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != firstID {
+		t.Fatalf("idempotent verdict id = %q, want %q", got, firstID)
+	}
+	assertVerdictEventCount(t, runDir, findingID, "review", 1)
+}
+
+func TestVerdictRecordIsAtomicForParallelSameDecision(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+	startReviewTaskWithEvidenceForTest(t, runDir, findingID)
+
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"verdict", "record",
+				"--run-dir", runDir,
+				"--finding", findingID,
+				"--phase", "review",
+				"--value", "accepted",
+				"--reason", "Parallel same decision.",
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel verdict record failed: %v", err)
+		}
+	}
+	assertVerdictEventCount(t, runDir, findingID, "review", 1)
+}
+
+func TestVerdictRecordRejectsConflictingCurrentTaskDecision(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+	startReviewTaskWithEvidenceForTest(t, runDir, findingID)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "accepted",
+		"--reason", "Specific and supported.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first verdict failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "rejected",
+		"--reason", "Conflicting decision in same task.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting verdict error")
+	}
+	if !strings.Contains(err.Error(), `already has review verdict "accepted"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertVerdictEventCount(t, runDir, findingID, "review", 1)
+}
+
+func TestVerdictRecordRejectsConflictingDecision(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "rejected",
+		"--reason", "Changed my mind.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting verdict error")
+	}
+	if !strings.Contains(err.Error(), `already has review verdict "accepted"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertVerdictEventCount(t, runDir, findingID, "review", 1)
+}
+
+func TestDeduplicateVerdictRejectsChangedCanonicalFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	firstID := createFindingForTest(t, runDir, "")
+	secondID := createFindingForTest(t, runDir, "")
+	duplicateID := createFindingForTest(t, runDir, "")
+	recordVerdictForTest(t, runDir, firstID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, secondID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, duplicateID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, duplicateID, "deduplicate", "duplicate", firstID)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", duplicateID,
+		"--phase", "deduplicate",
+		"--value", "duplicate",
+		"--canonical-finding", secondID,
+		"--reason", "Different canonical after retry.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting canonical verdict error")
+	}
+	if !strings.Contains(err.Error(), `already has deduplicate verdict "duplicate"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertVerdictEventCount(t, runDir, duplicateID, "deduplicate", 1)
+}
+
+func TestValidateVerdictRejectsConflictingDecision(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "validate",
+		"--value", "failed",
+		"--reason", "Different validation after retry.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting validation verdict error")
+	}
+	if !strings.Contains(err.Error(), `already has validate verdict "proven"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertVerdictEventCount(t, runDir, findingID, "validate", 1)
+}
+
 func TestDeduplicateDuplicateVerdictRequiresCanonicalFinding(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	if err := writeCurrentTaskForTest(runDir, TaskRecord{
@@ -2002,6 +2186,31 @@ func createFindingForTest(t *testing.T, runDir, leadID string) string {
 	return strings.TrimSpace(stdout.String())
 }
 
+func startReviewTaskWithEvidenceForTest(t *testing.T, runDir, findingID string) {
+	t.Helper()
+	if err := writeCurrentTaskForTest(runDir, TaskRecord{
+		RunID:       "run_test",
+		TaskID:      "task_review_" + safeFileID(findingID),
+		Phase:       "review",
+		Title:       "Review finding",
+		Instruction: "Review one finding.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	notesPath := writeRunFile(t, runDir, reviewNotesRelPath(findingID), "Review evidence for test.")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--kind", "markdown",
+		"--title", "Review notes",
+		"--path", notesPath,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("review evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+}
+
 func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonicalFindingID string) {
 	t.Helper()
 	taskID := "task_" + phase + "_" + safeFileID(findingID)
@@ -2140,6 +2349,26 @@ func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
 	}
 	if got != want {
 		t.Fatalf("lead.closed event count = %d, want %d", got, want)
+	}
+}
+
+func assertVerdictEventCount(t *testing.T, runDir, findingID, phase string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type != "verdict.recorded" {
+			continue
+		}
+		if event.Data["finding_id"] == findingID && event.Data["phase"] == phase {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("verdict.recorded event count for %s/%s = %d, want %d", findingID, phase, got, want)
 	}
 }
 

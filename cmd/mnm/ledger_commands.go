@@ -433,12 +433,11 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	verdictID := newLedgerID("verdict")
-	if err := appendLedgerEvent(runDir, LedgerEvent{
+	event, err := prepareLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
 		Type:     "verdict.recorded",
 		Object:   "verdict",
-		ObjectID: verdictID,
+		ObjectID: newLedgerID("verdict"),
 		TaskID:   task.TaskID,
 		Data: map[string]any{
 			"finding_id":           *findingID,
@@ -447,11 +446,57 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 			"reason":               reasonText,
 			"canonical_finding_id": *canonicalFindingID,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, verdictID)
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	existing, exists, err := existingVerdictForCommandUnlocked(runDir, task.TaskID, *findingID, *phase)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if existing.Value == *value && existing.CanonicalFindingID == *canonicalFindingID {
+			fmt.Fprintln(stdout, existing.ID)
+			return nil
+		}
+		return fmt.Errorf("finding %s already has %s verdict %q", *findingID, *phase, existing.Value)
+	}
+	if err := appendLedgerEventUnlocked(runDir, event); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, event.ObjectID)
 	return nil
+}
+
+func existingVerdictForCommandUnlocked(runDir, taskID, findingID, phase string) (VerdictRecord, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return VerdictRecord{}, false, err
+	}
+	verdicts := verdictsFromEvents(events)
+	var match VerdictRecord
+	found := false
+	for _, verdict := range verdicts {
+		if verdict.FindingID == findingID && verdict.Phase == phase && ledgerVerdictCompleteFromEvents(runDir, events, verdict) {
+			match = verdict
+			found = true
+		}
+	}
+	if found {
+		return match, true, nil
+	}
+	for _, verdict := range verdicts {
+		if verdict.TaskID == taskID && verdict.FindingID == findingID && verdict.Phase == phase {
+			match = verdict
+			found = true
+		}
+	}
+	return match, found, nil
 }
 
 func requireReviewAcceptedFinding(runDir, findingID string) error {
