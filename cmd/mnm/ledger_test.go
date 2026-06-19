@@ -56,6 +56,89 @@ func TestReadLedgerEventsRejectsWrongObjectForType(t *testing.T) {
 	}
 }
 
+func TestReadLedgerEventsRejectsMissingRequiredEventData(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runDir, eventsFile), []byte(`{"id":"event_bad","run_id":"run_test","type":"lead.created","object":"lead","object_id":"lead_bad","timestamp":"2026-01-01T00:00:00Z","data":{"title":"Lead without body","category":"security","priority":"high"}}
+`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readLedgerEvents(runDir)
+	if err == nil {
+		t.Fatal("expected missing event data error")
+	}
+	if !strings.Contains(err.Error(), "lead.created data.body_path is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAppendLedgerEventRejectsInvalidEventData(t *testing.T) {
+	runDir := t.TempDir()
+	err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_recon",
+		Data: map[string]any{
+			"status": "done",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid event data error")
+	}
+	if !strings.Contains(err.Error(), `task.completed data.status = "done"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadLedgerEventsRejectsInvalidVerdictData(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runDir, eventsFile), []byte(`{"id":"event_bad","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_bad","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"duplicate","reason":"self duplicate","canonical_finding_id":"finding_one"}}
+`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readLedgerEvents(runDir)
+	if err == nil {
+		t.Fatal("expected invalid verdict data error")
+	}
+	if !strings.Contains(err.Error(), "data.canonical_finding_id must differ from data.finding_id") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadLedgerEventsRejectsEmptyVerdictFindingID(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runDir, eventsFile), []byte(`{"id":"event_bad","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_bad","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"","phase":"review","value":"accepted","reason":"accepted"}}
+`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readLedgerEvents(runDir)
+	if err == nil {
+		t.Fatal("expected empty finding id error")
+	}
+	if !strings.Contains(err.Error(), "verdict.recorded data.finding_id must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadLedgerEventsRejectsEmptyDuplicateCanonicalFindingID(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runDir, eventsFile), []byte(`{"id":"event_bad","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_bad","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"duplicate","reason":"duplicate","canonical_finding_id":""}}
+`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readLedgerEvents(runDir)
+	if err == nil {
+		t.Fatal("expected empty canonical finding id error")
+	}
+	if !strings.Contains(err.Error(), "verdict.recorded data.canonical_finding_id must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestAppendLedgerEventRejectsUnknownEventType(t *testing.T) {
 	runDir := t.TempDir()
 	err := appendLedgerEvent(runDir, LedgerEvent{
