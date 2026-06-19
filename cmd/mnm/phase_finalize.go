@@ -8,6 +8,10 @@ import (
 )
 
 func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	return runFinalizeTaskWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath})
+}
+
+func runFinalizeTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
 	task := TaskRecord{
 		RunID:       runID,
 		TaskID:      "task_finalize",
@@ -60,7 +64,7 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-finalize.jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
-	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
