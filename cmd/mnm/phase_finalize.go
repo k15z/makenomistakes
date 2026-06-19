@@ -7,15 +7,15 @@ import (
 )
 
 func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
-	if ledgerReportFinalized(runDir) {
-		return nil
-	}
 	task := TaskRecord{
 		RunID:       runID,
 		TaskID:      "task_finalize",
 		Phase:       "finalize",
 		Title:       "Finalize report",
 		Instruction: "Render the final Markdown and JSON audit reports from the ledger and evidence files.",
+	}
+	if ledgerReportFinalized(runDir) {
+		return validateLatestFinalizedReport(runDir, task)
 	}
 	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
 	if err := writeTaskFile(taskPath, task); err != nil {
@@ -95,8 +95,29 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	if !ledgerReportFinalized(runDir) {
 		return fmt.Errorf("finalize opencode task did not register report outputs")
 	}
+	if err := validateLatestFinalizedReport(runDir, task); err != nil {
+		return err
+	}
 	if !ledgerTaskCompleted(runDir, task.TaskID) {
 		return fmt.Errorf("finalize opencode task did not complete task %s", task.TaskID)
+	}
+	return nil
+}
+
+func validateLatestFinalizedReport(runDir string, task TaskRecord) error {
+	reports, err := ledgerReports(runDir)
+	if err != nil {
+		return err
+	}
+	if len(reports) == 0 {
+		return fmt.Errorf("finalize opencode task did not register report outputs")
+	}
+	report := reports[len(reports)-1]
+	if report.MarkdownPath == "" || report.JSONPath == "" {
+		return fmt.Errorf("finalized report %s is missing markdown_path or json_path", report.ID)
+	}
+	if err := validateReportArtifacts(runDir, task, report.MarkdownPath, report.JSONPath); err != nil {
+		return fmt.Errorf("finalized report %s failed validation: %w", report.ID, err)
 	}
 	return nil
 }

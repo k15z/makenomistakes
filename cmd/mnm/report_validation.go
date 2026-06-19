@@ -10,6 +10,21 @@ import (
 )
 
 func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRel string) error {
+	normalizedMarkdownRel, err := normalizeReportPath(runDir, markdownRel)
+	if err != nil {
+		return fmt.Errorf("markdown report path: %w", err)
+	}
+	if normalizedMarkdownRel != markdownRel {
+		return fmt.Errorf("markdown report path = %q, want normalized run-relative path %q", markdownRel, normalizedMarkdownRel)
+	}
+	normalizedJSONRel, err := normalizeReportPath(runDir, jsonRel)
+	if err != nil {
+		return fmt.Errorf("JSON report path: %w", err)
+	}
+	if normalizedJSONRel != jsonRel {
+		return fmt.Errorf("JSON report path = %q, want normalized run-relative path %q", jsonRel, normalizedJSONRel)
+	}
+
 	markdownPath := filepath.Join(runDir, filepath.FromSlash(markdownRel))
 	markdown, err := os.ReadFile(markdownPath)
 	if err != nil {

@@ -45,7 +45,7 @@ cat > "$MNM_RUN_DIR/report.md" <<'EOF'
 Fake report.
 EOF
 cat > "$MNM_RUN_DIR/report.json" <<'EOF'
-{"findings":[]}
+{"run_id":"run_finalize","counts":{"findings_proven":0,"findings_inconclusive":0,"findings_failed":0,"findings_rejected":0,"findings_duplicate":0,"findings_unvalidated":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[],"inconclusive":[],"failed":[],"rejected":[],"duplicate":[],"unvalidated":[]}
 EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_report","run_id":"run_finalize","type":"report.finalized","object":"report","object_id":"report_fake","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"markdown_path":"report.md","json_path":"report.json"}}
@@ -71,5 +71,67 @@ printf '{"type":"done"}\n'
 	}
 	if got := readFile(t, filepath.Join(runDir, "report.md")); !strings.Contains(got, "Fake report") {
 		t.Fatalf("unexpected report.md:\n%s", got)
+	}
+}
+
+func TestRunFinalizeTaskRejectsInvalidDirectReportEvent(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/report.md" <<'EOF'
+# Report
+
+Fake report.
+EOF
+cat > "$MNM_RUN_DIR/report.json" <<'EOF'
+{"findings":[]}
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_report","run_id":"run_finalize","type":"report.finalized","object":"report","object_id":"report_fake","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"markdown_path":"report.md","json_path":"report.json"}}
+{"id":"event_done_finalize","run_id":"run_finalize","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{Models: ModelConfig{Default: "fake/model"}}
+	err := runFinalizeTask(runDir, "run_finalize", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected invalid direct report event to fail")
+	}
+	if !strings.Contains(err.Error(), "failed validation") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunFinalizeTaskValidatesExistingFinalizedReport(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "report.md", "# Report")
+	writeRunFile(t, runDir, "report.json", `{"findings":[]}`)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_finalize",
+		Type:     "report.finalized",
+		Object:   "report",
+		ObjectID: "report_existing",
+		TaskID:   "task_finalize",
+		Data: map[string]any{
+			"markdown_path": "report.md",
+			"json_path":     "report.json",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runFinalizeTask(runDir, "run_finalize", t.TempDir(), Config{}, filepath.Join(t.TempDir(), "opencode"))
+	if err == nil {
+		t.Fatal("expected existing invalid report to fail validation")
+	}
+	if !strings.Contains(err.Error(), "report_existing failed validation") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
