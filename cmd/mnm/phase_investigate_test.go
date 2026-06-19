@@ -411,7 +411,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected blank investigation evidence error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/investigate-lead_auth-notes.md must not be empty") {
+	if !strings.Contains(err.Error(), "whitespace-only") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -454,7 +454,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing investigation evidence hash error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/investigate-lead_auth-notes.md is missing registered content hash") {
+	if !strings.Contains(err.Error(), "data.content_sha256 is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -529,7 +529,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing investigation evidence file error")
 	}
-	if !strings.Contains(err.Error(), "read evidence file evidence/investigate-lead_auth-notes.md") {
+	if !strings.Contains(err.Error(), "artifact evidence/investigate-lead_auth-notes.md") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

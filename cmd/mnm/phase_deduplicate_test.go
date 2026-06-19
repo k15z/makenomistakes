@@ -170,11 +170,12 @@ func TestRunDeduplicatePhaseResumesAfterPartialVerdicts(t *testing.T) {
 	addReviewedFindingForTest(t, runDir, "finding_two", "evidence/finding-two.md", "Second candidate body.")
 
 	opencodePath := filepath.Join(t.TempDir(), "opencode")
-	body := `#!/bin/sh
+	countFile := filepath.Join(t.TempDir(), "dedup-attempt-count")
+	body := strings.ReplaceAll(`#!/bin/sh
 set -eu
 : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
 : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
-count_file="$MNM_RUN_DIR/dedup-attempt-count"
+count_file="__COUNT_FILE__"
 count=0
 if [ -f "$count_file" ]; then
   count="$(cat "$count_file")"
@@ -201,7 +202,7 @@ cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_done_dedup_2","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done","attempt":2}\n'
-`
+`, "__COUNT_FILE__", countFile)
 	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -223,15 +224,19 @@ printf '{"type":"done","attempt":2}\n'
 	}
 	assertTaskStartedEventCount(t, runDir, "task_deduplicate", 1)
 
-	if err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath); err != nil {
-		t.Fatalf("expected second deduplicate run to resume, got: %v", err)
+	err = runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected second deduplicate run to reject appending after task completion")
+	}
+	if !strings.Contains(err.Error(), "already completed") {
+		t.Fatalf("unexpected second run error: %v", err)
 	}
 	pending, err = undeduplicatedLedgerFindings(runDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 0 {
-		t.Fatalf("pending findings after resumed run = %#v, want none", pending)
+	if len(pending) != 1 || pending[0].ID != "finding_two" {
+		t.Fatalf("pending findings after rejected rerun = %#v, want finding_two", pending)
 	}
 	assertTaskStartedEventCount(t, runDir, "task_deduplicate", 1)
 }
@@ -267,7 +272,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing deduplication evidence file error")
 	}
-	if !strings.Contains(err.Error(), "read evidence file evidence/deduplicate-notes.md") {
+	if !strings.Contains(err.Error(), "artifact evidence/deduplicate-notes.md") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -305,7 +310,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing deduplication evidence hash error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/deduplicate-notes.md is missing registered content hash") {
+	if !strings.Contains(err.Error(), "data.content_sha256 is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -345,7 +350,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected rerun invalidation error")
 	}
-	if !strings.Contains(err.Error(), "left findings pending deduplication: finding_one") {
+	if !strings.Contains(err.Error(), "target artifact evidence/deduplicate-notes.md already exists with different contents") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

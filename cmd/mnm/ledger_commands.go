@@ -101,7 +101,7 @@ func ledgerTaskCompletionStatus(runDir, taskID string) (string, bool, error) {
 }
 
 func ledgerTaskCompletionStatusUnlocked(runDir, taskID string) (string, bool, error) {
-	events, err := readLedgerEventsUnlocked(runDir)
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
 	if err != nil {
 		return "", false, err
 	}
@@ -318,7 +318,7 @@ func ledgerTaskLeadBodyPath(runDir, taskID, bodyPath string) (LeadRecord, bool, 
 }
 
 func ledgerTaskLeadBodyPathUnlocked(runDir, taskID, bodyPath string) (LeadRecord, bool, error) {
-	events, err := readLedgerEventsUnlocked(runDir)
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
 	if err != nil {
 		return LeadRecord{}, false, err
 	}
@@ -573,7 +573,7 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 func existingVerdictForCommandUnlocked(runDir, taskID, findingID, phase string) (VerdictRecord, bool, error) {
-	events, err := readLedgerEventsUnlocked(runDir)
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
 	if err != nil {
 		return VerdictRecord{}, false, err
 	}
@@ -722,7 +722,7 @@ func ledgerTaskFinalizedReport(runDir, taskID string) (ReportRecord, bool, error
 }
 
 func ledgerTaskFinalizedReportUnlocked(runDir, taskID string) (ReportRecord, bool, error) {
-	events, err := readLedgerEventsUnlocked(runDir)
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
 	if err != nil {
 		return ReportRecord{}, false, err
 	}
@@ -784,7 +784,7 @@ func requireEvidenceOwnerPhase(task TaskRecord, leadID, findingID string) error 
 }
 
 func ledgerTaskEvidenceRegistrationUnlocked(runDir string, registration taskEvidenceRegistration) (EvidenceRecord, bool, error) {
-	events, err := readLedgerEventsUnlocked(runDir)
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
 	if err != nil {
 		return EvidenceRecord{}, false, err
 	}

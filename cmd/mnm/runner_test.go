@@ -1367,6 +1367,171 @@ printf '{"type":"done","attempt":%s}\n' "$count"
 	}
 }
 
+func TestRunOpenCodeTaskUsesTaskBundleOutput(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	task := TaskRecord{
+		RunID:  "run_task_bundle",
+		TaskID: "task_bundle",
+		Phase:  "deduplicate",
+	}
+	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_LEDGER_DIR:?MNM_LEDGER_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+if [ "$MNM_RUN_DIR" = "$MNM_LEDGER_DIR" ]; then
+  echo "task output should differ from ledger dir" >&2
+  exit 1
+fi
+case "$*" in
+  *"$MNM_RUN_DIR/evidence/opencode-task-bundle-notes.md"*) ;;
+  *)
+    echo "prompt did not point at task output dir: $*" >&2
+    exit 1
+    ;;
+esac
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/opencode-task-bundle-notes.md" <<'EOF'
+# Notes
+
+Task bundle output.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_task_bundle_notes","run_id":"run_task_bundle","type":"evidence.added","object":"evidence","object_id":"evidence_task_bundle_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Bundle notes","path":"evidence/opencode-task-bundle-notes.md","content_sha256":"8a22bb41e2c5cbd8615883ffdc9d990fed2910a3b036486bef9f97b95e658859"}}
+{"id":"event_task_bundle_done","run_id":"run_task_bundle","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:    task.RunID,
+		TaskID:   task.TaskID,
+		Phase:    task.Phase,
+		Title:    "mnm task bundle test",
+		Model:    "openrouter/test",
+		Prompt:   "write to " + filepath.Join(runDir, "evidence", "opencode-task-bundle-notes.md"),
+		LogPath:  filepath.Join(runDir, "evidence", "opencode-task-bundle.jsonl"),
+		TaskFile: taskPath,
+	})
+	if err != nil {
+		t.Fatalf("expected task bundle run to succeed, got: %v", err)
+	}
+
+	if got := readFile(t, filepath.Join(runDir, "evidence", "opencode-task-bundle-notes.md")); !strings.Contains(got, "Task bundle output.") {
+		t.Fatalf("central artifact was not ingested:\n%s", got)
+	}
+	bundleEvents := readFile(t, filepath.Join(runDir, taskBundlesDir, task.TaskID, "attempt-1", eventsFile))
+	if !strings.Contains(bundleEvents, "event_task_bundle_notes") {
+		t.Fatalf("task bundle events were not preserved:\n%s", bundleEvents)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := eventTypes(events); strings.Join(got, ",") != "evidence.added,task.completed" {
+		t.Fatalf("central event types = %#v", got)
+	}
+}
+
+func TestRunOpenCodeTaskRetriesTaskBundleWithNoEvents(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	task := TaskRecord{
+		RunID:  "run_task_bundle_retry",
+		TaskID: "task_bundle_retry",
+		Phase:  "deduplicate",
+	}
+	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	countFile := filepath.Join(t.TempDir(), "attempt-count")
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", strings.ReplaceAll(`#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+count_file="__COUNT_FILE__"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+  printf '{"type":"done","attempt":1}\n'
+  exit 0
+fi
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/opencode-task-bundle-notes.md" <<'EOF'
+# Notes
+
+Task bundle output.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_task_bundle_retry_notes","run_id":"run_task_bundle_retry","type":"evidence.added","object":"evidence","object_id":"evidence_task_bundle_retry_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Bundle notes","path":"evidence/opencode-task-bundle-notes.md","content_sha256":"8a22bb41e2c5cbd8615883ffdc9d990fed2910a3b036486bef9f97b95e658859"}}
+{"id":"event_task_bundle_retry_done","run_id":"run_task_bundle_retry","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done","attempt":2}\n'
+`, "__COUNT_FILE__", countFile))
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:    task.RunID,
+		TaskID:   task.TaskID,
+		Phase:    task.Phase,
+		Title:    "mnm task bundle retry test",
+		Model:    "openrouter/test",
+		Prompt:   "write to " + filepath.Join(runDir, "evidence", "opencode-task-bundle-notes.md"),
+		LogPath:  filepath.Join(runDir, "evidence", "opencode-task-bundle-retry.jsonl"),
+		TaskFile: taskPath,
+	})
+	if err != nil {
+		t.Fatalf("expected task bundle retry to recover, got: %v", err)
+	}
+	if count := strings.TrimSpace(readFile(t, countFile)); count != "2" {
+		t.Fatalf("attempt count = %s, want 2", count)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := eventTypes(events); strings.Join(got, ",") != "task.retrying,evidence.added,task.completed" {
+		t.Fatalf("central event types = %#v", got)
+	}
+}
+
+func TestTaskBundlePromptRewritesArtifactsButPreservesLedgerPath(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "run")
+	outputDir := filepath.Join(runDir, taskBundlesDir, "task_one", "attempt-1")
+	prompt := strings.Join([]string{
+		"Ledger path: " + filepath.Join(runDir, eventsFile),
+		"Evidence path: " + filepath.Join(runDir, "evidence", "notes.md"),
+	}, "\n")
+
+	got := taskBundlePrompt(prompt, runDir, outputDir)
+	if !strings.Contains(got, "Ledger path: "+filepath.Join(runDir, eventsFile)) {
+		t.Fatalf("ledger path was not preserved:\n%s", got)
+	}
+	if strings.Contains(got, filepath.Join(outputDir, eventsFile)) {
+		t.Fatalf("ledger path was rewritten to task output:\n%s", got)
+	}
+	if !strings.Contains(got, "Evidence path: "+filepath.Join(outputDir, "evidence", "notes.md")) {
+		t.Fatalf("artifact path was not rewritten:\n%s", got)
+	}
+}
+
 func TestRunOpenCodeTaskCleansProcessGroupChildren(t *testing.T) {
 	if !supportsCommandProcessGroupCleanup() {
 		t.Skip("process group cleanup is not supported on this platform")

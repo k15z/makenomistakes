@@ -225,6 +225,181 @@ func TestLedgerOverlaySeesTaskLocalObjects(t *testing.T) {
 	}
 }
 
+func TestLedgerOverlayEvidenceRegistrationSeesSnapshot(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_overlay",
+		TaskID: "task_review_finding_auth",
+		Phase:  "review",
+	}
+	notesRel := "evidence/review-finding_auth-notes.md"
+	if err := writeTaskFile(filepath.Join(outputDir, currentTaskFile), task); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceFile(t, outputDir, notesRel, "# Review notes\n")
+	if err := appendLedgerEvent(ledgerDir, LedgerEvent{
+		ID:       "event_finding",
+		RunID:    task.RunID,
+		Type:     "finding.created",
+		Object:   "finding",
+		ObjectID: "finding_auth",
+		TaskID:   "task_investigate_lead_auth",
+		Data: map[string]any{
+			"title":      "Auth bypass",
+			"category":   "authz",
+			"severity":   "high",
+			"confidence": "medium",
+			"body_path":  "evidence/finding-auth.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(ledgerDir, LedgerEvent{
+		ID:       "event_existing_review_evidence",
+		RunID:    task.RunID,
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_existing_review",
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           notesRel,
+			"lead_id":        "",
+			"finding_id":     "finding_auth",
+			"content_sha256": runFileSHA256ForTest(t, outputDir, notesRel),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNM_RUN_DIR", outputDir)
+	t.Setenv(ledgerDirEnv, ledgerDir)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--kind", "markdown",
+		"--title", "Review notes",
+		"--finding", "finding_auth",
+		"--path", filepath.Join(outputDir, filepath.FromSlash(notesRel)),
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "evidence_existing_review" {
+		t.Fatalf("evidence id = %q, want snapshot id", got)
+	}
+	outputEvents, err := readLedgerEventsFile(outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputEvents) != 0 {
+		t.Fatalf("output events = %#v, want none", outputEvents)
+	}
+}
+
+func TestLedgerOverlayVerdictRecordSeesSnapshot(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_overlay",
+		TaskID: "task_review_finding_auth",
+		Phase:  "review",
+	}
+	notesRel := "evidence/review-finding_auth-notes.md"
+	if err := writeTaskFile(filepath.Join(outputDir, currentTaskFile), task); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceFile(t, outputDir, notesRel, "# Review notes\n")
+	for _, event := range []LedgerEvent{
+		{
+			ID:       "event_finding",
+			RunID:    task.RunID,
+			Type:     "finding.created",
+			Object:   "finding",
+			ObjectID: "finding_auth",
+			TaskID:   "task_investigate_lead_auth",
+			Data: map[string]any{
+				"title":      "Auth bypass",
+				"category":   "authz",
+				"severity":   "high",
+				"confidence": "medium",
+				"body_path":  "evidence/finding-auth.md",
+			},
+		},
+		{
+			ID:       "event_existing_review_evidence",
+			RunID:    task.RunID,
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_existing_review",
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"kind":           "markdown",
+				"title":          "Review notes",
+				"path":           notesRel,
+				"lead_id":        "",
+				"finding_id":     "finding_auth",
+				"content_sha256": runFileSHA256ForTest(t, outputDir, notesRel),
+			},
+		},
+		{
+			ID:       "event_existing_review_verdict",
+			RunID:    task.RunID,
+			Type:     "verdict.recorded",
+			Object:   "verdict",
+			ObjectID: "verdict_existing_review",
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"finding_id":           "finding_auth",
+				"phase":                "review",
+				"value":                "accepted",
+				"reason":               "Accepted already.",
+				"canonical_finding_id": "",
+			},
+		},
+		{
+			ID:       "event_existing_review_done",
+			RunID:    task.RunID,
+			Type:     "task.completed",
+			Object:   "task",
+			ObjectID: task.TaskID,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"status":  "completed",
+				"summary": "Reviewed already.",
+			},
+		},
+	} {
+		if err := appendLedgerEvent(ledgerDir, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("MNM_RUN_DIR", outputDir)
+	t.Setenv(ledgerDirEnv, ledgerDir)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"verdict", "record",
+		"--finding", "finding_auth",
+		"--phase", "review",
+		"--value", "accepted",
+		"--reason", "Accepted already.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("verdict record failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "verdict_existing_review" {
+		t.Fatalf("verdict id = %q, want snapshot id", got)
+	}
+	outputEvents, err := readLedgerEventsFile(outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputEvents) != 0 {
+		t.Fatalf("output events = %#v, want none", outputEvents)
+	}
+}
+
 func TestLedgerOverlayReadsSnapshotReadOnly(t *testing.T) {
 	ledgerDir := t.TempDir()
 	outputDir := t.TempDir()
