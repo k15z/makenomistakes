@@ -78,6 +78,89 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestEnsureOpenCodeInstallsWhenExistingVersionMismatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	prependFakeOpenCode(t, "0.0.0\n")
+	prependFakeOpenCodeInstaller(t, opencodeVersion+"\n")
+
+	path, version, err := ensureOpenCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(home, ".opencode", "bin", "opencode")
+	if path != wantPath {
+		t.Fatalf("expected managed opencode path %q, got %q", wantPath, path)
+	}
+	if strings.TrimSpace(version) != opencodeVersion {
+		t.Fatalf("expected opencode version %q, got %q", opencodeVersion, strings.TrimSpace(version))
+	}
+}
+
+func TestRunnerCommandRejectsUnsafeRunID(t *testing.T) {
+	runDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner",
+		"--run-id", "run/../../victim",
+		"--run-dir", runDir,
+		"--snapshot", filepath.Join(runDir, "snapshot.tar.zst"),
+		"--config", filepath.Join(runDir, "mnm.toml"),
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unsafe run id error")
+	}
+	if !strings.Contains(err.Error(), "invalid run id") {
+		t.Fatalf("expected invalid run id error, got %v", err)
+	}
+}
+
+func TestRunReconTaskRejectsFailedTaskCompletion(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_failed_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"failed","summary":"Recon failed"}}
+EOF
+exit 0
+`)
+
+	err := runReconTask(runDir, "run_test", workspace, reconTestConfig(), opencodePath)
+	if err == nil {
+		t.Fatal("expected failed recon completion error")
+	}
+	if !strings.Contains(err.Error(), "did not complete successfully") {
+		t.Fatalf("expected completion status error, got %v", err)
+	}
+}
+
+func TestRunReconTaskRequiresRegisteredOutputs(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_done_only","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"Recon completed"}}
+EOF
+exit 0
+`)
+
+	err := runReconTask(runDir, "run_test", workspace, reconTestConfig(), opencodePath)
+	if err == nil {
+		t.Fatal("expected missing recon output error")
+	}
+	if !strings.Contains(err.Error(), "codebase map") {
+		t.Fatalf("expected missing codebase map error, got %v", err)
+	}
+}
+
 func TestLimaRunnerCommandSequence(t *testing.T) {
 	runDir := t.TempDir()
 	payload := filepath.Join(runDir, "mnm-linux-test")
@@ -144,6 +227,16 @@ func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
 	}
 }
 
+func reconTestConfig() Config {
+	return Config{
+		Models: ModelConfig{Recon: "openrouter/test"},
+		Runner: RunnerConfig{MaxLeads: 3},
+		Instructions: InstructionConfig{
+			Scope: "Focus on parser bugs.",
+		},
+	}
+}
+
 type recordingExecutor struct {
 	commands []string
 }
@@ -165,15 +258,7 @@ func (executor *recordingExecutor) Run(_ context.Context, name string, args ...s
 
 func prependFakeOpenCode(t *testing.T, version string) {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "opencode")
-	body := `#!/bin/sh
-set -eu
-if [ "${1:-}" = "--version" ]; then
-  printf '` + version + `'
-  exit 0
-fi
-if [ "${1:-}" = "run" ]; then
+	writeFakeOpenCode(t, version, `
   : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
   : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
   prompt=""
@@ -253,11 +338,48 @@ EOF
 EOF
   printf '{"type":"done"}\n'
   exit 0
-fi
-printf 'fake opencode\n'
+`)
+}
+
+func writeFakeOpenCode(t *testing.T, version, runScript string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode")
+	body := fakeOpenCodeScript(version, runScript)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return path
+}
+
+func prependFakeOpenCodeInstaller(t *testing.T, version string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bash")
+	body := `#!/bin/sh
+set -eu
+mkdir -p "$HOME/.opencode/bin"
+cat > "$HOME/.opencode/bin/opencode" <<'SCRIPT'
+` + fakeOpenCodeScript(version, "") + `SCRIPT
+chmod +x "$HOME/.opencode/bin/opencode"
 `
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func fakeOpenCodeScript(version, runScript string) string {
+	return `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  printf '` + version + `'
+  exit 0
+fi
+if [ "${1:-}" = "run" ]; then
+` + runScript + `
+fi
+printf 'fake opencode\n'
+`
 }

@@ -66,6 +66,16 @@ func TestLedgerCommandFlow(t *testing.T) {
 		t.Fatalf("expected evidence id, got %q", stdout.String())
 	}
 
+	if err := writeCurrentTaskForTest(runDir, TaskRecord{
+		RunID:       "run_test",
+		TaskID:      "task_review_" + safeFileID(findingID),
+		Phase:       "review",
+		Title:       "Review finding",
+		Instruction: "Review one finding.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	if err := run([]string{
@@ -232,6 +242,15 @@ func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
 
 func TestDeduplicateDuplicateVerdictRequiresCanonicalFinding(t *testing.T) {
 	runDir := newLedgerTestRun(t)
+	if err := writeCurrentTaskForTest(runDir, TaskRecord{
+		RunID:       "run_test",
+		TaskID:      "task_deduplicate",
+		Phase:       "deduplicate",
+		Title:       "Deduplicate findings",
+		Instruction: "Deduplicate reviewed findings.",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	firstBody := writeRunFile(t, runDir, "evidence/finding-one.md", "First candidate.")
 	secondBody := writeRunFile(t, runDir, "evidence/finding-two.md", "Second candidate.")
 	var stdout, stderr bytes.Buffer
@@ -256,6 +275,8 @@ func TestDeduplicateDuplicateVerdictRequiresCanonicalFinding(t *testing.T) {
 		t.Fatalf("second finding create failed: %v\nstderr: %s", err, stderr.String())
 	}
 	secondID := strings.TrimSpace(stdout.String())
+	appendReviewAcceptedVerdictForTest(t, runDir, firstID)
+	appendReviewAcceptedVerdictForTest(t, runDir, secondID)
 
 	stdout.Reset()
 	stderr.Reset()
@@ -297,6 +318,98 @@ func TestDeduplicateDuplicateVerdictRequiresCanonicalFinding(t *testing.T) {
 	}
 }
 
+func TestDeduplicateDuplicateVerdictRejectsNonAcceptedCanonical(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	if err := writeCurrentTaskForTest(runDir, TaskRecord{
+		RunID:       "run_test",
+		TaskID:      "task_deduplicate",
+		Phase:       "deduplicate",
+		Title:       "Deduplicate findings",
+		Instruction: "Deduplicate reviewed findings.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstBody := writeRunFile(t, runDir, "evidence/finding-one.md", "First candidate.")
+	secondBody := writeRunFile(t, runDir, "evidence/finding-two.md", "Second candidate.")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "First finding",
+		"--body-file", firstBody,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first finding create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	firstID := strings.TrimSpace(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "Second finding",
+		"--body-file", secondBody,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("second finding create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	secondID := strings.TrimSpace(stdout.String())
+	appendReviewAcceptedVerdictForTest(t, runDir, secondID)
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", secondID,
+		"--phase", "deduplicate",
+		"--value", "duplicate",
+		"--canonical-finding", firstID,
+		"--reason", "Same root issue.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected non-accepted canonical finding error")
+	}
+	if !strings.Contains(err.Error(), "must have a completed accepted review verdict") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerdictRejectsMismatchedTaskPhase(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "finding.created",
+		Object:   "finding",
+		ObjectID: "finding_one",
+		TaskID:   "task_investigate_lead_one",
+		Data: map[string]any{
+			"title":      "Missing authorization",
+			"lead_id":    "lead_one",
+			"category":   "authz",
+			"severity":   "high",
+			"confidence": "medium",
+			"body_path":  "evidence/finding-one.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", "finding_one",
+		"--phase", "review",
+		"--value", "accepted",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected mismatched task phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "recon" cannot record review verdict`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func newLedgerTestRun(t *testing.T) string {
 	t.Helper()
 	runDir := t.TempDir()
@@ -335,6 +448,39 @@ func writeRunFile(t *testing.T, runDir, rel, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func appendReviewAcceptedVerdictForTest(t *testing.T, runDir, findingID string) {
+	t.Helper()
+	taskID := "task_review_" + safeFileID(findingID)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_review_" + safeFileID(findingID),
+		TaskID:   taskID,
+		Data: map[string]any{
+			"finding_id": findingID,
+			"phase":      "review",
+			"value":      "accepted",
+			"reason":     "Accepted for test.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Reviewed for test.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func eventTypes(events []LedgerEvent) []string {
