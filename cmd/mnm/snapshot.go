@@ -45,18 +45,15 @@ func createWorkspaceSnapshot(options SnapshotOptions) error {
 	if err != nil {
 		return err
 	}
-	defer output.Close()
 
 	encoder, err := zstd.NewWriter(output)
 	if err != nil {
-		return err
+		return errors.Join(err, output.Close())
 	}
-	defer encoder.Close()
 
 	tarWriter := tar.NewWriter(encoder)
-	defer tarWriter.Close()
 
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -120,6 +117,7 @@ func createWorkspaceSnapshot(options SnapshotOptions) error {
 		}
 		return closeErr
 	})
+	return errors.Join(walkErr, tarWriter.Close(), encoder.Close(), output.Close())
 }
 
 func defaultSnapshotExcludes() []string {
