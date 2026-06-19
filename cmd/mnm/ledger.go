@@ -104,7 +104,14 @@ func currentTaskPath(runDir string) (string, error) {
 }
 
 func appendLedgerEvent(runDir string, event LedgerEvent) error {
-	event, err := prepareLedgerEvent(runDir, event)
+	return appendLedgerEvents(runDir, []LedgerEvent{event})
+}
+
+func appendLedgerEvents(runDir string, events []LedgerEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	prepared, err := prepareLedgerEvents(runDir, events)
 	if err != nil {
 		return err
 	}
@@ -113,7 +120,19 @@ func appendLedgerEvent(runDir string, event LedgerEvent) error {
 		return err
 	}
 	defer unlock()
-	return appendLedgerEventUnlocked(runDir, event)
+	return appendLedgerEventsUnlocked(runDir, prepared)
+}
+
+func prepareLedgerEvents(runDir string, events []LedgerEvent) ([]LedgerEvent, error) {
+	prepared := make([]LedgerEvent, 0, len(events))
+	for _, event := range events {
+		preparedEvent, err := prepareLedgerEvent(runDir, event)
+		if err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, preparedEvent)
+	}
+	return prepared, nil
 }
 
 func prepareLedgerEvent(runDir string, event LedgerEvent) (LedgerEvent, error) {
@@ -142,20 +161,59 @@ func prepareLedgerEvent(runDir string, event LedgerEvent) (LedgerEvent, error) {
 }
 
 func appendLedgerEventUnlocked(runDir string, event LedgerEvent) error {
-	path := filepath.Join(runDir, eventsFile)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+	return appendLedgerEventsUnlocked(runDir, []LedgerEvent{event})
+}
 
-	line, err := json.Marshal(event)
+func appendLedgerEventsUnlocked(runDir string, events []LedgerEvent) error {
+	var payload []byte
+	for _, event := range events {
+		line, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		payload = append(payload, line...)
+		payload = append(payload, '\n')
+	}
+
+	path := filepath.Join(runDir, eventsFile)
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tmpPath := filepath.Join(runDir, eventsFile+".tmp."+uuid.NewString())
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, filePerm)
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if len(existing) > 0 {
+		if _, err := file.Write(existing); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if existing[len(existing)-1] != '\n' {
+			if _, err := file.Write([]byte{'\n'}); err != nil {
+				_ = file.Close()
+				return err
+			}
+		}
+	}
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
 		return err
 	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	removeTemp = false
 	return nil
 }
 
