@@ -33,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	case "init":
 		return initCommand(args[1:], stdout, stderr)
+	case "analyze":
+		return analyzeCommand(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -43,9 +45,11 @@ func printUsage(w io.Writer) {
 
 Usage:
   mnm init [--force] [path]
+  mnm analyze [path]
 
 Commands:
-  init    Create mnm.toml and .mnmignore in a workspace.
+  init      Create mnm.toml and .mnmignore in a workspace.
+  analyze   Prepare a durable local audit run.
 `)
 }
 

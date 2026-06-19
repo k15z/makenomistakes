@@ -154,6 +154,7 @@ sync uses mounted evidence files plus append-only JSONL events.
 Run statuses:
 
 - `created`
+- `prepared`
 - `snapshotting`
 - `vm_starting`
 - `running`
