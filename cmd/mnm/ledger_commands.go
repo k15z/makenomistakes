@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func taskCommand(args []string, stdout, stderr io.Writer) error {
@@ -48,6 +49,10 @@ func taskCommand(args []string, stdout, stderr io.Writer) error {
 		if !oneOf(*status, "completed", "failed") {
 			return fmt.Errorf("invalid task status %q", *status)
 		}
+		summaryText, err := requiredTextFlag("--summary", *summary)
+		if err != nil {
+			return err
+		}
 		runDir, task, err := currentTaskForCommand(*runDirFlag)
 		if err != nil {
 			return err
@@ -60,7 +65,7 @@ func taskCommand(args []string, stdout, stderr io.Writer) error {
 			TaskID:   task.TaskID,
 			Data: map[string]any{
 				"status":  *status,
-				"summary": *summary,
+				"summary": summaryText,
 			},
 		})
 	default:
@@ -84,8 +89,13 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *title == "" {
-			return errors.New("lead create requires --title")
+		titleText, err := requiredTextFlag("--title", *title)
+		if err != nil {
+			return err
+		}
+		categoryText, err := requiredTextFlag("--category", *category)
+		if err != nil {
+			return err
 		}
 		if !oneOf(*priority, "high", "medium", "low") {
 			return fmt.Errorf("invalid lead priority %q", *priority)
@@ -98,6 +108,9 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if err := requireNonEmptyRunFile(runDir, bodyPath, "lead body file"); err != nil {
+			return err
+		}
 		leadID := newLedgerID("lead")
 		if err := appendLedgerEvent(runDir, LedgerEvent{
 			RunID:    task.RunID,
@@ -106,8 +119,8 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 			ObjectID: leadID,
 			TaskID:   task.TaskID,
 			Data: map[string]any{
-				"title":     *title,
-				"category":  *category,
+				"title":     titleText,
+				"category":  categoryText,
 				"priority":  *priority,
 				"body_path": bodyPath,
 			},
@@ -162,12 +175,17 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if !exists {
 			return fmt.Errorf("lead %s does not exist in ledger", *id)
 		}
+		reasonText, err := requiredTextFlag("--reason", *reason)
+		if err != nil {
+			return err
+		}
 		if currentStatus != "open" {
 			if currentStatus == *status {
 				return nil
 			}
 			return fmt.Errorf("lead %s is already closed with status %q", *id, currentStatus)
 		}
+		event.Data["reason"] = reasonText
 		return appendLedgerEventUnlocked(runDir, event)
 	default:
 		return fmt.Errorf("unknown lead subcommand %q", args[0])
@@ -225,8 +243,13 @@ func findingCommand(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *title == "" {
-		return errors.New("finding create requires --title")
+	titleText, err := requiredTextFlag("--title", *title)
+	if err != nil {
+		return err
+	}
+	categoryText, err := requiredTextFlag("--category", *category)
+	if err != nil {
+		return err
 	}
 	if !oneOf(*severity, "critical", "high", "medium", "low", "info") {
 		return fmt.Errorf("invalid finding severity %q", *severity)
@@ -247,6 +270,9 @@ func findingCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := requireNonEmptyRunFile(runDir, bodyPath, "finding body file"); err != nil {
+		return err
+	}
 	findingID := newLedgerID("finding")
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
@@ -255,9 +281,9 @@ func findingCommand(args []string, stdout, stderr io.Writer) error {
 		ObjectID: findingID,
 		TaskID:   task.TaskID,
 		Data: map[string]any{
-			"title":      *title,
+			"title":      titleText,
 			"lead_id":    *leadID,
-			"category":   *category,
+			"category":   categoryText,
 			"severity":   *severity,
 			"confidence": *confidence,
 			"body_path":  bodyPath,
@@ -284,8 +310,16 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *kind == "" || *title == "" {
-		return errors.New("evidence add requires --kind and --title")
+	kindText, err := requiredTextFlag("--kind", *kind)
+	if err != nil {
+		return err
+	}
+	titleText, err := requiredTextFlag("--title", *title)
+	if err != nil {
+		return err
+	}
+	if *leadID != "" && *findingID != "" {
+		return errors.New("evidence add accepts at most one of --lead or --finding")
 	}
 	runDir, task, err := currentTaskForCommand(*runDirFlag)
 	if err != nil {
@@ -305,6 +339,9 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := requireNonEmptyRunFile(runDir, relPath, "evidence file"); err != nil {
+		return err
+	}
 	contentSHA256 := ""
 	if info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(relPath))); err == nil && info.Mode().IsRegular() {
 		contentSHA256, err = evidenceFileSHA256(runDir, relPath)
@@ -322,8 +359,8 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 		ObjectID: evidenceID,
 		TaskID:   task.TaskID,
 		Data: map[string]any{
-			"kind":           *kind,
-			"title":          *title,
+			"kind":           kindText,
+			"title":          titleText,
 			"path":           relPath,
 			"lead_id":        *leadID,
 			"finding_id":     *findingID,
@@ -369,6 +406,10 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	if *canonicalFindingID == *findingID {
 		return errors.New("--canonical-finding must be different from --finding")
 	}
+	reasonText, err := requiredTextFlag("--reason", *reason)
+	if err != nil {
+		return err
+	}
 	runDir, task, err := currentTaskForCommand(*runDirFlag)
 	if err != nil {
 		return err
@@ -403,7 +444,7 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 			"finding_id":           *findingID,
 			"phase":                *phase,
 			"value":                *value,
-			"reason":               *reason,
+			"reason":               reasonText,
 			"canonical_finding_id": *canonicalFindingID,
 		},
 	}); err != nil {
@@ -515,4 +556,12 @@ func currentTaskForCommand(runDirFlag string) (string, TaskRecord, error) {
 		return "", TaskRecord{}, err
 	}
 	return runDir, task, nil
+}
+
+func requiredTextFlag(name, value string) (string, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return "", fmt.Errorf("%s must not be empty", name)
+	}
+	return text, nil
 }

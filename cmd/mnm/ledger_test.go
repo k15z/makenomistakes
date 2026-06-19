@@ -91,6 +91,22 @@ func TestAppendLedgerEventRejectsInvalidEventData(t *testing.T) {
 	}
 }
 
+func TestReadLedgerEventsRejectsAmbiguousEvidenceOwner(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runDir, eventsFile), []byte(`{"id":"event_bad","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_bad","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Ambiguous proof","path":"evidence/proof.md","lead_id":"lead_one","finding_id":"finding_one"}}
+`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readLedgerEvents(runDir)
+	if err == nil {
+		t.Fatal("expected ambiguous evidence owner error")
+	}
+	if !strings.Contains(err.Error(), "data.lead_id and data.finding_id are mutually exclusive") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestReadLedgerEventsRejectsInvalidVerdictData(t *testing.T) {
 	runDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(runDir, eventsFile), []byte(`{"id":"event_bad","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_bad","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"duplicate","reason":"self duplicate","canonical_finding_id":"finding_one"}}

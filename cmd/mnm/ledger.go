@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,7 +257,21 @@ func validateLedgerEventData(event LedgerEvent) error {
 		}
 		return requireEventNumber(event, "max_attempts")
 	case "evidence.added":
-		return requireEventStrings(event, "kind", "title", "path")
+		if err := requireEventStrings(event, "kind", "title", "path"); err != nil {
+			return err
+		}
+		leadID, err := optionalEventStringValue(event, "lead_id")
+		if err != nil {
+			return err
+		}
+		findingID, err := optionalEventStringValue(event, "finding_id")
+		if err != nil {
+			return err
+		}
+		if leadID != "" && findingID != "" {
+			return fmt.Errorf("%s data.lead_id and data.finding_id are mutually exclusive", event.Type)
+		}
+		return nil
 	case "lead.created":
 		if err := requireEventStrings(event, "title", "category", "body_path"); err != nil {
 			return err
@@ -357,6 +372,18 @@ func requireEventStringValue(event LedgerEvent, key string) (string, error) {
 	return text, nil
 }
 
+func optionalEventStringValue(event LedgerEvent, key string) (string, error) {
+	value, ok := event.Data[key]
+	if !ok {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s data.%s must be a string", event.Type, key)
+	}
+	return text, nil
+}
+
 func requireEventOneOf(event LedgerEvent, key string, allowed ...string) error {
 	value, err := requireEventStringValue(event, key)
 	if err != nil {
@@ -429,6 +456,7 @@ func requireLedgerObject(runDir, object, objectID string) error {
 }
 
 func requirePathInsideRunDir(runDir, path string) (string, error) {
+	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", errors.New("path is required")
 	}
@@ -436,21 +464,45 @@ func requirePathInsideRunDir(runDir, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	realRunDir, err := filepath.EvalSymlinks(absRunDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve run directory %s: %w", runDir, err)
+	}
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(absRunDir, absPath)
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(realRunDir, realPath)
 	if err != nil {
 		return "", err
 	}
 	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
 		return "", fmt.Errorf("path must be inside run directory: %s", path)
 	}
-	if _, err := os.Stat(absPath); err != nil {
+	info, err := os.Stat(realPath)
+	if err != nil {
 		return "", err
 	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("path must be a regular file: %s", path)
+	}
 	return filepath.ToSlash(rel), nil
+}
+
+func requireNonEmptyRunFile(runDir, relPath, label string) error {
+	path := filepath.Join(runDir, filepath.FromSlash(relPath))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s %s: %w", label, relPath, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Errorf("%s %s must not be empty", label, relPath)
+	}
+	return nil
 }
 
 func lockRunDir(runDir string) (func(), error) {

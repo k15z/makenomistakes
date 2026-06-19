@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRel string) error {
@@ -428,9 +429,36 @@ func requiredStringArrayField(root map[string]json.RawMessage, field string) ([]
 }
 
 func normalizeReportPath(runDir, path string) (string, error) {
-	candidate := filepath.FromSlash(path)
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(runDir, candidate)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("path is required")
 	}
-	return requirePathInsideRunDir(runDir, candidate)
+	absRunDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return "", err
+	}
+	candidate := filepath.FromSlash(path)
+	absPath := candidate
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(absRunDir, absPath)
+	}
+	absPath, err = filepath.Abs(absPath)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRunDir, absPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path must be inside run directory: %s", path)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("path must be a regular file: %s", path)
+	}
+	return filepath.ToSlash(rel), nil
 }

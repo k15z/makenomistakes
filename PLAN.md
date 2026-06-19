@@ -214,7 +214,9 @@ Finding statuses:
 - Every pipeline phase is verified to run through VM-side `opencode`; tests fail
   if any phase executes `opencode` on the host.
 - VM-side `mnm` rejects malformed leads, findings, verdicts, invalid status
-  transitions, missing references, and evidence paths outside the run directory.
+  transitions, missing references, whitespace-only command fields, empty
+  registered artifacts, ambiguous evidence ownership, and evidence paths outside
+  the run directory after symlink resolution.
 - Ledger reads reject malformed event envelopes, unknown event types, event
   type/object mismatches, missing required event data fields, and invalid event
   data enum values before downstream phases consume state.
