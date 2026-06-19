@@ -136,10 +136,7 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if err := requireLedgerObject(runDir, "lead", *id); err != nil {
-			return err
-		}
-		return appendLedgerEvent(runDir, LedgerEvent{
+		event, err := prepareLedgerEvent(runDir, LedgerEvent{
 			RunID:    task.RunID,
 			Type:     "lead.closed",
 			Object:   "lead",
@@ -150,9 +147,66 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 				"reason": *reason,
 			},
 		})
+		if err != nil {
+			return err
+		}
+		unlock, err := lockRunDir(runDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		currentStatus, exists, err := ledgerLeadStatusUnlocked(runDir, *id)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("lead %s does not exist in ledger", *id)
+		}
+		if currentStatus != "open" {
+			if currentStatus == *status {
+				return nil
+			}
+			return fmt.Errorf("lead %s is already closed with status %q", *id, currentStatus)
+		}
+		return appendLedgerEventUnlocked(runDir, event)
 	default:
 		return fmt.Errorf("unknown lead subcommand %q", args[0])
 	}
+}
+
+func ledgerLeadStatus(runDir, leadID string) (string, bool, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return leadStatusFromEvents(events, leadID)
+}
+
+func ledgerLeadStatusUnlocked(runDir, leadID string) (string, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return leadStatusFromEvents(events, leadID)
+}
+
+func leadStatusFromEvents(events []LedgerEvent, leadID string) (string, bool, error) {
+	status := ""
+	exists := false
+	for _, event := range events {
+		if event.Object != "lead" || event.ObjectID != leadID {
+			continue
+		}
+		switch event.Type {
+		case "lead.created":
+			status = "open"
+			exists = true
+		case "lead.closed":
+			status = stringData(event.Data, "status")
+			exists = true
+		}
+	}
+	return status, exists, nil
 }
 
 func findingCommand(args []string, stdout, stderr io.Writer) error {

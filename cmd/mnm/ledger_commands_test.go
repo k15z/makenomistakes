@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -205,6 +206,109 @@ func TestLeadCloseRequiresExistingLead(t *testing.T) {
 	if !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestLeadCloseIsIdempotentForSameStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+		"--reason", "First close.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first lead close failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+		"--reason", "Retry after checking state.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent lead close failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	assertLeadClosedEventCount(t, runDir, leadID, 1)
+	leads, err := ledgerLeads(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leads) != 1 || leads[0].Status != "closed_no_finding" {
+		t.Fatalf("unexpected lead state: %#v", leads)
+	}
+}
+
+func TestLeadCloseIsAtomicForParallelSameStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	start := make(chan struct{})
+	errs := make(chan error, 20)
+	var wg sync.WaitGroup
+	for i := 0; i < cap(errs); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"lead", "close",
+				"--run-dir", runDir,
+				"--id", leadID,
+				"--status", "closed_no_finding",
+				"--reason", "Parallel close.",
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel lead close failed: %v", err)
+		}
+	}
+	assertLeadClosedEventCount(t, runDir, leadID, 1)
+}
+
+func TestLeadCloseRejectsDifferentTerminalStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+		"--reason", "First close.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first lead close failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "superseded",
+		"--reason", "Conflicting retry.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting lead close to fail")
+	}
+	if !strings.Contains(err.Error(), "already closed with status") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadClosedEventCount(t, runDir, leadID, 1)
 }
 
 func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
@@ -448,6 +552,38 @@ func writeRunFile(t *testing.T, runDir, rel, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func createLeadForTest(t *testing.T, runDir string) string {
+	t.Helper()
+	leadBody := writeRunFile(t, runDir, "evidence/lead-test.md", "Investigate something.")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate something",
+		"--body-file", leadBody,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("lead create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
+func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type == "lead.closed" && event.ObjectID == leadID {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("lead.closed event count = %d, want %d", got, want)
+	}
 }
 
 func appendReviewAcceptedVerdictForTest(t *testing.T, runDir, findingID string) {
