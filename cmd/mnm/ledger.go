@@ -131,6 +131,9 @@ func prepareLedgerEvent(runDir string, event LedgerEvent) (LedgerEvent, error) {
 	if event.Data == nil {
 		event.Data = map[string]any{}
 	}
+	if err := validateLedgerEvent(event); err != nil {
+		return LedgerEvent{}, err
+	}
 	if err := os.MkdirAll(runDir, dirPerm); err != nil {
 		return LedgerEvent{}, err
 	}
@@ -180,7 +183,9 @@ func readLedgerEventsUnlocked(runDir string) ([]LedgerEvent, error) {
 
 	var events []LedgerEvent
 	scanner := bufio.NewScanner(file)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -189,12 +194,67 @@ func readLedgerEventsUnlocked(runDir string) ([]LedgerEvent, error) {
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return nil, err
 		}
+		if err := validateLedgerEvent(event); err != nil {
+			return nil, fmt.Errorf("invalid ledger event on line %d: %w", lineNo, err)
+		}
 		events = append(events, event)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return events, nil
+}
+
+func validateLedgerEvent(event LedgerEvent) error {
+	if event.ID == "" {
+		return errors.New("event id is required")
+	}
+	if event.RunID == "" {
+		return errors.New("event run_id is required")
+	}
+	if event.Type == "" || event.Object == "" || event.ObjectID == "" {
+		return errors.New("event type, object, and object_id are required")
+	}
+	if event.Timestamp == "" {
+		return errors.New("event timestamp is required")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, event.Timestamp); err != nil {
+		return fmt.Errorf("event timestamp %q must be RFC3339: %w", event.Timestamp, err)
+	}
+	if event.Data == nil {
+		return errors.New("event data object is required")
+	}
+	expectedObject, ok := ledgerEventObject(event.Type)
+	if !ok {
+		return fmt.Errorf("unknown event type %q", event.Type)
+	}
+	if event.Object != expectedObject {
+		return fmt.Errorf("event type %q must use object %q, got %q", event.Type, expectedObject, event.Object)
+	}
+	return nil
+}
+
+func ledgerEventObject(eventType string) (string, bool) {
+	switch eventType {
+	case "runner.started", "runner.completed", "runner.failed":
+		return "run", true
+	case "task.started", "task.completed", "task.retrying":
+		return "task", true
+	case "evidence.added":
+		return "evidence", true
+	case "lead.created", "lead.closed":
+		return "lead", true
+	case "finding.created":
+		return "finding", true
+	case "verdict.recorded":
+		return "verdict", true
+	case "report.finalized":
+		return "report", true
+	case "investigate.limit_reached":
+		return "phase", true
+	default:
+		return "", false
+	}
 }
 
 func ledgerObjectExists(runDir, object, objectID string) (bool, error) {
