@@ -134,8 +134,18 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if err := requireLedgerObject(runDir, "lead", *id); err != nil {
+		currentStatus, exists, err := ledgerLeadStatus(runDir, *id)
+		if err != nil {
 			return err
+		}
+		if !exists {
+			return fmt.Errorf("lead %s does not exist in ledger", *id)
+		}
+		if currentStatus != "open" {
+			if currentStatus == *status {
+				return nil
+			}
+			return fmt.Errorf("lead %s is already closed with status %q", *id, currentStatus)
 		}
 		return appendLedgerEvent(runDir, LedgerEvent{
 			RunID:    task.RunID,
@@ -151,6 +161,19 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown lead subcommand %q", args[0])
 	}
+}
+
+func ledgerLeadStatus(runDir, leadID string) (string, bool, error) {
+	leads, err := ledgerLeads(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	for _, lead := range leads {
+		if lead.ID == leadID {
+			return lead.Status, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func findingCommand(args []string, stdout, stderr io.Writer) error {
