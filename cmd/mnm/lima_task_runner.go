@@ -12,6 +12,8 @@ import (
 )
 
 const (
+	maxLimaTaskInstanceNameLen = 48
+
 	guestTaskSnapshotPath = "/tmp/snapshot.tar.zst"
 	guestTaskLedgerDir    = "/tmp/mnm-ledger"
 	guestTaskOutputDir    = "/tmp/mnm-output"
@@ -69,7 +71,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		return result, err
 	}
 	defer cleanupLedgerDir()
-	err = runner.Runner.RunTask(ctx, LimaTaskRequest{
+	runErr := runner.Runner.RunTask(ctx, LimaTaskRequest{
 		RunID:        task.RunID,
 		Task:         task.taskRecord(),
 		Attempt:      attempt,
@@ -85,12 +87,12 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		SkipVerify:   true,
 	})
 	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath)
-	if err != nil {
+	if runErr != nil {
 		if logErr != nil {
-			err = errors.Join(err, logErr)
+			runErr = errors.Join(runErr, logErr)
 		}
 		return result, openCodeAttemptError{
-			err:            err,
+			err:            runErr,
 			logText:        logText,
 			ledgerModified: false,
 		}
@@ -318,18 +320,22 @@ func (runner LimaRunner) copyTaskOutput(ctx context.Context, instanceName, outpu
 
 func limaTaskInstanceName(runID, taskID string, attempt int) string {
 	name := limaInstanceName(runID + "-task-" + taskID)
-	digest := sha256.Sum256([]byte(runID + "\x00" + taskID + "\x00" + strconv.Itoa(attempt)))
-	hash := fmt.Sprintf("%x", digest[:])[:10]
-	suffix := "-" + hash
 	if attempt > 0 {
-		suffix += "-a" + strconv.Itoa(attempt)
+		name += "-a" + strconv.Itoa(attempt)
 	}
-	budget := 63 - len(suffix)
-	if budget < len("mnm") {
-		budget = len("mnm")
+	return shortenLimaTaskInstanceName(name)
+}
+
+func shortenLimaTaskInstanceName(name string) string {
+	if len(name) <= maxLimaTaskInstanceNameLen {
+		return name
 	}
-	if len(name) > budget {
-		name = strings.TrimRight(name[:budget], "-")
+	sum := sha256.Sum256([]byte(name))
+	hash := fmt.Sprintf("%x", sum[:])[:8]
+	keep := maxLimaTaskInstanceNameLen - len(hash) - 1
+	prefix := strings.TrimRight(name[:keep], "-")
+	if prefix == "" {
+		prefix = "mnm-task"
 	}
-	return name + suffix
+	return prefix + "-" + hash
 }

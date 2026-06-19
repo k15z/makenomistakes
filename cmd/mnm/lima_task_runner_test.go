@@ -157,12 +157,25 @@ func TestLimaTaskInstanceNameAvoidsLongNameCollisions(t *testing.T) {
 		t.Fatalf("task instance names collided:\n%s", first)
 	}
 	for _, name := range []string{first, second} {
-		if len(name) > 63 {
-			t.Fatalf("instance name %q has length %d, want <= 63", name, len(name))
+		if len(name) > maxLimaTaskInstanceNameLen {
+			t.Fatalf("instance name %q has length %d, want <= %d", name, len(name), maxLimaTaskInstanceNameLen)
 		}
-		if !strings.HasSuffix(name, "-a1") {
-			t.Fatalf("instance name %q should keep the attempt suffix", name)
-		}
+	}
+}
+
+func TestLimaTaskInstanceNameShortensLongNames(t *testing.T) {
+	name := limaTaskInstanceName("run_004311f6-f32f-4c30-b608-012bde0a6e11", "task_recon", 1)
+	if len(name) > maxLimaTaskInstanceNameLen {
+		t.Fatalf("task instance name length = %d, want <= %d: %s", len(name), maxLimaTaskInstanceNameLen, name)
+	}
+	if !strings.HasPrefix(name, "mnm-run-004311f6") {
+		t.Fatalf("task instance name lost readable prefix: %s", name)
+	}
+	if !strings.Contains(name, "-") {
+		t.Fatalf("task instance name should include hash separator: %s", name)
+	}
+	if name == limaTaskInstanceName("run_004311f6-f32f-4c30-b608-012bde0a6e11", "task_recon", 2) {
+		t.Fatalf("different attempts should produce different task VM names: %s", name)
 	}
 }
 
@@ -252,6 +265,9 @@ func TestLimaTaskAttemptRunnerRunsTaskVMBundle(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(wantOutputDir, "evidence", "task-output-marker.txt")); !strings.Contains(got, "copied") {
 		t.Fatalf("task VM output was not copied into attempt bundle:\n%s", got)
+	}
+	if got := readFile(t, filepath.Join(runDir, "evidence", "opencode-review-auth.jsonl")); !strings.Contains(got, `"type":"done"`) {
+		t.Fatalf("task transcript was not copied to central evidence:\n%s", got)
 	}
 }
 
