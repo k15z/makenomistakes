@@ -213,6 +213,237 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 	}
 }
 
+func TestRunOpenCodeTaskRetriesTransientProviderFailure(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+  printf '{"code":502,"message":"Network connection lost.","metadata":{"error_type":"provider_unavailable"}}\n'
+  exit 1
+fi
+printf '{"type":"done"}\n'
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_retry",
+		TaskID:  "task_retry",
+		Phase:   "review",
+		Title:   "mnm retry test",
+		Model:   "openrouter/test",
+		Prompt:  "retry me",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-retry.jsonl"),
+	})
+	if err != nil {
+		t.Fatalf("expected retry to recover, got: %v", err)
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "2" {
+		t.Fatalf("attempt count = %s, want 2", count)
+	}
+	log := readFile(t, filepath.Join(runDir, "evidence", "opencode-retry.jsonl"))
+	if !strings.Contains(log, "provider_unavailable") || !strings.Contains(log, `"type":"done"`) {
+		t.Fatalf("retry log did not preserve both attempts:\n%s", log)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retries := 0
+	for _, event := range events {
+		if event.Type == "task.retrying" && event.ObjectID == "task_retry" {
+			retries++
+		}
+	}
+	if retries != 1 {
+		t.Fatalf("retry event count = %d, want 1", retries)
+	}
+}
+
+func TestRunOpenCodeTaskDoesNotRetryNonTransientFailure(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+printf 'invalid prompt\n'
+exit 1
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_no_retry",
+		TaskID:  "task_no_retry",
+		Phase:   "review",
+		Title:   "mnm no retry test",
+		Model:   "openrouter/test",
+		Prompt:  "do not retry me",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-no-retry.jsonl"),
+	})
+	if err == nil {
+		t.Fatal("expected non-transient failure")
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "1" {
+		t.Fatalf("attempt count = %s, want 1", count)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == "task.retrying" {
+			t.Fatalf("unexpected retry event: %#v", event)
+		}
+	}
+}
+
+func TestRunOpenCodeTaskDoesNotRetryAfterLedgerWrite(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_attempt_$count","run_id":"run_dirty_retry","type":"finding.created","object":"finding","object_id":"finding_attempt_$count","task_id":"task_dirty_retry","timestamp":"2026-01-01T00:00:00Z","data":{"title":"Attempt $count","lead_id":"","category":"test","severity":"medium","confidence":"medium","body_path":"evidence/body.md"}}
+EOF
+printf '{"code":502,"message":"Network connection lost.","metadata":{"error_type":"provider_unavailable"}}\n'
+exit 1
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_dirty_retry",
+		TaskID:  "task_dirty_retry",
+		Phase:   "investigate",
+		Title:   "mnm dirty retry test",
+		Model:   "openrouter/test",
+		Prompt:  "do not retry after ledger writes",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-dirty-retry.jsonl"),
+	})
+	if err == nil {
+		t.Fatal("expected dirty transient failure")
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "1" {
+		t.Fatalf("attempt count = %s, want 1", count)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == "task.retrying" {
+			t.Fatalf("unexpected retry event after ledger write: %#v", event)
+		}
+	}
+}
+
+func TestRunOpenCodeTaskClassifiesOnlyLatestAttemptForRetry(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+  printf '{"code":502,"message":"Network connection lost.","metadata":{"error_type":"provider_unavailable"}}\n'
+  exit 1
+fi
+printf 'invalid prompt\n'
+exit 1
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_retry_suffix",
+		TaskID:  "task_retry_suffix",
+		Phase:   "review",
+		Title:   "mnm retry suffix test",
+		Model:   "openrouter/test",
+		Prompt:  "stop after hard failure",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-retry-suffix.jsonl"),
+	})
+	if err == nil {
+		t.Fatal("expected hard second-attempt failure")
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "2" {
+		t.Fatalf("attempt count = %s, want 2", count)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retries := 0
+	for _, event := range events {
+		if event.Type == "task.retrying" {
+			retries++
+		}
+	}
+	if retries != 1 {
+		t.Fatalf("retry event count = %d, want 1", retries)
+	}
+}
+
+func writeRetryFakeOpenCode(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
 	cfg := Config{
 		Runner: RunnerConfig{MaxLeads: 3},

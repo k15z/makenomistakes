@@ -156,6 +156,7 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-investigate-"+safeLeadID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
 		LeadID:   lead.ID,

@@ -70,6 +70,7 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-finalize.jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
 		Title:    "mnm finalize",

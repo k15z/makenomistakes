@@ -81,6 +81,7 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-validate-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:     runID,
 		TaskID:    task.TaskID,
 		Phase:     task.Phase,
 		FindingID: finding.ID,

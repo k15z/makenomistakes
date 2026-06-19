@@ -10,9 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const opencodeVersion = "1.17.8"
+
+const openCodeMaxAttempts = 3
+
+var openCodeRetryDelay = 2 * time.Second
 
 type AnalyzeRunner interface {
 	Run(context.Context, RunnerRequest) error
@@ -182,6 +187,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}
 	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:   runID,
 		TaskID:  task.TaskID,
 		Phase:   task.Phase,
 		Title:   "mnm recon",
@@ -212,6 +218,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 }
 
 type opencodeTask struct {
+	RunID     string
 	TaskID    string
 	Phase     string
 	LeadID    string
@@ -224,11 +231,45 @@ type opencodeTask struct {
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
-	logFile, err := os.Create(task.LogPath)
+	var lastErr error
+	attempts := 0
+	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
+		attempts = attempt
+		err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == openCodeMaxAttempts || !retryableOpenCodeError(task.LogPath, err) {
+			break
+		}
+		if err := appendOpenCodeRetryEvent(runDir, task, attempt, openCodeMaxAttempts, err); err != nil {
+			return err
+		}
+		if openCodeRetryDelay > 0 {
+			time.Sleep(openCodeRetryDelay * time.Duration(attempt))
+		}
+	}
+	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w", task.TaskID, attempts, lastErr)
+}
+
+func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) error {
+	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	var logOffset int64
+	if attempt > 1 {
+		flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		if info, err := os.Stat(task.LogPath); err == nil {
+			logOffset = info.Size()
+		}
+	}
+	ledgerOffset, err := fileSize(filepath.Join(runDir, eventsFile))
 	if err != nil {
 		return err
 	}
-	defer logFile.Close()
+	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
+	if err != nil {
+		return err
+	}
 	command := exec.Command(opencodePath,
 		"run",
 		"--format", "json",
@@ -256,7 +297,112 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	command.Env = env
 	command.Stdout = io.MultiWriter(os.Stdout, logFile)
 	command.Stderr = os.Stderr
-	return command.Run()
+	runErr := command.Run()
+	if closeErr := logFile.Close(); closeErr != nil && runErr == nil {
+		return closeErr
+	}
+	if runErr != nil {
+		return openCodeAttemptError{
+			err:            runErr,
+			logText:        readLogSuffix(task.LogPath, logOffset),
+			ledgerModified: fileModifiedSince(filepath.Join(runDir, eventsFile), ledgerOffset),
+		}
+	}
+	return nil
+}
+
+type openCodeAttemptError struct {
+	err            error
+	logText        string
+	ledgerModified bool
+}
+
+func (e openCodeAttemptError) Error() string {
+	return e.err.Error()
+}
+
+func (e openCodeAttemptError) Unwrap() error {
+	return e.err
+}
+
+func readLogSuffix(logPath string, offset int64) string {
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		return ""
+	}
+	if offset < 0 || offset > int64(len(b)) {
+		return ""
+	}
+	return string(b[offset:])
+}
+
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+func fileModifiedSince(path string, previousSize int64) bool {
+	currentSize, err := fileSize(path)
+	return err != nil || currentSize != previousSize
+}
+
+func retryableOpenCodeError(logPath string, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	var attemptErr openCodeAttemptError
+	if errors.As(err, &attemptErr) {
+		if attemptErr.ledgerModified {
+			return false
+		}
+		text += "\n" + strings.ToLower(attemptErr.logText)
+	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
+		text += "\n" + strings.ToLower(string(b))
+	}
+	for _, marker := range []string{
+		`"code":502`,
+		"provider_unavailable",
+		"network connection lost",
+		"bad gateway",
+		"service unavailable",
+		"temporarily unavailable",
+		"temporary failure",
+		"connection reset",
+		"econnreset",
+		"timeout",
+		"timed out",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendOpenCodeRetryEvent(runDir string, task opencodeTask, attempt, maxAttempts int, cause error) error {
+	if task.RunID == "" {
+		return nil
+	}
+	return appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    task.RunID,
+		Type:     "task.retrying",
+		Object:   "task",
+		ObjectID: task.TaskID,
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"phase":        task.Phase,
+			"attempt":      attempt,
+			"max_attempts": maxAttempts,
+			"reason":       cause.Error(),
+		},
+	})
 }
 
 func prepareTaskWorkspace(baseWorkspace, runID, taskID string) (string, func(), error) {
