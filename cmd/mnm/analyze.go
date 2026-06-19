@@ -20,8 +20,12 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	prepareOnly := flags.Bool("prepare-only", false, "prepare the run without starting the VM runner")
 	keepVM := flags.Bool("keep-vm", false, "keep the Lima VM after the runner exits")
+	resumeRunID := flags.String("resume", "", "resume an existing prepared, stopped, timed_out, or failed run")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *prepareOnly && *resumeRunID != "" {
+		return errors.New("analyze --resume cannot be combined with --prepare-only")
 	}
 	if flags.NArg() > 1 {
 		return errors.New("analyze accepts at most one path")
@@ -39,6 +43,7 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 		WorkspaceDir: workspaceDir,
 		PrepareOnly:  *prepareOnly,
 		KeepVM:       *keepVM,
+		ResumeRunID:  *resumeRunID,
 		Stdout:       stdout,
 		Stderr:       stderr,
 	}
@@ -55,12 +60,16 @@ type AnalyzeOptions struct {
 	WorkspaceDir string
 	PrepareOnly  bool
 	KeepVM       bool
+	ResumeRunID  string
 	Stdout       io.Writer
 	Stderr       io.Writer
 }
 
 func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner AnalyzeRunner) error {
 	workspaceDir := options.WorkspaceDir
+	if options.ResumeRunID != "" {
+		return resumeAnalyzeRun(ctx, options, runner)
+	}
 	cfg, err := loadConfig(filepath.Join(workspaceDir, "mnm.toml"))
 	if err != nil {
 		return err
@@ -130,13 +139,64 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 		return nil
 	}
 
-	if err := store.UpdateRunStatus(runID, RunStatusVMStarting); err != nil {
+	return executePreparedRun(ctx, options, store, run, cfg, resolved, runner)
+}
+
+func resumeAnalyzeRun(ctx context.Context, options AnalyzeOptions, runner AnalyzeRunner) error {
+	workspaceDir := options.WorkspaceDir
+	mnmDir := filepath.Join(workspaceDir, ".mnm")
+	store, err := openStore(filepath.Join(mnmDir, "mnm.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	run, err := store.GetRun(options.ResumeRunID)
+	if err != nil {
+		return fmt.Errorf("resume run %s: %w", options.ResumeRunID, err)
+	}
+	if !resumableRunStatus(run.Status) {
+		return fmt.Errorf("run %s cannot be resumed from status %q", run.ID, run.Status)
+	}
+	if same, err := samePath(run.WorkspaceDir, workspaceDir); err != nil {
+		return err
+	} else if !same {
+		return fmt.Errorf("run %s belongs to workspace %s, not %s", run.ID, run.WorkspaceDir, workspaceDir)
+	}
+	if _, err := os.Stat(run.RunDir); err != nil {
+		return fmt.Errorf("resume run directory %s: %w", run.RunDir, err)
+	}
+	if _, err := os.Stat(run.SnapshotPath); err != nil {
+		return fmt.Errorf("resume snapshot %s: %w", run.SnapshotPath, err)
+	}
+	if _, err := os.Stat(run.ConfigSnapshotPath); err != nil {
+		return fmt.Errorf("resume config snapshot %s: %w", run.ConfigSnapshotPath, err)
+	}
+
+	cfg, err := loadConfig(run.ConfigSnapshotPath)
+	if err != nil {
+		return err
+	}
+	resolved, err := cfg.validate(workspaceDir)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(options.Stdout, "resuming run %s\n", run.ID)
+	fmt.Fprintf(options.Stdout, "workspace: %s\n", run.WorkspaceRoot)
+	fmt.Fprintf(options.Stdout, "snapshot: %s\n", run.SnapshotPath)
+	fmt.Fprintf(options.Stdout, "run dir: %s\n", run.RunDir)
+	return executePreparedRun(ctx, options, store, run, cfg, resolved, runner)
+}
+
+func executePreparedRun(ctx context.Context, options AnalyzeOptions, store *Store, run RunRecord, cfg Config, resolved ResolvedConfig, runner AnalyzeRunner) error {
+	if err := store.UpdateRunStatus(run.ID, RunStatusVMStarting); err != nil {
 		return err
 	}
 	fmt.Fprintf(options.Stdout, "starting runner VM\n")
 	runCtx, cancel := context.WithTimeout(ctx, resolved.Timeout)
 	defer cancel()
-	if err := store.UpdateRunStatus(runID, RunStatusRunning); err != nil {
+	if err := store.UpdateRunStatus(run.ID, RunStatusRunning); err != nil {
 		return err
 	}
 	runnerDone := make(chan struct{})
@@ -152,18 +212,19 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 			}
 			switch {
 			case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-				_ = store.UpdateRunStatus(runID, RunStatusTimedOut)
+				updateRunStatusUntilRunnerDone(store, run.ID, RunStatusTimedOut, runnerDone)
 			case errors.Is(runCtx.Err(), context.Canceled):
-				_ = store.UpdateRunStatus(runID, RunStatusStopping)
+				updateRunStatusUntilRunnerDone(store, run.ID, RunStatusStopping, runnerDone)
 			}
 		case <-runnerDone:
 		}
 	}()
-	err = runner.Run(runCtx, RunnerRequest{
+	err := runner.Run(runCtx, RunnerRequest{
 		Run:         run,
 		Config:      cfg,
 		ModelAPIKey: os.Getenv(resolved.APIKeyEnv),
 		KeepVM:      options.KeepVM,
+		Resume:      options.ResumeRunID != "",
 	})
 	close(runnerDone)
 	<-monitorDone
@@ -175,16 +236,53 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 		case errors.Is(err, context.Canceled) || errors.Is(runCtx.Err(), context.Canceled):
 			status = RunStatusStopped
 		}
-		if updateErr := store.UpdateRunStatus(runID, status); updateErr != nil {
+		if updateErr := store.UpdateRunStatus(run.ID, status); updateErr != nil {
 			return errors.Join(err, fmt.Errorf("update run status to %s: %w", status, updateErr))
 		}
 		return err
 	}
-	if err := store.UpdateRunStatus(runID, RunStatusCompleted); err != nil {
+	if err := store.UpdateRunStatus(run.ID, RunStatusCompleted); err != nil {
 		return err
 	}
 	fmt.Fprintf(options.Stdout, "runner completed\n")
 	return nil
+}
+
+func updateRunStatusUntilRunnerDone(store *Store, runID, status string, runnerDone <-chan struct{}) {
+	for {
+		select {
+		case <-runnerDone:
+			return
+		default:
+		}
+		if err := store.UpdateRunStatus(runID, status); err == nil {
+			return
+		}
+		select {
+		case <-runnerDone:
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func resumableRunStatus(status string) bool {
+	return status == RunStatusPrepared ||
+		status == RunStatusStopped ||
+		status == RunStatusTimedOut ||
+		status == RunStatusFailed
+}
+
+func samePath(a, b string) (bool, error) {
+	absA, err := filepath.Abs(a)
+	if err != nil {
+		return false, err
+	}
+	absB, err := filepath.Abs(b)
+	if err != nil {
+		return false, err
+	}
+	return filepath.Clean(absA) == filepath.Clean(absB), nil
 }
 
 func newRunID() string {

@@ -28,6 +28,7 @@ type RunnerRequest struct {
 	Config      Config
 	ModelAPIKey string
 	KeepVM      bool
+	Resume      bool
 }
 
 func runnerCommand(args []string, stdout, stderr io.Writer) error {
@@ -143,6 +144,9 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Phase:       "recon",
 		Title:       "Recon",
 		Instruction: "Map the workspace, interpret scope, identify risks, and create focused leads for later investigation.",
+	}
+	if ledgerTaskCompleted(runDir, task.TaskID) {
+		return nil
 	}
 	if err := writeTaskFile(filepath.Join(runDir, currentTaskFile), task); err != nil {
 		return err
@@ -505,17 +509,10 @@ func validateReconLedgerOutputs(runDir, taskID string) error {
 	if err != nil {
 		return err
 	}
-	completed := false
 	hasMap := false
 	hasRiskRegister := false
 	hasLead := false
 	for _, event := range events {
-		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
-			if event.Data["status"] == "completed" {
-				completed = true
-			}
-			continue
-		}
 		if event.TaskID != taskID {
 			continue
 		}
@@ -532,7 +529,7 @@ func validateReconLedgerOutputs(runDir, taskID string) error {
 			hasLead = true
 		}
 	}
-	if !completed {
+	if !ledgerTaskCompleted(runDir, taskID) {
 		return errors.New("recon opencode task did not complete successfully through mnm task complete")
 	}
 	if !hasMap {
@@ -552,12 +549,13 @@ func ledgerTaskCompleted(runDir, taskID string) bool {
 	if err != nil {
 		return false
 	}
+	status := ""
 	for _, event := range events {
 		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
-			return event.Data["status"] == "completed"
+			status, _ = event.Data["status"].(string)
 		}
 	}
-	return false
+	return status == "completed"
 }
 
 func reconPrompt(runDir, workspace string, cfg Config) string {

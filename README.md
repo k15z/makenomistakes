@@ -24,6 +24,8 @@ snapshot the configured workspace, launch a disposable local VM, run the audit
 pipeline, and generate local reports.
 Interrupting `mnm analyze` asks the runner to stop and records the run as
 `stopped`; configured runner deadlines are recorded as `timed_out`.
+Use `mnm analyze --resume RUN_ID` to continue a prepared, stopped, timed out, or
+failed run from its saved snapshot and ledger.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
 include cloud VMs.

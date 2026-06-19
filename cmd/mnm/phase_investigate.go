@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
 func runInvestigatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
-	processed := map[string]bool{}
+	processed, err := completedInvestigationLeads(runDir)
+	if err != nil {
+		return err
+	}
 	limit := maxInvestigations(cfg)
 	for {
 		leads, err := openLedgerLeads(runDir)
@@ -39,6 +43,40 @@ func runInvestigatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 			processed[lead.ID] = true
 		}
 	}
+}
+
+func completedInvestigationLeads(runDir string) (map[string]bool, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return nil, err
+	}
+	leadByTaskID := map[string]string{}
+	statusByTaskID := map[string]string{}
+	for _, event := range events {
+		if event.Object != "task" || event.ObjectID == "" || !strings.HasPrefix(event.ObjectID, "task_investigate_") {
+			continue
+		}
+		switch event.Type {
+		case "task.started":
+			leadID, _ := event.Data["lead_id"].(string)
+			if leadID != "" {
+				leadByTaskID[event.ObjectID] = leadID
+			}
+		case "task.completed":
+			status, _ := event.Data["status"].(string)
+			statusByTaskID[event.ObjectID] = status
+		}
+	}
+	processed := map[string]bool{}
+	for taskID, status := range statusByTaskID {
+		if status != "completed" {
+			continue
+		}
+		if leadID := leadByTaskID[taskID]; leadID != "" {
+			processed[leadID] = true
+		}
+	}
+	return processed, nil
 }
 
 func appendInvestigateLimitReached(runDir, runID string, limit, processed int) error {

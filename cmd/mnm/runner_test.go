@@ -147,6 +147,77 @@ exit 0
 	}
 }
 
+func TestValidateReconLedgerOutputsUsesLatestCompletionStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	for _, event := range []LedgerEvent{
+		{
+			RunID:    "run_recon",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_map",
+			TaskID:   "task_recon",
+			Data: map[string]any{
+				"kind":  "markdown",
+				"title": "Recon codebase map",
+				"path":  "evidence/recon-codebase-map.md",
+			},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_risk",
+			TaskID:   "task_recon",
+			Data: map[string]any{
+				"kind":  "markdown",
+				"title": "Recon risk register",
+				"path":  "evidence/recon-risk-register.md",
+			},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "lead.created",
+			Object:   "lead",
+			ObjectID: "lead_auth",
+			TaskID:   "task_recon",
+			Data: map[string]any{
+				"title":     "Investigate auth",
+				"category":  "authz",
+				"priority":  "high",
+				"body_path": "evidence/lead-auth.md",
+			},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "task.completed",
+			Object:   "task",
+			ObjectID: "task_recon",
+			TaskID:   "task_recon",
+			Data:     map[string]any{"status": "completed"},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "task.completed",
+			Object:   "task",
+			ObjectID: "task_recon",
+			TaskID:   "task_recon",
+			Data:     map[string]any{"status": "failed"},
+		},
+	} {
+		if err := appendLedgerEvent(runDir, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := validateReconLedgerOutputs(runDir, "task_recon")
+	if err == nil {
+		t.Fatal("expected latest failed recon completion to be rejected")
+	}
+	if !strings.Contains(err.Error(), "did not complete successfully") {
+		t.Fatalf("expected completion status error, got %v", err)
+	}
+}
+
 func TestRunReconTaskRequiresRegisteredOutputs(t *testing.T) {
 	runDir := t.TempDir()
 	workspace := t.TempDir()
@@ -218,6 +289,49 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 	}
 }
 
+func TestLimaRunnerSeedsExistingRunDirectoryWhenResuming(t *testing.T) {
+	runDir := t.TempDir()
+	payload := filepath.Join(runDir, "mnm-linux-test")
+	if err := os.WriteFile(payload, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", payload)
+	snapshot := filepath.Join(runDir, "snapshot.tar.zst")
+	if err := os.WriteFile(snapshot, []byte("snapshot"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(runDir, "mnm.toml")
+	if err := os.WriteFile(configPath, []byte(defaultConfig()), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &recordingExecutor{}
+	runner := LimaRunner{Executor: executor, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	err := runner.Run(context.Background(), RunnerRequest{
+		Run: RunRecord{
+			ID:                 "run_resume",
+			RunDir:             runDir,
+			SnapshotPath:       snapshot,
+			ConfigSnapshotPath: configPath,
+		},
+		Config: Config{Runner: RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20}},
+		Resume: true,
+	})
+	if err != nil {
+		t.Fatalf("runner failed: %v", err)
+	}
+
+	joined := strings.Join(executor.commands, "\n")
+	for _, want := range []string{
+		"limactl shell mnm-run-resume bash -lc rm -rf /tmp/mnm-run && mkdir -p /tmp/mnm-run",
+		"limactl copy --backend=scp -r " + filepath.Clean(runDir) + "/. mnm-run-resume:/tmp/mnm-run",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing resume command %q in:\n%s", want, joined)
+		}
+	}
+}
+
 func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 	command := guestRunnerCommand(RunRecord{ID: "run_quote'value"})
 
@@ -234,6 +348,9 @@ func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 	if installIndex > runnerIndex {
 		t.Fatalf("ripgrep install should happen before runner starts:\n%s", command)
 	}
+	if !strings.Contains(command, "rm -f /tmp/mnm-run/.events.lock") {
+		t.Fatalf("guest runner command should clear stale ledger locks before runner starts:\n%s", command)
+	}
 	if !strings.Contains(command, "ripgrep is required in the audit VM") {
 		t.Fatalf("guest runner command should fail clearly when ripgrep cannot be installed:\n%s", command)
 	}
@@ -243,6 +360,35 @@ func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 		if output, err := check.CombinedOutput(); err != nil {
 			t.Fatalf("guest runner command has invalid bash syntax: %v\n%s\n%s", err, output, command)
 		}
+	}
+}
+
+func TestRunReconTaskSkipsCompletedTask(t *testing.T) {
+	runDir := t.TempDir()
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_resume",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_recon",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Recon already completed",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+printf 'recon should not run\n' >&2
+exit 42
+`)
+
+	err := runReconTask(runDir, "run_resume", t.TempDir(), Config{}, opencodePath)
+	if err != nil {
+		t.Fatalf("completed recon should be skipped, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "evidence", "recon-prompt.md")); !os.IsNotExist(err) {
+		t.Fatalf("completed recon should not rewrite prompt, stat err=%v", err)
 	}
 }
 
@@ -698,7 +844,7 @@ type recordingExecutor struct {
 
 func (executor *recordingExecutor) Run(_ context.Context, name string, args ...string) error {
 	executor.commands = append(executor.commands, name+" "+strings.Join(args, " "))
-	if name == "limactl" && len(args) >= 5 && args[0] == "copy" && args[len(args)-2] == "mnm-run-abc:/tmp/mnm-run" {
+	if name == "limactl" && len(args) >= 5 && args[0] == "copy" && strings.HasSuffix(args[len(args)-2], ":/tmp/mnm-run") {
 		dst := args[len(args)-1]
 		outDir := filepath.Join(dst, "mnm-run")
 		if err := os.MkdirAll(filepath.Join(outDir, "evidence"), dirPerm); err != nil {
