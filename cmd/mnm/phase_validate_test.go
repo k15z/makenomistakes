@@ -97,5 +97,18 @@ func addCanonicalFindingForTest(t *testing.T, runDir, id, bodyRel, body string) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_validate",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_deduplicate",
+		TaskID:   "task_deduplicate",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Deduplicated for test.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return finding
 }

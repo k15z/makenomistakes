@@ -36,6 +36,7 @@ type EvidenceRecord struct {
 
 type VerdictRecord struct {
 	ID                 string
+	TaskID             string
 	FindingID          string
 	Phase              string
 	Value              string
@@ -45,6 +46,7 @@ type VerdictRecord struct {
 
 type ReportRecord struct {
 	ID           string
+	TaskID       string
 	MarkdownPath string
 	JSONPath     string
 }
@@ -276,6 +278,7 @@ func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {
 		}
 		verdicts = append(verdicts, VerdictRecord{
 			ID:                 event.ObjectID,
+			TaskID:             event.TaskID,
 			FindingID:          stringData(event.Data, "finding_id"),
 			Phase:              stringData(event.Data, "phase"),
 			Value:              stringData(event.Data, "value"),
@@ -294,7 +297,7 @@ func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool,
 	var match VerdictRecord
 	found := false
 	for _, verdict := range verdicts {
-		if verdict.FindingID == findingID && verdict.Phase == phase {
+		if verdict.FindingID == findingID && verdict.Phase == phase && ledgerTaskCompleted(runDir, verdict.TaskID) {
 			match = verdict
 			found = true
 		}
@@ -319,6 +322,7 @@ func ledgerReports(runDir string) ([]ReportRecord, error) {
 		}
 		reports = append(reports, ReportRecord{
 			ID:           event.ObjectID,
+			TaskID:       event.TaskID,
 			MarkdownPath: stringData(event.Data, "markdown_path"),
 			JSONPath:     stringData(event.Data, "json_path"),
 		})

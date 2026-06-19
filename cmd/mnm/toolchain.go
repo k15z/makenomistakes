@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 const nodeToolchainVersion = "22.11.0"
@@ -51,7 +52,7 @@ func workspaceContainsFile(root, name string) (bool, error) {
 }
 
 func ensureNodeToolchain() error {
-	if commandExists("node") && commandExists("npm") {
+	if pinnedNodeOnPath() && commandExists("npm") {
 		return nil
 	}
 	platform, err := nodeArchivePlatform(runtime.GOOS, runtime.GOARCH)
@@ -75,6 +76,18 @@ func ensureNodeToolchain() error {
 	}
 	prependPATH(binDir)
 	return nil
+}
+
+func pinnedNodeOnPath() bool {
+	path, err := exec.LookPath("node")
+	if err != nil {
+		return false
+	}
+	version, err := commandOutput(path, "--version")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(version) == "v"+nodeToolchainVersion
 }
 
 func commandExists(name string) bool {

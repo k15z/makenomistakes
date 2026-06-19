@@ -57,7 +57,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 		return err
 	}
 
-	knownIDs, knownLeadIDs, err := reportKnownIDs(runDir)
+	knownIDs, knownLeadIDs, findingLeadIDs, err := reportKnownIDs(runDir)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 			return fmt.Errorf("report JSON counts.%s = %d, want %d", bucket.countName, count, len(items))
 		}
 		for i, item := range items {
-			if err := validateReportFindingItem(runDir, bucket.name, i, item, knownIDs, knownLeadIDs, seenReportIDs); err != nil {
+			if err := validateReportFindingItem(runDir, bucket.name, i, item, knownIDs, knownLeadIDs, findingLeadIDs, seenReportIDs); err != nil {
 				return err
 			}
 		}
@@ -99,25 +99,27 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 	return nil
 }
 
-func reportKnownIDs(runDir string) (map[string]bool, map[string]bool, error) {
+func reportKnownIDs(runDir string) (map[string]bool, map[string]bool, map[string]string, error) {
 	leads, err := ledgerLeads(runDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	findings, err := ledgerFindings(runDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	knownIDs := map[string]bool{}
 	knownLeadIDs := map[string]bool{}
+	findingLeadIDs := map[string]string{}
 	for _, lead := range leads {
 		knownIDs[lead.ID] = true
 		knownLeadIDs[lead.ID] = true
 	}
 	for _, finding := range findings {
 		knownIDs[finding.ID] = true
+		findingLeadIDs[finding.ID] = finding.LeadID
 	}
-	return knownIDs, knownLeadIDs, nil
+	return knownIDs, knownLeadIDs, findingLeadIDs, nil
 }
 
 func validateReportPaths(runDir string, root map[string]json.RawMessage, markdownRel, jsonRel string) error {
@@ -150,7 +152,7 @@ func validateReportPaths(runDir string, root map[string]json.RawMessage, markdow
 	return nil
 }
 
-func validateReportFindingItem(runDir, bucket string, index int, item map[string]json.RawMessage, knownIDs, knownLeadIDs map[string]bool, seenReportIDs map[string]string) error {
+func validateReportFindingItem(runDir, bucket string, index int, item map[string]json.RawMessage, knownIDs, knownLeadIDs map[string]bool, findingLeadIDs map[string]string, seenReportIDs map[string]string) error {
 	prefix := fmt.Sprintf("%s[%d]", bucket, index)
 	id, err := requiredStringField(item, "id")
 	if err != nil {
@@ -175,6 +177,9 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if sourceLeadID != "" && !knownLeadIDs[sourceLeadID] {
 		return fmt.Errorf("%s.source_lead_id %q does not reference a known lead", prefix, sourceLeadID)
 	}
+	if expectedLeadID, isFinding := findingLeadIDs[id]; isFinding && sourceLeadID != expectedLeadID {
+		return fmt.Errorf("%s.source_lead_id = %q, want %q for finding %s", prefix, sourceLeadID, expectedLeadID, id)
+	}
 	for _, field := range []string{"verdicts", "evidence_paths", "affected_paths"} {
 		if _, err := requiredStringArrayField(item, field); err != nil {
 			return fmt.Errorf("%s.%w", prefix, err)
@@ -182,8 +187,16 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	}
 	evidencePaths, _ := requiredStringArrayField(item, "evidence_paths")
 	for _, evidencePath := range evidencePaths {
-		if _, err := normalizeReportPath(runDir, evidencePath); err != nil {
+		evidenceRel, err := normalizeReportPath(runDir, evidencePath)
+		if err != nil {
 			return fmt.Errorf("%s.evidence_paths contains invalid path %q: %w", prefix, evidencePath, err)
+		}
+		info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(evidenceRel)))
+		if err != nil {
+			return fmt.Errorf("%s.evidence_paths contains unreadable path %q: %w", prefix, evidencePath, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("%s.evidence_paths contains directory %q; want file", prefix, evidencePath)
 		}
 	}
 	return nil
@@ -224,11 +237,14 @@ func requiredStringField(root map[string]json.RawMessage, field string) (string,
 	if !ok {
 		return "", fmt.Errorf("missing %q string", field)
 	}
-	var out string
+	var out *string
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", fmt.Errorf("field %q must be a string: %w", field, err)
 	}
-	return out, nil
+	if out == nil {
+		return "", fmt.Errorf("field %q must be a string", field)
+	}
+	return *out, nil
 }
 
 func requiredIntField(root map[string]json.RawMessage, field string) (int, error) {
@@ -236,11 +252,14 @@ func requiredIntField(root map[string]json.RawMessage, field string) (int, error
 	if !ok {
 		return 0, fmt.Errorf("missing %q integer", field)
 	}
-	var out int
+	var out *int
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return 0, fmt.Errorf("field %q must be an integer: %w", field, err)
 	}
-	return out, nil
+	if out == nil {
+		return 0, fmt.Errorf("field %q must be an integer", field)
+	}
+	return *out, nil
 }
 
 func requiredStringArrayField(root map[string]json.RawMessage, field string) ([]string, error) {

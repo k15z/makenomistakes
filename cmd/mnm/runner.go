@@ -43,6 +43,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if *runID == "" || *runDir == "" || *snapshot == "" || *configPath == "" {
 		return errors.New("runner requires --run-id, --run-dir, --snapshot, and --config")
 	}
+	if err := validateRunnerRunID(*runID); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
 		return err
 	}
@@ -192,10 +195,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Prompt:  prompt,
 		LogPath: logPath,
 		Verify: func() error {
-			if !ledgerTaskCompleted(runDir, task.TaskID) {
-				return errors.New("recon opencode task did not complete through mnm task complete")
-			}
-			return nil
+			return validateReconLedgerOutputs(runDir, task.TaskID)
 		},
 	}); err != nil {
 		return err
@@ -236,10 +236,13 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	attempts := 0
 	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
 		attempts = attempt
-		err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		result, err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
 		if err == nil && task.Verify != nil {
 			if verifyErr := task.Verify(); verifyErr != nil {
-				err = retryableOpenCodePostconditionError{err: verifyErr}
+				err = retryableOpenCodePostconditionError{
+					err:            verifyErr,
+					ledgerModified: result.ledgerModified,
+				}
 			}
 		}
 		if err == nil {
@@ -259,16 +262,28 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w", task.TaskID, attempts, lastErr)
 }
 
-func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) error {
+type openCodeAttemptResult struct {
+	logText        string
+	ledgerModified bool
+}
+
+func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	var logOffset int64
 	if attempt > 1 {
 		flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		if info, err := os.Stat(task.LogPath); err == nil {
+			logOffset = info.Size()
+		}
+	}
+	ledgerOffset, err := fileSize(filepath.Join(runDir, eventsFile))
+	if err != nil {
+		return openCodeAttemptResult{}, err
 	}
 	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
 	if err != nil {
-		return err
+		return openCodeAttemptResult{}, err
 	}
-	defer logFile.Close()
 	command := exec.Command(opencodePath,
 		"run",
 		"--format", "json",
@@ -295,22 +310,78 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 		env = append(env, taskFileEnv+"="+task.TaskFile)
 	}
 	command.Env = env
-	command.Stdout = io.MultiWriter(os.Stdout, logFile)
-	command.Stderr = io.MultiWriter(os.Stderr, logFile)
-	err = command.Run()
+	command.Stdout = logFile
+	command.Stderr = os.Stderr
+	runErr := command.Run()
 	if cleanupErr := cleanupCommandProcessGroup(command); cleanupErr != nil {
 		cleanupErr = fmt.Errorf("clean up opencode task process group: %w", cleanupErr)
-		if err != nil {
-			err = errors.Join(err, cleanupErr)
+		if runErr != nil {
+			runErr = errors.Join(runErr, cleanupErr)
 		} else {
-			err = cleanupErr
+			runErr = cleanupErr
 		}
 	}
-	return err
+	if closeErr := logFile.Close(); closeErr != nil && runErr == nil {
+		return openCodeAttemptResult{}, closeErr
+	}
+	result := openCodeAttemptResult{
+		logText:        readLogSuffix(task.LogPath, logOffset),
+		ledgerModified: fileModifiedSince(filepath.Join(runDir, eventsFile), ledgerOffset),
+	}
+	if runErr != nil {
+		return result, openCodeAttemptError{
+			err:            runErr,
+			logText:        result.logText,
+			ledgerModified: result.ledgerModified,
+		}
+	}
+	return result, nil
+}
+
+type openCodeAttemptError struct {
+	err            error
+	logText        string
+	ledgerModified bool
+}
+
+func (e openCodeAttemptError) Error() string {
+	return e.err.Error()
+}
+
+func (e openCodeAttemptError) Unwrap() error {
+	return e.err
+}
+
+func readLogSuffix(logPath string, offset int64) string {
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		return ""
+	}
+	if offset < 0 || offset > int64(len(b)) {
+		return ""
+	}
+	return string(b[offset:])
+}
+
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+func fileModifiedSince(path string, previousSize int64) bool {
+	currentSize, err := fileSize(path)
+	return err != nil || currentSize != previousSize
 }
 
 type retryableOpenCodePostconditionError struct {
-	err error
+	err            error
+	ledgerModified bool
 }
 
 func (e retryableOpenCodePostconditionError) Error() string {
@@ -327,10 +398,16 @@ func retryableOpenCodeError(logPath string, err error) bool {
 	}
 	var postconditionErr retryableOpenCodePostconditionError
 	if errors.As(err, &postconditionErr) {
-		return true
+		return !postconditionErr.ledgerModified
 	}
 	text := strings.ToLower(err.Error())
-	if b, readErr := os.ReadFile(logPath); readErr == nil {
+	var attemptErr openCodeAttemptError
+	if errors.As(err, &attemptErr) {
+		if attemptErr.ledgerModified {
+			return false
+		}
+		text += "\n" + strings.ToLower(attemptErr.logText)
+	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
 		text += "\n" + strings.ToLower(string(b))
 	}
 	for _, marker := range []string{
@@ -389,10 +466,12 @@ func prepareTaskWorkspace(baseWorkspace, runID, taskID string) (string, func(), 
 }
 
 func phaseModel(cfg Config, phase string) string {
+	defaultModel := strings.TrimSpace(cfg.Models.Default)
+	reconModel := strings.TrimSpace(cfg.Models.Recon)
 	switch phase {
 	case "recon":
-		if strings.TrimSpace(cfg.Models.Recon) != "" {
-			return strings.TrimSpace(cfg.Models.Recon)
+		if reconModel != "" {
+			return reconModel
 		}
 	case "investigate":
 		if strings.TrimSpace(cfg.Models.Investigate) != "" {
@@ -415,7 +494,57 @@ func phaseModel(cfg Config, phase string) string {
 			return strings.TrimSpace(cfg.Models.Finalize)
 		}
 	}
-	return strings.TrimSpace(cfg.Models.Default)
+	if defaultModel == "" {
+		return reconModel
+	}
+	return defaultModel
+}
+
+func validateReconLedgerOutputs(runDir, taskID string) error {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return err
+	}
+	completed := false
+	hasMap := false
+	hasRiskRegister := false
+	hasLead := false
+	for _, event := range events {
+		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
+			if event.Data["status"] == "completed" {
+				completed = true
+			}
+			continue
+		}
+		if event.TaskID != taskID {
+			continue
+		}
+		if event.Type == "evidence.added" && event.Object == "evidence" {
+			path, _ := event.Data["path"].(string)
+			switch path {
+			case "evidence/recon-codebase-map.md":
+				hasMap = true
+			case "evidence/recon-risk-register.md":
+				hasRiskRegister = true
+			}
+		}
+		if event.Type == "lead.created" && event.Object == "lead" {
+			hasLead = true
+		}
+	}
+	if !completed {
+		return errors.New("recon opencode task did not complete successfully through mnm task complete")
+	}
+	if !hasMap {
+		return errors.New("recon opencode task did not register the codebase map")
+	}
+	if !hasRiskRegister {
+		return errors.New("recon opencode task did not register the risk register")
+	}
+	if !hasLead {
+		return errors.New("recon opencode task did not create any leads")
+	}
+	return nil
 }
 
 func ledgerTaskCompleted(runDir, taskID string) bool {
@@ -425,7 +554,7 @@ func ledgerTaskCompleted(runDir, taskID string) bool {
 	}
 	for _, event := range events {
 		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
-			return true
+			return event.Data["status"] == "completed"
 		}
 	}
 	return false
@@ -508,7 +637,12 @@ func workspaceFileList(root string) ([]string, error) {
 func ensureOpenCode() (string, string, error) {
 	if path, err := exec.LookPath("opencode"); err == nil {
 		version, err := commandOutput(path, "--version")
-		return path, version, err
+		if err != nil {
+			return "", "", err
+		}
+		if opencodeVersionMatches(version) {
+			return path, version, nil
+		}
 	}
 
 	install := fmt.Sprintf("curl -fsSL https://opencode.ai/install | bash -s -- --version %s --no-modify-path", shellQuote(opencodeVersion))
@@ -523,14 +657,24 @@ func ensureOpenCode() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	pathEnv := filepath.Join(home, ".opencode", "bin") + string(os.PathListSeparator) + os.Getenv("PATH")
-	os.Setenv("PATH", pathEnv)
-	path, err := exec.LookPath("opencode")
-	if err != nil {
-		return "", "", fmt.Errorf("opencode install completed but binary was not found: %w", err)
-	}
+	path := filepath.Join(home, ".opencode", "bin", "opencode")
 	version, err := commandOutput(path, "--version")
-	return path, version, err
+	if err != nil {
+		return "", "", err
+	}
+	if !opencodeVersionMatches(version) {
+		return "", "", fmt.Errorf("opencode install produced version %q, want %s", strings.TrimSpace(version), opencodeVersion)
+	}
+	return path, version, nil
+}
+
+func opencodeVersionMatches(output string) bool {
+	for _, field := range strings.Fields(output) {
+		if field == opencodeVersion {
+			return true
+		}
+	}
+	return strings.TrimSpace(output) == opencodeVersion
 }
 
 func commandOutput(name string, args ...string) (string, error) {
@@ -540,4 +684,23 @@ func commandOutput(name string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(output))
 	}
 	return string(output), nil
+}
+
+func validateRunnerRunID(runID string) error {
+	for _, r := range runID {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid run id %q: use only letters, digits, underscores, and hyphens", runID)
+	}
+	return nil
 }
