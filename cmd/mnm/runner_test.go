@@ -1317,6 +1317,61 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunReconTaskUsesTaskBundleOutput(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_LEDGER_DIR:?MNM_LEDGER_DIR is required}"
+: "${MNM_TASK_FILE:?MNM_TASK_FILE is required}"
+if [ "$MNM_RUN_DIR" = "$MNM_LEDGER_DIR" ]; then
+  echo "recon should write to a task bundle, not the central ledger" >&2
+  exit 1
+fi
+if [ ! -f "$MNM_TASK_FILE" ]; then
+  echo "missing task file" >&2
+  exit 1
+fi
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+
+Investigate auth.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"}}
+{"id":"event_recon_risk_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_lead_$$","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_auth","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate auth","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	if err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath); err != nil {
+		t.Fatalf("recon failed: %v", err)
+	}
+	bundleDir := filepath.Join(runDir, taskBundlesDir, "task_recon", "attempt-1")
+	if _, err := os.Stat(filepath.Join(bundleDir, eventsFile)); err != nil {
+		t.Fatalf("recon task bundle was not retained: %v", err)
+	}
+	if _, ok := ledgerTaskEvidence(runDir, "task_recon", "evidence/recon-codebase-map.md"); !ok {
+		t.Fatal("recon bundle events were not ingested into central ledger")
+	}
+}
+
 func TestRegisterTaskStartedIsIdempotentForSameMetadata(t *testing.T) {
 	runDir := t.TempDir()
 	task := TaskRecord{
@@ -1438,7 +1493,7 @@ func TestRunReconTaskReregistersPromptEvidenceIdempotently(t *testing.T) {
 set -eu
 : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
 : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
-count_file="$MNM_RUN_DIR/recon-attempt-count"
+count_file="$MNM_LEDGER_DIR/recon-attempt-count"
 count=0
 if [ -f "$count_file" ]; then
   count="$(cat "$count_file")"
@@ -1446,6 +1501,9 @@ fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
 if [ "$count" -le 3 ]; then
+  cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_incomplete_$count","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"status":"completed","summary":"incomplete"}}
+EOF
   printf '{"type":"done","attempt":%s}\n' "$count"
   exit 0
 fi
@@ -1514,7 +1572,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing recon evidence file error")
 	}
-	if !strings.Contains(err.Error(), "read evidence file evidence/recon-codebase-map.md") {
+	if !strings.Contains(err.Error(), "artifact evidence/recon-codebase-map.md") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1592,7 +1650,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing recon output hash error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/recon-codebase-map.md is missing registered content hash") {
+	if !strings.Contains(err.Error(), "evidence.added data.content_sha256 is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1638,7 +1696,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected changed recon output error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/recon-codebase-map.md changed after registration") {
+	if !strings.Contains(err.Error(), `content_sha256 = "7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

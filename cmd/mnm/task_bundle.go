@@ -24,7 +24,15 @@ type validatedTaskBundle struct {
 	artifactPaths []string
 }
 
+type taskBundleIngestOptions struct {
+	AllowAfterCompleted bool
+}
+
 func ingestTaskBundle(runDir string, task TaskRecord, bundleDir string) error {
+	return ingestTaskBundleWithOptions(runDir, task, bundleDir, taskBundleIngestOptions{})
+}
+
+func ingestTaskBundleWithOptions(runDir string, task TaskRecord, bundleDir string, options taskBundleIngestOptions) error {
 	bundle, err := validateTaskBundle(bundleDir, task)
 	if err != nil {
 		return err
@@ -49,7 +57,7 @@ func ingestTaskBundle(runDir string, task TaskRecord, bundleDir string) error {
 		removeCopiedTaskBundleArtifacts(runDir, copied)
 		return err
 	}
-	return appendTaskBundleEvents(runDir, task, bundleDir, bundle.artifactPaths, bundle.events)
+	return appendTaskBundleEvents(runDir, task, bundleDir, bundle.artifactPaths, bundle.events, options)
 }
 
 func validateTaskBundle(bundleDir string, task TaskRecord) (validatedTaskBundle, error) {
@@ -250,7 +258,7 @@ func validateTaskBundleArtifact(bundleDir, relPath string) error {
 	return nil
 }
 
-func appendTaskBundleEvents(runDir string, task TaskRecord, bundleDir string, artifactPaths []string, events []LedgerEvent) error {
+func appendTaskBundleEvents(runDir string, task TaskRecord, bundleDir string, artifactPaths []string, events []LedgerEvent, options taskBundleIngestOptions) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -271,7 +279,7 @@ func appendTaskBundleEvents(runDir string, task TaskRecord, bundleDir string, ar
 			return err
 		}
 	}
-	toAppend, err := taskBundleEventsToAppend(existing, task, events)
+	toAppend, err := taskBundleEventsToAppend(existing, task, events, options)
 	if err != nil {
 		return err
 	}
@@ -304,7 +312,7 @@ func requireIngestedTaskBundleArtifact(bundleDir, runDir, relPath string) error 
 	return nil
 }
 
-func taskBundleEventsToAppend(existing []LedgerEvent, task TaskRecord, events []LedgerEvent) ([]LedgerEvent, error) {
+func taskBundleEventsToAppend(existing []LedgerEvent, task TaskRecord, events []LedgerEvent, options taskBundleIngestOptions) ([]LedgerEvent, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -327,6 +335,9 @@ func taskBundleEventsToAppend(existing []LedgerEvent, task TaskRecord, events []
 		toAppend = append(toAppend, event)
 	}
 	if taskCompleted && len(toAppend) > 0 {
+		if options.AllowAfterCompleted {
+			return toAppend, nil
+		}
 		return nil, fmt.Errorf("task %s already completed; refusing non-idempotent bundle ingest", task.TaskID)
 	}
 	return toAppend, nil

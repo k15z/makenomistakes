@@ -128,6 +128,56 @@ func TestIngestTaskBundleIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestIngestTaskBundleCanRecoverAfterStaleCompletion(t *testing.T) {
+	runDir := t.TempDir()
+	bundleDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_bundle",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		ID:        "event_stale_done",
+		RunID:     task.RunID,
+		Type:      "task.completed",
+		Object:    "task",
+		ObjectID:  task.TaskID,
+		TaskID:    task.TaskID,
+		Timestamp: "2026-01-01T00:00:00Z",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "stale completion before required outputs existed",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeTaskBundleFile(t, bundleDir, "evidence/recon-codebase-map.md", "# Map\n")
+	writeTaskBundleEvents(t, bundleDir,
+		taskStartedEvent(task),
+		taskEvidenceAddedEvent(t, bundleDir, task, "event_map", "evidence_map", "evidence/recon-codebase-map.md"),
+		taskCompletedEvent(task),
+	)
+
+	options := taskBundleIngestOptions{AllowAfterCompleted: true}
+	if err := ingestTaskBundleWithOptions(runDir, task, bundleDir, options); err != nil {
+		t.Fatalf("recovery ingest failed: %v", err)
+	}
+	if err := ingestTaskBundleWithOptions(runDir, task, bundleDir, options); err != nil {
+		t.Fatalf("recovery ingest should remain idempotent: %v", err)
+	}
+	if got := readFile(t, filepath.Join(runDir, "evidence", "recon-codebase-map.md")); got != "# Map\n" {
+		t.Fatalf("copied map = %q", got)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("event count = %d, want 4", len(events))
+	}
+	assertTaskCompletedEventCount(t, runDir, task.TaskID, 2)
+}
+
 func TestIngestTaskBundleRejectsDifferentEventsAfterTaskCompletion(t *testing.T) {
 	runDir := t.TempDir()
 	bundleDir := t.TempDir()
@@ -550,7 +600,7 @@ func TestAppendTaskBundleEventsRequiresIngestedArtifacts(t *testing.T) {
 		taskCompletedEvent(task),
 	}
 
-	err := appendTaskBundleEvents(runDir, task, bundleDir, []string{relPath}, events)
+	err := appendTaskBundleEvents(runDir, task, bundleDir, []string{relPath}, events, taskBundleIngestOptions{})
 	if err == nil {
 		t.Fatal("expected missing ingested artifact error")
 	}

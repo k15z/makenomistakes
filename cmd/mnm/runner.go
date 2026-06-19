@@ -534,6 +534,7 @@ func runReconTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, 
 	if reconTaskComplete(runDir, task.TaskID, cfg) {
 		return nil
 	}
+	allowRecoveryIngest := ledgerTaskCompleted(runDir, task.TaskID)
 	if err := writeTaskFile(filepath.Join(runDir, currentTaskFile), task); err != nil {
 		return err
 	}
@@ -563,14 +564,18 @@ func runReconTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, 
 	}
 	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
 	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
-		RunID:   runID,
-		TaskID:  task.TaskID,
-		Phase:   task.Phase,
-		Title:   "mnm recon",
-		Model:   phaseModel(cfg, "recon"),
-		Prompt:  prompt,
-		LogPath: logPath,
-		Timeout: openCodeTaskTimeout(cfg),
+		RunID:    runID,
+		TaskID:   task.TaskID,
+		Phase:    task.Phase,
+		Title:    "mnm recon",
+		Model:    phaseModel(cfg, "recon"),
+		Prompt:   prompt,
+		LogPath:  logPath,
+		TaskFile: filepath.Join(runDir, currentTaskFile),
+		Timeout:  openCodeTaskTimeout(cfg),
+		BundleIngestOptions: taskBundleIngestOptions{
+			AllowAfterCompleted: allowRecoveryIngest,
+		},
 		Verify: func(verifyRunDir string) error {
 			return validateReconTaskComplete(verifyRunDir, task.TaskID, cfg)
 		},
@@ -706,18 +711,19 @@ func ledgerDataEqual(left, right map[string]any) (bool, error) {
 }
 
 type opencodeTask struct {
-	RunID     string
-	TaskID    string
-	Phase     string
-	LeadID    string
-	FindingID string
-	Title     string
-	Model     string
-	Prompt    string
-	LogPath   string
-	TaskFile  string
-	Timeout   time.Duration
-	Verify    func(string) error
+	RunID               string
+	TaskID              string
+	Phase               string
+	LeadID              string
+	FindingID           string
+	Title               string
+	Model               string
+	Prompt              string
+	LogPath             string
+	TaskFile            string
+	Timeout             time.Duration
+	Verify              func(string) error
+	BundleIngestOptions taskBundleIngestOptions
 }
 
 type opencodeTaskAttemptRunner interface {
@@ -748,7 +754,7 @@ func runOpenCodeTaskWithAttemptRunner(attemptRunner opencodeTaskAttemptRunner, w
 		verifyRunDir := runDir
 		cleanupVerifyRunDir := func() {}
 		if err == nil && result.Bundle {
-			verifyRunDir, cleanupVerifyRunDir, err = prepareTaskBundleVerificationRunDir(runDir, task.taskRecord(), result.TaskRunDir)
+			verifyRunDir, cleanupVerifyRunDir, err = prepareTaskBundleVerificationRunDir(runDir, task.taskRecord(), result.TaskRunDir, task.BundleIngestOptions)
 			if err != nil {
 				err = retryableOpenCodePostconditionError{
 					err:            err,
@@ -766,7 +772,7 @@ func runOpenCodeTaskWithAttemptRunner(attemptRunner opencodeTaskAttemptRunner, w
 		}
 		cleanupVerifyRunDir()
 		if err == nil && result.Bundle {
-			if ingestErr := ingestTaskBundle(runDir, task.taskRecord(), result.TaskRunDir); ingestErr != nil {
+			if ingestErr := ingestTaskBundleWithOptions(runDir, task.taskRecord(), result.TaskRunDir, task.BundleIngestOptions); ingestErr != nil {
 				err = retryableOpenCodePostconditionError{
 					err:            ingestErr,
 					ledgerModified: true,
@@ -1016,7 +1022,7 @@ func rewriteTaskBundlePromptPaths(prompt, runDir, outputDir, ledgerDir string) s
 	return rewritten
 }
 
-func prepareTaskBundleVerificationRunDir(runDir string, task TaskRecord, bundleDir string) (string, func(), error) {
+func prepareTaskBundleVerificationRunDir(runDir string, task TaskRecord, bundleDir string, options ...taskBundleIngestOptions) (string, func(), error) {
 	verifyDir, err := os.MkdirTemp("", "mnm-task-verify-*")
 	if err != nil {
 		return "", func() {}, err
@@ -1026,7 +1032,11 @@ func prepareTaskBundleVerificationRunDir(runDir string, task TaskRecord, bundleD
 		cleanup()
 		return "", cleanup, err
 	}
-	if err := ingestTaskBundle(verifyDir, task, bundleDir); err != nil {
+	ingestOptions := taskBundleIngestOptions{}
+	if len(options) > 0 {
+		ingestOptions = options[0]
+	}
+	if err := ingestTaskBundleWithOptions(verifyDir, task, bundleDir, ingestOptions); err != nil {
 		cleanup()
 		return "", cleanup, err
 	}

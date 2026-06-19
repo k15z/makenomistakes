@@ -76,7 +76,7 @@ func taskCommand(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer unlock()
-		currentStatus, exists, err := ledgerTaskCompletionStatusUnlocked(runDir, task.TaskID)
+		currentStatus, exists, err := ledgerTaskCompletionStatusForOutputUnlocked(runDir, task.TaskID)
 		if err != nil {
 			return err
 		}
@@ -102,6 +102,14 @@ func ledgerTaskCompletionStatus(runDir, taskID string) (string, bool, error) {
 
 func ledgerTaskCompletionStatusUnlocked(runDir, taskID string) (string, bool, error) {
 	events, err := readLedgerEventsOverlayUnlocked(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return taskCompletionStatusFromEvents(events, taskID)
+}
+
+func ledgerTaskCompletionStatusForOutputUnlocked(runDir, taskID string) (string, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
 	if err != nil {
 		return "", false, err
 	}
