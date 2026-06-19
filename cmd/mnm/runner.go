@@ -40,7 +40,7 @@ type RunnerRequest struct {
 	Resume      bool
 }
 
-func runnerCommand(args []string, stdout, stderr io.Writer) error {
+func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	flags := flag.NewFlagSet("runner", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	runID := flags.String("run-id", "", "run id")
@@ -59,12 +59,28 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
 		return err
 	}
+	failure := runnerFailureContext{
+		RunID:  *runID,
+		RunDir: *runDir,
+		Stage:  "load_config",
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if recordErr := failure.Record(err); recordErr != nil {
+			err = errors.Join(err, fmt.Errorf("record runner failure: %w", recordErr))
+		}
+	}()
+
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
+	failure.Stage = "extract_snapshot"
 	workspace := filepath.Join(os.TempDir(), "mnm-workspace-"+*runID)
+	failure.Workspace = workspace
 	if err := os.RemoveAll(workspace); err != nil {
 		return err
 	}
@@ -74,14 +90,19 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := extractWorkspaceSnapshot(*snapshot, workspace); err != nil {
 		return err
 	}
+	failure.Stage = "toolchain_bootstrap"
 	if err := ensureWorkspaceToolchains(workspace); err != nil {
 		return err
 	}
+	failure.Stage = "opencode_bootstrap"
 	opencodePath, opencodeVersionOutput, err := ensureOpenCode()
 	if err != nil {
 		return err
 	}
+	failure.OpenCodePath = opencodePath
+	failure.OpenCodeVersion = strings.TrimSpace(opencodeVersionOutput)
 
+	failure.Stage = "runner_started_event"
 	if err := appendLedgerEvent(*runDir, LedgerEvent{
 		RunID:    *runID,
 		Type:     "runner.started",
@@ -94,25 +115,32 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	failure.Stage = "recon"
 	if err := runReconTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	failure.Stage = "investigate"
 	if err := runInvestigatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	failure.Stage = "review"
 	if err := runReviewPhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	failure.Stage = "deduplicate"
 	if err := runDeduplicatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	failure.Stage = "validate"
 	if err := runValidatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	failure.Stage = "finalize"
 	if err := runFinalizeTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
 
+	failure.Stage = "runner_manifest"
 	manifestPath := filepath.Join(*runDir, "evidence", "runner-manifest.json")
 	if err := writeRunnerManifest(manifestPath, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
 		return err
@@ -130,6 +158,7 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	}); err != nil {
 		return err
 	}
+	failure.Stage = "runner_completed_event"
 	if err := appendLedgerEvent(*runDir, LedgerEvent{
 		RunID:    *runID,
 		Type:     "runner.completed",
@@ -144,6 +173,59 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "runner completed for %s\n", *runID)
 	return nil
+}
+
+type runnerFailureContext struct {
+	RunID           string
+	RunDir          string
+	Stage           string
+	Workspace       string
+	OpenCodePath    string
+	OpenCodeVersion string
+}
+
+func (failure runnerFailureContext) Record(cause error) error {
+	if cause == nil || failure.RunID == "" || failure.RunDir == "" {
+		return nil
+	}
+	relPath := filepath.ToSlash(filepath.Join("evidence", "runner-failure.json"))
+	artifactPath := filepath.Join(failure.RunDir, relPath)
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := writeJSON(artifactPath, map[string]any{
+		"run_id":           failure.RunID,
+		"stage":            failure.Stage,
+		"error":            cause.Error(),
+		"workspace":        failure.Workspace,
+		"opencode_path":    failure.OpenCodePath,
+		"opencode_version": failure.OpenCodeVersion,
+		"timestamp":        timestamp,
+	}); err != nil {
+		return err
+	}
+	if err := appendLedgerEvent(failure.RunDir, LedgerEvent{
+		RunID:    failure.RunID,
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: newLedgerID("evidence"),
+		Data: map[string]any{
+			"kind":  "json",
+			"title": "Runner failure manifest",
+			"path":  relPath,
+		},
+	}); err != nil {
+		return err
+	}
+	return appendLedgerEvent(failure.RunDir, LedgerEvent{
+		RunID:    failure.RunID,
+		Type:     "runner.failed",
+		Object:   "run",
+		ObjectID: failure.RunID,
+		Data: map[string]any{
+			"stage": failure.Stage,
+			"error": cause.Error(),
+			"path":  relPath,
+		},
+	})
 }
 
 func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
@@ -272,7 +354,7 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 			time.Sleep(openCodeRetryDelay * time.Duration(attempt))
 		}
 	}
-	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w", task.TaskID, attempts, lastErr)
+	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w%s", task.TaskID, attempts, lastErr, openCodeLogExcerpt(task.LogPath))
 }
 
 type openCodeAttemptResult struct {
@@ -441,6 +523,25 @@ func retryableOpenCodeError(logPath string, err error) bool {
 		}
 	}
 	return false
+}
+
+func openCodeLogExcerpt(logPath string) string {
+	if logPath == "" {
+		return ""
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(b))
+	if text == "" {
+		return ""
+	}
+	const maxExcerptBytes = 4000
+	if len(text) > maxExcerptBytes {
+		text = text[len(text)-maxExcerptBytes:]
+	}
+	return "\nlog excerpt:\n" + text
 }
 
 func appendOpenCodeRetryEvent(runDir string, task opencodeTask, attempt, maxAttempts int, cause error) error {

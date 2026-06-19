@@ -60,6 +60,8 @@ events.
   - Isolate each `opencode` task attempt in its own process group and terminate
     leftover child processes before the next task starts.
   - Write events and evidence files to mounted `.mnm/runs/<run_id>/`.
+  - Record `evidence/runner-failure.json` and a `runner.failed` event when the
+    VM-side pipeline exits before completion.
   - Shut down the VM after completion or checkpointed stop.
 
 ## Ledger Model
@@ -158,6 +160,8 @@ parallel_tasks = 2
 - `.mnm/runs/<run_id>/events.jsonl`: append-only validated event stream.
 - `.mnm/runs/<run_id>/evidence/`: logs, phase outputs, proof of concept files,
   screenshots, and validation bundles.
+- `.mnm/runs/<run_id>/evidence/runner-failure.json`: structured diagnostics
+  for VM-side bootstrap or phase failures.
 - `.mnm/runs/<run_id>/report.md`
 - `.mnm/runs/<run_id>/report.json`
 

@@ -241,6 +241,102 @@ exit 0
 	}
 }
 
+func TestRunnerCommandRecordsFailureEvidence(t *testing.T) {
+	dir := t.TempDir()
+	opencodePath := filepath.Join(dir, "opencode")
+	body := `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  printf '` + opencodeVersion + `\n'
+  exit 0
+fi
+if [ "${1:-}" = "run" ]; then
+  printf 'fatal recon failure\n'
+  exit 1
+fi
+exit 0
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	source := t.TempDir()
+	writeWorkspaceFile(t, source, "repo/app.go", "package main")
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: source,
+		WorkspaceDir:  source,
+		OutputPath:    snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runDir := t.TempDir()
+	configPath := filepath.Join(runDir, "mnm.toml")
+	if err := os.WriteFile(configPath, []byte(defaultConfig()), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner",
+		"--run-id", "run_failure",
+		"--run-dir", runDir,
+		"--snapshot", snapshot,
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected runner failure")
+	}
+	if !strings.Contains(err.Error(), "task_recon") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	failure := readFile(t, filepath.Join(runDir, "evidence", "runner-failure.json"))
+	for _, want := range []string{
+		`"run_id": "run_failure"`,
+		`"stage": "recon"`,
+		"fatal recon failure",
+		`"opencode_version": "` + opencodeVersion + `"`,
+	} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("failure manifest missing %q:\n%s", want, failure)
+		}
+	}
+
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := eventTypes(events)
+	if !contains(types, "runner.started") {
+		t.Fatalf("expected runner.started event in %#v", types)
+	}
+	if contains(types, "runner.completed") {
+		t.Fatalf("did not expect runner.completed event in %#v", types)
+	}
+	foundFailure := false
+	foundFailureEvidence := false
+	for _, event := range events {
+		if event.Type == "runner.failed" && event.ObjectID == "run_failure" {
+			foundFailure = true
+			if event.Data["stage"] != "recon" || event.Data["path"] != "evidence/runner-failure.json" {
+				t.Fatalf("unexpected runner.failed data: %#v", event.Data)
+			}
+		}
+		if event.Type == "evidence.added" && event.Data["path"] == "evidence/runner-failure.json" {
+			foundFailureEvidence = true
+		}
+	}
+	if !foundFailure {
+		t.Fatalf("missing runner.failed event in %#v", events)
+	}
+	if !foundFailureEvidence {
+		t.Fatalf("missing failure evidence event in %#v", events)
+	}
+}
+
 func TestLimaRunnerCommandSequence(t *testing.T) {
 	runDir := t.TempDir()
 	payload := filepath.Join(runDir, "mnm-linux-test")
