@@ -788,6 +788,14 @@ Required actions:
 10. Create no more than %[3]d leads.
 11. Complete the task with: mnm task complete --status completed --summary "Recon completed"
 
+Recon discipline:
+
+- Recon maps the workspace and schedules focused work; Investigate and Validate prove, exploit, or falsify issues.
+- If scope instructions ask for tests or proofs, treat them as requirements for later Investigate or Validate unless a cheap smoke command materially improves lead quality.
+- Run only bounded inspection commands such as find, rg, package metadata reads, and quick tests when needed to understand the workspace.
+- Do not build end-to-end proof scripts, start long-lived services, fuzz, install heavy dependencies, or keep exploring after you have enough context for focused leads.
+- Register the codebase map and risk register as soon as they are useful, then create leads promptly. Unregistered files are scratch and may be lost.
+
 Lead quality bar:
 
 - A lead is a focused question or risk area, not a final finding.
