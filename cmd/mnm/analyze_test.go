@@ -239,6 +239,17 @@ func TestAnalyzePreflightsBeforeCreatingRun(t *testing.T) {
 	}
 }
 
+func TestNewDefaultRunnerUsesHostPipelineRunner(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runner, ok := newDefaultRunner(&stdout, &stderr).(HostPipelineRunner)
+	if !ok {
+		t.Fatalf("default runner type = %T, want HostPipelineRunner", newDefaultRunner(&stdout, &stderr))
+	}
+	if runner.TaskRunner.Executor == nil {
+		t.Fatal("default host pipeline should configure a Lima task executor")
+	}
+}
+
 func TestAnalyzePrepareOnlySkipsRunnerPreflight(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
