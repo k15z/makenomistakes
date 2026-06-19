@@ -80,7 +80,7 @@ func TestLedgerCommandFlow(t *testing.T) {
 	}
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
-	reportJSON := writeRunFile(t, runDir, "report.json", `{"findings":[]}`)
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
 	stdout.Reset()
 	stderr.Reset()
 	if err := run([]string{
@@ -130,6 +130,146 @@ func TestTaskCurrentPrintsCurrentTask(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"task_id": "task_recon"`) {
 		t.Fatalf("unexpected task current output:\n%s", stdout.String())
+	}
+}
+
+func TestReportFinalizeRejectsMalformedJSON(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", `{"run_id":`)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected malformed report JSON error")
+	}
+	if !strings.Contains(err.Error(), "report JSON must parse") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("malformed report should not be finalized")
+	}
+}
+
+func TestReportFinalizeRequiresExpectedBuckets(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", `{
+		"run_id": "run_test",
+		"counts": {},
+		"report_paths": {"markdown": "report.md", "json": "report.json"},
+		"proven": []
+	}`)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing bucket error")
+	}
+	if !strings.Contains(err.Error(), `missing "findings_proven" integer`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("incomplete report should not be finalized")
+	}
+}
+
+func TestReportFinalizeValidatesFindingItems(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             "finding_missing",
+			"title":          "Missing auth",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": "",
+			"status":         "validation_proven",
+			"verdicts":       []string{"proven"},
+			"evidence_paths": []string{},
+			"summary":        "No ledger item backs this report item.",
+			"affected_paths": []string{},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unknown report item id error")
+	}
+	if !strings.Contains(err.Error(), "does not reference a known lead or finding") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("untraceable report item should not be finalized")
+	}
+}
+
+func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingBody := writeRunFile(t, runDir, "evidence/finding-report.md", "Candidate finding.")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--lead", leadID,
+		"--title", "Missing authorization check",
+		"--category", "authz",
+		"--severity", "high",
+		"--confidence", "medium",
+		"--body-file", findingBody,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("finding create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	findingID := strings.TrimSpace(stdout.String())
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofPath},
+			"summary":        "Traceable finding.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("report finalize failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !ledgerReportFinalized(runDir) {
+		t.Fatal("expected traceable report to be finalized")
 	}
 }
 
@@ -437,6 +577,39 @@ func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
 	if got != want {
 		t.Fatalf("lead.closed event count = %d, want %d", got, want)
 	}
+}
+
+func validReportJSON(t *testing.T, runID, markdownPath, jsonPath string, proven []map[string]any) string {
+	t.Helper()
+	if proven == nil {
+		proven = []map[string]any{}
+	}
+	report := map[string]any{
+		"run_id": runID,
+		"counts": map[string]any{
+			"findings_proven":       len(proven),
+			"findings_inconclusive": 0,
+			"findings_failed":       0,
+			"findings_rejected":     0,
+			"findings_duplicate":    0,
+			"findings_unvalidated":  0,
+		},
+		"report_paths": map[string]any{
+			"markdown": markdownPath,
+			"json":     jsonPath,
+		},
+		"proven":       proven,
+		"inconclusive": []map[string]any{},
+		"failed":       []map[string]any{},
+		"rejected":     []map[string]any{},
+		"duplicate":    []map[string]any{},
+		"unvalidated":  []map[string]any{},
+	}
+	b, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func eventTypes(events []LedgerEvent) []string {

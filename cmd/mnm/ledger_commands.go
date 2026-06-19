@@ -409,6 +409,9 @@ func reportCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := validateReportArtifacts(runDir, task, markdownRel, jsonRel); err != nil {
+		return err
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
 		Type:     "report.finalized",

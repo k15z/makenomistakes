@@ -158,9 +158,12 @@ Markdown report requirements:
 JSON report requirements:
 
 - Produce a single JSON object.
-- Include run metadata, counts, generated report paths, and arrays for proven, inconclusive, failed, rejected, duplicate, and unvalidated findings.
+- Include "run_id", "counts", "report_paths", and arrays named "proven", "inconclusive", "failed", "rejected", "duplicate", and "unvalidated".
+- "counts" must include integer fields "findings_proven", "findings_inconclusive", "findings_failed", "findings_rejected", "findings_duplicate", and "findings_unvalidated"; each count must match the corresponding array length.
+- "report_paths.markdown" and "report_paths.json" must point to the same files passed to "mnm report finalize".
 - For each finding object, include id, title, category, severity, confidence, source_lead_id, status, verdicts, evidence_paths, summary, and affected_paths when known.
 - Use empty arrays instead of null for absent lists.
 - The JSON must parse with standard JSON parsers.
+- "id" must be the real ledger ID of a finding or lead, and each "evidence_paths" entry must point to an existing file inside the run directory.
 `, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg)), nil
 }
