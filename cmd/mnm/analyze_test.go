@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +22,7 @@ func TestAnalyzePreparesRunState(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := run([]string{"analyze", dir}, &stdout, &stderr); err != nil {
+	if err := run([]string{"analyze", "--prepare-only", dir}, &stdout, &stderr); err != nil {
 		t.Fatalf("analyze failed: %v\nstderr: %s", err, stderr.String())
 	}
 
@@ -93,4 +95,55 @@ func TestAnalyzeRequiresModelKey(t *testing.T) {
 	if !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestAnalyzeRunsConfiguredRunnerByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	runner := &recordingRunner{}
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, runner)
+	if err != nil {
+		t.Fatalf("analyzeWorkspace failed: %v", err)
+	}
+	if !runner.called {
+		t.Fatal("expected analyzeWorkspace to call runner")
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`select count(*) from runs where status = ?`, RunStatusCompleted).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one completed run, got %d", count)
+	}
+}
+
+type recordingRunner struct {
+	called bool
+}
+
+func (runner *recordingRunner) Run(_ context.Context, request RunnerRequest) error {
+	runner.called = true
+	if request.Run.ID == "" {
+		return errors.New("missing run id")
+	}
+	if _, err := os.Stat(request.Run.SnapshotPath); err != nil {
+		return err
+	}
+	return nil
 }

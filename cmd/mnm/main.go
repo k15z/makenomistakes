@@ -47,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return verdictCommand(args[1:], stdout, stderr)
 	case "report":
 		return reportCommand(args[1:], stdout, stderr)
+	case "runner":
+		return runnerCommand(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -57,7 +59,7 @@ func printUsage(w io.Writer) {
 
 Usage:
   mnm init [--force] [path]
-  mnm analyze [path]
+  mnm analyze [--prepare-only] [--keep-vm] [path]
   mnm task|lead|finding|evidence|verdict|report ...
 
 Commands:
@@ -69,6 +71,7 @@ Commands:
   evidence   Register evidence files.
   verdict    Record review, deduplication, or validation decisions.
   report     Finalize generated reports.
+  runner     Internal VM-side runner entrypoint.
 `)
 }
 

@@ -13,12 +13,20 @@ const (
 	RunStatusCreated      = "created"
 	RunStatusSnapshotting = "snapshotting"
 	RunStatusPrepared     = "prepared"
+	RunStatusVMStarting   = "vm_starting"
+	RunStatusRunning      = "running"
+	RunStatusCompleted    = "completed"
+	RunStatusFailed       = "failed"
 )
 
 var validRunStatuses = map[string]struct{}{
 	RunStatusCreated:      {},
 	RunStatusSnapshotting: {},
 	RunStatusPrepared:     {},
+	RunStatusVMStarting:   {},
+	RunStatusRunning:      {},
+	RunStatusCompleted:    {},
+	RunStatusFailed:       {},
 }
 
 type Store struct {
