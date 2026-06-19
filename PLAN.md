@@ -205,6 +205,10 @@ Finding statuses:
   incomplete tasks.
 - Fixture repos cover clean, vulnerable, duplicate-finding,
   malformed-agent-output, and broken-dev-environment cases.
+- A manual acceptance fixture under `examples/vulnerable-workspace` exercises a
+  multi-repo workspace through the real Lima/OpenCode runner and fails unless
+  the final structured report contains at least one proven file-access finding
+  with evidence.
 - Final reports include proven, inconclusive, failed, rejected, and duplicate
   reviewed findings, with proven findings first.
 
@@ -253,6 +257,9 @@ and pass GitHub Actions before later work builds on it.
    - Run `mnm analyze` against one or more real open-source repos in a scratch
      workspace and commit only reusable fixtures/docs, never secrets or scratch
      outputs.
+   - Add a reusable vulnerable multi-repo fixture and a manual acceptance script
+     that runs the real VM-backed pipeline and checks for a proven finding in
+     `report.json`.
 
 ## Deferred
 

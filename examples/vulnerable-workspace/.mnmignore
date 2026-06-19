@@ -1,0 +1,4 @@
+.mnm/
+node_modules/
+coverage/
+*.log

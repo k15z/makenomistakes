@@ -1,0 +1,9 @@
+{
+  "name": "mnm-health-check",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test"
+  }
+}

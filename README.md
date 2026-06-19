@@ -79,6 +79,20 @@ The planned output is:
 Reports should distinguish proven findings from inconclusive, failed, rejected,
 and duplicate findings.
 
+## Manual Acceptance
+
+A reusable vulnerable workspace fixture lives at
+`examples/vulnerable-workspace`. To run a real end-to-end acceptance audit
+through Lima and OpenCode:
+
+```sh
+OPENROUTER_API_KEY=... scripts/acceptance-vulnerable-workspace.sh
+```
+
+The script copies the fixture to a scratch workspace, runs `mnm analyze`, and
+fails unless the final structured report contains at least one proven
+file-access finding with evidence. See `docs/acceptance.md` for details.
+
 ## Status
 
 Implementation is in progress. The current stack is intentionally CLI-first and
