@@ -318,8 +318,8 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Prompt:  prompt,
 		LogPath: logPath,
 		Timeout: openCodeTaskTimeout(cfg),
-		Verify: func() error {
-			return validateReconTaskComplete(runDir, task.TaskID, cfg)
+		Verify: func(verifyRunDir string) error {
+			return validateReconTaskComplete(verifyRunDir, task.TaskID, cfg)
 		},
 	}); err != nil {
 		return err
@@ -464,7 +464,7 @@ type opencodeTask struct {
 	LogPath   string
 	TaskFile  string
 	Timeout   time.Duration
-	Verify    func() error
+	Verify    func(string) error
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
@@ -473,11 +473,31 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
 		attempts = attempt
 		result, err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		verifyRunDir := runDir
+		cleanupVerifyRunDir := func() {}
+		if err == nil && result.Bundle {
+			verifyRunDir, cleanupVerifyRunDir, err = prepareTaskBundleVerificationRunDir(runDir, task.taskRecord(), result.TaskRunDir)
+			if err != nil {
+				err = retryableOpenCodePostconditionError{
+					err:            err,
+					ledgerModified: result.ledgerModified,
+				}
+			}
+		}
 		if err == nil && task.Verify != nil {
-			if verifyErr := task.Verify(); verifyErr != nil {
+			if verifyErr := task.Verify(verifyRunDir); verifyErr != nil {
 				err = retryableOpenCodePostconditionError{
 					err:            verifyErr,
 					ledgerModified: result.ledgerModified,
+				}
+			}
+		}
+		cleanupVerifyRunDir()
+		if err == nil && result.Bundle {
+			if ingestErr := ingestTaskBundle(runDir, task.taskRecord(), result.TaskRunDir); ingestErr != nil {
+				err = retryableOpenCodePostconditionError{
+					err:            ingestErr,
+					ledgerModified: true,
 				}
 			}
 		}
@@ -501,20 +521,25 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 type openCodeAttemptResult struct {
 	logText        string
 	ledgerModified bool
+	TaskRunDir     string
+	Bundle         bool
 }
 
 func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+	result := openCodeAttemptResult{TaskRunDir: runDir}
 	taskRunDir := runDir
 	taskFile := task.TaskFile
 	prompt := task.Prompt
 	if task.usesTaskBundle() {
 		outputDir, preparedTaskFile, err := prepareOpenCodeTaskBundleAttempt(runDir, task, attempt)
 		if err != nil {
-			return openCodeAttemptResult{}, err
+			return result, err
 		}
 		taskRunDir = outputDir
 		taskFile = preparedTaskFile
 		prompt = taskBundlePrompt(task.Prompt, runDir, outputDir)
+		result.TaskRunDir = outputDir
+		result.Bundle = true
 	}
 	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	var logOffset int64
@@ -526,11 +551,11 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	}
 	ledgerOffset, err := fileSize(filepath.Join(taskRunDir, eventsFile))
 	if err != nil {
-		return openCodeAttemptResult{}, err
+		return result, err
 	}
 	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
 	if err != nil {
-		return openCodeAttemptResult{}, err
+		return result, err
 	}
 	command := exec.Command(opencodePath,
 		"run",
@@ -573,25 +598,18 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 		}
 	}
 	if closeErr := logFile.Close(); closeErr != nil && runErr == nil {
-		return openCodeAttemptResult{}, closeErr
+		return result, closeErr
 	}
-	result := openCodeAttemptResult{
-		logText:        readLogSuffix(task.LogPath, logOffset),
-		ledgerModified: fileModifiedSince(filepath.Join(taskRunDir, eventsFile), ledgerOffset),
+	result.logText = readLogSuffix(task.LogPath, logOffset)
+	result.ledgerModified = fileModifiedSince(filepath.Join(taskRunDir, eventsFile), ledgerOffset)
+	if result.Bundle {
+		result.ledgerModified = false
 	}
 	if runErr != nil {
 		return result, openCodeAttemptError{
 			err:            runErr,
 			logText:        result.logText,
 			ledgerModified: result.ledgerModified,
-		}
-	}
-	if task.usesTaskBundle() {
-		if err := ingestTaskBundle(runDir, task.taskRecord(), taskRunDir); err != nil {
-			return result, retryableOpenCodePostconditionError{
-				err:            err,
-				ledgerModified: result.ledgerModified,
-			}
 		}
 	}
 	return result, nil
@@ -709,6 +727,46 @@ func rewriteTaskBundlePromptPaths(prompt, runDir, outputDir string) string {
 		rewritten = strings.ReplaceAll(rewritten, ledgerPlaceholder, ledgerPath)
 	}
 	return rewritten
+}
+
+func prepareTaskBundleVerificationRunDir(runDir string, task TaskRecord, bundleDir string) (string, func(), error) {
+	verifyDir, err := os.MkdirTemp("", "mnm-task-verify-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(verifyDir) }
+	if err := copyRunStateForTaskBundleVerification(runDir, verifyDir); err != nil {
+		cleanup()
+		return "", cleanup, err
+	}
+	if err := ingestTaskBundle(verifyDir, task, bundleDir); err != nil {
+		cleanup()
+		return "", cleanup, err
+	}
+	return verifyDir, cleanup, nil
+}
+
+func copyRunStateForTaskBundleVerification(runDir, verifyDir string) error {
+	eventsPath := filepath.Join(runDir, eventsFile)
+	if _, err := os.Stat(eventsPath); err == nil {
+		if err := copyFile(eventsPath, filepath.Join(verifyDir, eventsFile)); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, relDir := range []string{"evidence"} {
+		source := filepath.Join(runDir, relDir)
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyDirContents(source, filepath.Join(verifyDir, relDir)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runOpenCodeCommand(command *exec.Cmd, task opencodeTask) error {

@@ -220,25 +220,25 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Timeout:  openCodeTaskTimeout(cfg),
-		Verify: func() error {
-			evidence, ok := ledgerLeadTaskEvidence(runDir, lead.ID, task.TaskID, notesRel)
+		Verify: func(verifyRunDir string) error {
+			evidence, ok := ledgerLeadTaskEvidence(verifyRunDir, lead.ID, task.TaskID, notesRel)
 			if !ok {
 				return fmt.Errorf("investigate opencode task did not register investigation evidence %s for lead %s", notesRel, lead.ID)
 			}
-			if err := registeredEvidenceFileError(runDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+			if err := registeredEvidenceFileError(verifyRunDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 				return err
 			}
-			status, exists, err := ledgerLeadStatus(runDir, lead.ID)
+			status, exists, err := ledgerLeadStatus(verifyRunDir, lead.ID)
 			if err != nil {
 				return err
 			}
 			if !exists || status == "open" {
 				return fmt.Errorf("investigate opencode task did not close lead %s", lead.ID)
 			}
-			if status == "promoted_to_finding" && !ledgerLeadHasFinding(runDir, lead.ID) {
+			if status == "promoted_to_finding" && !ledgerLeadHasFinding(verifyRunDir, lead.ID) {
 				return fmt.Errorf("investigate opencode task closed lead %s as promoted_to_finding without creating a finding", lead.ID)
 			}
-			if !ledgerTaskCompleted(runDir, task.TaskID) {
+			if !ledgerTaskCompleted(verifyRunDir, task.TaskID) {
 				return fmt.Errorf("investigate opencode task did not complete task %s", task.TaskID)
 			}
 			return nil

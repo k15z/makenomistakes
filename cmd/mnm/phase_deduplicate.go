@@ -75,30 +75,30 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Timeout:  openCodeTaskTimeout(cfg),
-		Verify: func() error {
-			evidence, ok := ledgerTaskEvidence(runDir, task.TaskID, notesRel)
+		Verify: func(verifyRunDir string) error {
+			evidence, ok := ledgerTaskEvidence(verifyRunDir, task.TaskID, notesRel)
 			if !ok {
 				return fmt.Errorf("deduplicate opencode task did not register deduplication evidence %s", notesRel)
 			}
-			if err := registeredEvidenceFileError(runDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+			if err := registeredEvidenceFileError(verifyRunDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 				return err
 			}
 			var missing []string
 			for _, finding := range findings {
-				if !ledgerFindingHasVerdict(runDir, finding.ID, "deduplicate") {
+				if !ledgerFindingHasVerdict(verifyRunDir, finding.ID, "deduplicate") {
 					missing = append(missing, finding.ID)
 				}
 			}
 			if len(missing) > 0 {
 				return fmt.Errorf("deduplicate opencode task did not record verdicts for findings: %s", strings.Join(missing, ", "))
 			}
-			if !ledgerTaskCompleted(runDir, task.TaskID) {
+			if !ledgerTaskCompleted(verifyRunDir, task.TaskID) {
 				return errors.New("deduplicate opencode task did not complete task_deduplicate")
 			}
-			if err := validateDeduplicateGraph(runDir, findings); err != nil {
+			if err := validateDeduplicateGraph(verifyRunDir, findings); err != nil {
 				return err
 			}
-			pending, err := undeduplicatedLedgerFindings(runDir)
+			pending, err := undeduplicatedLedgerFindings(verifyRunDir)
 			if err != nil {
 				return err
 			}

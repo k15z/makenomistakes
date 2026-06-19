@@ -160,7 +160,7 @@ printf '{"type":"done"}\n'
 	}
 }
 
-func TestRunDeduplicatePhaseResumesAfterPartialVerdicts(t *testing.T) {
+func TestRunDeduplicatePhaseRetriesAfterPartialBundleWithoutIngesting(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
 	defer func() { openCodeRetryDelay = oldDelay }()
@@ -190,15 +190,21 @@ First pass.
 EOF
   cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_dedup_evidence_1","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_1","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"b0b3b30141ac6d1c99517813a66f0cda5fbf07332cb6ebfdd173209a525dd9a8"}}
-{"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_dedup_one_partial","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_partial","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
 {"id":"event_done_dedup_1","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"partial dedup"}}
 EOF
   printf '{"type":"done","attempt":1}\n'
   exit 0
 fi
+cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
+# Deduplication notes
+
+First pass.
+EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_dedup_evidence_2","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_2","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"b0b3b30141ac6d1c99517813a66f0cda5fbf07332cb6ebfdd173209a525dd9a8"}}
-{"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_dedup_one_complete","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_complete","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_dedup_two_complete","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two_complete","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
 {"id":"event_done_dedup_2","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done","attempt":2}\n'
@@ -208,37 +214,36 @@ printf '{"type":"done","attempt":2}\n'
 	}
 
 	cfg := Config{Models: ModelConfig{Default: "fake/model"}}
-	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
-	if err == nil {
-		t.Fatal("expected first partial deduplicate run to fail verification")
+	if err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath); err != nil {
+		t.Fatalf("expected partial bundle retry to recover, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "did not record verdicts for findings: finding_two") {
-		t.Fatalf("unexpected first run error: %v", err)
+	if count := strings.TrimSpace(readFile(t, countFile)); count != "2" {
+		t.Fatalf("attempt count = %s, want 2", count)
 	}
 	pending, err := undeduplicatedLedgerFindings(runDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].ID != "finding_two" {
-		t.Fatalf("pending findings after partial run = %#v, want finding_two", pending)
+	if len(pending) != 0 {
+		t.Fatalf("pending findings after retry = %#v, want none", pending)
 	}
 	assertTaskStartedEventCount(t, runDir, "task_deduplicate", 1)
-
-	err = runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
-	if err == nil {
-		t.Fatal("expected second deduplicate run to reject appending after task completion")
-	}
-	if !strings.Contains(err.Error(), "already completed") {
-		t.Fatalf("unexpected second run error: %v", err)
-	}
-	pending, err = undeduplicatedLedgerFindings(runDir)
+	events, err := readLedgerEvents(runDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].ID != "finding_two" {
-		t.Fatalf("pending findings after rejected rerun = %#v, want finding_two", pending)
+	var sawRetry bool
+	for _, event := range events {
+		if event.ID == "event_dedup_one_partial" {
+			t.Fatalf("partial bundle event was ingested: %#v", event)
+		}
+		if event.Type == "task.retrying" && event.ObjectID == "task_deduplicate" {
+			sawRetry = true
+		}
 	}
-	assertTaskStartedEventCount(t, runDir, "task_deduplicate", 1)
+	if !sawRetry {
+		t.Fatalf("expected task.retrying event, got %#v", eventTypes(events))
+	}
 }
 
 func TestRunDeduplicatePhaseRequiresDeduplicationEvidenceFile(t *testing.T) {

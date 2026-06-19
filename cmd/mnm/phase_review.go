@@ -110,17 +110,17 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 		LogPath:   logPath,
 		TaskFile:  taskPath,
 		Timeout:   openCodeTaskTimeout(cfg),
-		Verify: func() error {
-			if !ledgerFindingHasTaskEvidencePath(runDir, finding.ID, task.TaskID, notesRel) {
+		Verify: func(verifyRunDir string) error {
+			if !ledgerFindingHasTaskEvidencePath(verifyRunDir, finding.ID, task.TaskID, notesRel) {
 				return fmt.Errorf("review opencode task did not register review evidence %s for finding %s", notesRel, finding.ID)
 			}
-			if err := validateNonEmptyEvidenceFile(runDir, notesRel); err != nil {
+			if err := validateNonEmptyEvidenceFile(verifyRunDir, notesRel); err != nil {
 				return err
 			}
-			if !ledgerFindingHasVerdict(runDir, finding.ID, "review") {
+			if !ledgerFindingHasVerdict(verifyRunDir, finding.ID, "review") {
 				return fmt.Errorf("review opencode task did not record review verdict for finding %s", finding.ID)
 			}
-			if !ledgerTaskCompleted(runDir, task.TaskID) {
+			if !ledgerTaskCompleted(verifyRunDir, task.TaskID) {
 				return fmt.Errorf("review opencode task did not complete task %s", task.TaskID)
 			}
 			return nil

@@ -81,14 +81,14 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		LogPath:   logPath,
 		TaskFile:  taskPath,
 		Timeout:   openCodeTaskTimeout(cfg),
-		Verify: func() error {
-			if !ledgerFindingHasTaskEvidencePath(runDir, finding.ID, task.TaskID, notesRel) {
+		Verify: func(verifyRunDir string) error {
+			if !ledgerFindingHasTaskEvidencePath(verifyRunDir, finding.ID, task.TaskID, notesRel) {
 				return fmt.Errorf("validate opencode task did not register validation evidence %s for finding %s", notesRel, finding.ID)
 			}
-			if err := validateNonEmptyValidationEvidence(runDir, notesRel); err != nil {
+			if err := validateNonEmptyValidationEvidence(verifyRunDir, notesRel); err != nil {
 				return err
 			}
-			verdict, ok, err := ledgerFindingVerdict(runDir, finding.ID, "validate")
+			verdict, ok, err := ledgerFindingVerdict(verifyRunDir, finding.ID, "validate")
 			if err != nil {
 				return err
 			}
@@ -96,7 +96,7 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 				return fmt.Errorf("validate opencode task did not record validation verdict for finding %s", finding.ID)
 			}
 			if verdict.Value == "proven" {
-				proofEvidence, err := validationProofEvidence(runDir, finding.ID, task.TaskID, verdict.eventIndex, promptRel, notesRel)
+				proofEvidence, err := validationProofEvidence(verifyRunDir, finding.ID, task.TaskID, verdict.eventIndex, promptRel, notesRel)
 				if err != nil {
 					return err
 				}
@@ -104,12 +104,12 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 					return fmt.Errorf("validate opencode task recorded proven verdict for finding %s without registering proof evidence beyond %s", finding.ID, notesRel)
 				}
 				for _, evidence := range proofEvidence {
-					if err := registeredEvidenceFileError(runDir, evidence.Path, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+					if err := registeredEvidenceFileError(verifyRunDir, evidence.Path, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 						return err
 					}
 				}
 			}
-			if !ledgerTaskCompleted(runDir, task.TaskID) {
+			if !ledgerTaskCompleted(verifyRunDir, task.TaskID) {
 				return fmt.Errorf("validate opencode task did not complete task %s", task.TaskID)
 			}
 			return nil

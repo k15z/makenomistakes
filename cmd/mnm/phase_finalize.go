@@ -70,18 +70,18 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Timeout:  openCodeTaskTimeout(cfg),
-		Verify: func() error {
-			report, ok, err := latestFinalizedReportForTask(runDir, task.TaskID)
+		Verify: func(verifyRunDir string) error {
+			report, ok, err := latestFinalizedReportForTask(verifyRunDir, task.TaskID)
 			if err != nil {
 				return err
 			}
 			if !ok {
 				return fmt.Errorf("finalize opencode task did not register report outputs")
 			}
-			if err := validateFinalizedReport(runDir, task, report); err != nil {
+			if err := validateFinalizedReport(verifyRunDir, task, report); err != nil {
 				return err
 			}
-			if !ledgerTaskCompleted(runDir, task.TaskID) {
+			if !ledgerTaskCompleted(verifyRunDir, task.TaskID) {
 				return fmt.Errorf("finalize opencode task did not complete task %s", task.TaskID)
 			}
 			return nil
