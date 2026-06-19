@@ -227,6 +227,9 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		}
 	}
 	evidencePaths, _ := requiredStringArrayField(item, "evidence_paths")
+	if bucket == "proven" && len(evidencePaths) == 0 {
+		return fmt.Errorf("%s.evidence_paths must include at least one registered evidence path for a proven finding", prefix)
+	}
 	for _, evidencePath := range evidencePaths {
 		evidenceRel, err := normalizeReportPath(runDir, evidencePath)
 		if err != nil {

@@ -572,6 +572,49 @@ func TestReportFinalizeRejectsUnregisteredFindingEvidence(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsProvenFindingWithoutEvidence(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{},
+			"summary":        "This cannot be proven without evidence.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing proven evidence error")
+	}
+	if !strings.Contains(err.Error(), "must include at least one registered evidence path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with unsubstantiated proven finding should not be finalized")
+	}
+}
+
 func TestReportShowPrintsFinalizedMarkdown(t *testing.T) {
 	workspace, runRecord := newStoredReportRun(t)
 
