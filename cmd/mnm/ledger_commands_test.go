@@ -402,7 +402,7 @@ func TestReportFinalizeRequiresMatchingSourceLead(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": otherLeadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{},
 			"summary":        "Traceable finding with the wrong source lead.",
 			"affected_paths": []string{"server/auth.go"},
@@ -465,7 +465,7 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "Directory paths are not durable evidence files.",
 			"affected_paths": []string{"server/auth.go"},
@@ -524,7 +524,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "Traceable finding.",
 			"affected_paths": []string{"server/auth.go"},
@@ -566,7 +566,7 @@ func TestReportFinalizeRejectsFindingMetadataMismatch(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "Traceable finding with the wrong severity.",
 			"affected_paths": []string{"server/auth.go"},
@@ -612,7 +612,7 @@ func TestReportFinalizeRejectsSourceLeadMismatch(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": otherLeadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "Traceable finding with the wrong source lead.",
 			"affected_paths": []string{"server/auth.go"},
@@ -637,6 +637,51 @@ func TestReportFinalizeRejectsSourceLeadMismatch(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsVerdictMismatch(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "Traceable finding with an incomplete verdict list.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected verdict mismatch error")
+	}
+	if !strings.Contains(err.Error(), `want ["review accepted" "deduplicate canonical" "validation proven"] from ledger`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with mismatched verdicts should not be finalized")
+	}
+}
+
 func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
@@ -657,7 +702,7 @@ func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation failed"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation failed"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "This should not be proven.",
 			"affected_paths": []string{"server/auth.go"},
@@ -702,7 +747,7 @@ func TestReportFinalizeRejectsUnregisteredFindingEvidence(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "The proof file exists but was never registered.",
 			"affected_paths": []string{"server/auth.go"},
@@ -762,7 +807,7 @@ func TestReportFinalizeRejectsEmptyRegisteredEvidence(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{emptyRel},
 			"summary":        "This cites an empty evidence artifact.",
 			"affected_paths": []string{"server/auth.go"},
@@ -810,7 +855,7 @@ func TestReportFinalizeRejectsChangedRegisteredEvidence(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "This cites evidence that changed after registration.",
 			"affected_paths": []string{"server/auth.go"},
@@ -874,7 +919,7 @@ func TestReportFinalizeRejectsSymlinkEvidencePath(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "This cites a symlinked evidence artifact.",
 			"affected_paths": []string{"server/auth.go"},
@@ -943,7 +988,7 @@ func TestReportFinalizeRejectsProvenFindingWithoutEvidence(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{},
 			"summary":        "This cannot be proven without evidence.",
 			"affected_paths": []string{"server/auth.go"},
@@ -988,7 +1033,7 @@ func TestReportFinalizeRejectsStatusThatDoesNotMatchBucket(t *testing.T) {
 			"confidence":     "medium",
 			"source_lead_id": leadID,
 			"status":         "validation_failed",
-			"verdicts":       []string{"review accepted", "validation proven"},
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
 			"evidence_paths": []string{proofRel},
 			"summary":        "The bucket is proven, but status says failed.",
 			"affected_paths": []string{"server/auth.go"},
