@@ -63,6 +63,9 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	if !ledgerTaskCompleted(runDir, "task_deduplicate") {
 		t.Fatal("expected deduplicate task to complete")
 	}
+	if !ledgerTaskCompleted(runDir, "task_validate_finding_fake_lead_fake_auth") {
+		t.Fatal("expected validate task to complete")
+	}
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
@@ -271,6 +274,15 @@ func prependFakeOpenCode(t *testing.T, version string) {
   : "${workspace:?workspace is required}"
   printf '%s\n' "$MNM_TASK_ID" > "$workspace/mutated-by-opencode"
   mkdir -p "$MNM_RUN_DIR/evidence"
+  if printf '%s' "$prompt" | grep -q 'makenomistakes Validate'; then
+    : "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+    cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_fake_validate_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:11Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"Proven by fake validate.","canonical_finding_id":""}}
+{"id":"event_fake_validate_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:12Z","data":{"status":"completed","summary":"Validated $MNM_FINDING_ID"}}
+EOF
+    printf '{"type":"done"}\n'
+    exit 0
+  fi
   if printf '%s' "$prompt" | grep -q 'makenomistakes Deduplicate'; then
     cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
 {"id":"event_fake_deduplicate","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:09Z","data":{"finding_id":"finding_fake_lead_fake_auth","phase":"deduplicate","value":"canonical","reason":"Unique in fake runner.","canonical_finding_id":""}}

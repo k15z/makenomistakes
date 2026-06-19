@@ -6,9 +6,9 @@ warnings: findings should be reviewed, deduplicated, and validated with concrete
 evidence whenever possible.
 
 This repository is currently in the local prototype stage. The CLI, run state,
-workspace snapshotting, Lima runner lifecycle, VM-side OpenCode bootstrap, Recon,
-Investigate, Review, and Deduplicate phases are being built as a stack of
-reviewable PRs.
+workspace snapshotting, Lima runner lifecycle, VM-side OpenCode bootstrap,
+Recon, Investigate, Review, Deduplicate, and Validate phases are being built as
+a stack of reviewable PRs.
 
 ## MVP Direction
 
@@ -62,7 +62,9 @@ allows follow-up leads, and records `investigate.limit_reached` if the configure
 investigation cap is exhausted before all open leads are consumed. Review runs
 one skeptical OpenCode task per candidate finding and records an `accepted` or
 `rejected` review verdict. Deduplicate compares review-accepted findings and
-records each one as `canonical` or `duplicate` before later validation work.
+records each one as `canonical` or `duplicate`. Validate makes a heavier
+end-to-end reproduction or exploit attempt for each canonical finding and
+records `proven`, `failed`, or `inconclusive`.
 
 ## Reports
 

@@ -215,4 +215,48 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 	if len(pendingDedup) != 0 {
 		t.Fatalf("expected no undeduplicated findings, got %#v", pendingDedup)
 	}
+	pendingValidate, err := unvalidatedCanonicalFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pendingValidate) != 1 || pendingValidate[0].ID != "finding_one" {
+		t.Fatalf("unexpected unvalidated canonical findings: %#v", pendingValidate)
+	}
+
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_validate_one",
+		TaskID:   "task_validate_finding_one",
+		Data: map[string]any{
+			"finding_id":           "finding_one",
+			"phase":                "validate",
+			"value":                "proven",
+			"reason":               "Reproduced.",
+			"canonical_finding_id": "",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_validate_finding_one",
+		TaskID:   "task_validate_finding_one",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Validated finding.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pendingValidate, err = unvalidatedCanonicalFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pendingValidate) != 0 {
+		t.Fatalf("expected no unvalidated canonical findings, got %#v", pendingValidate)
+	}
 }
