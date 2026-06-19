@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 )
 
 func taskCommand(args []string, stdout, stderr io.Writer) error {
@@ -134,7 +136,26 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		currentStatus, exists, err := ledgerLeadStatus(runDir, *id)
+		event, err := prepareLedgerEvent(runDir, LedgerEvent{
+			RunID:    task.RunID,
+			Type:     "lead.closed",
+			Object:   "lead",
+			ObjectID: *id,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"status": *status,
+				"reason": *reason,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		unlock, err := lockRunDir(runDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		currentStatus, exists, err := ledgerLeadStatusUnlocked(runDir, *id)
 		if err != nil {
 			return err
 		}
@@ -147,33 +168,45 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 			}
 			return fmt.Errorf("lead %s is already closed with status %q", *id, currentStatus)
 		}
-		return appendLedgerEvent(runDir, LedgerEvent{
-			RunID:    task.RunID,
-			Type:     "lead.closed",
-			Object:   "lead",
-			ObjectID: *id,
-			TaskID:   task.TaskID,
-			Data: map[string]any{
-				"status": *status,
-				"reason": *reason,
-			},
-		})
+		return appendLedgerEventUnlocked(runDir, event)
 	default:
 		return fmt.Errorf("unknown lead subcommand %q", args[0])
 	}
 }
 
 func ledgerLeadStatus(runDir, leadID string) (string, bool, error) {
-	leads, err := ledgerLeads(runDir)
+	events, err := readLedgerEvents(runDir)
 	if err != nil {
 		return "", false, err
 	}
-	for _, lead := range leads {
-		if lead.ID == leadID {
-			return lead.Status, true, nil
+	return leadStatusFromEvents(events, leadID)
+}
+
+func ledgerLeadStatusUnlocked(runDir, leadID string) (string, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return leadStatusFromEvents(events, leadID)
+}
+
+func leadStatusFromEvents(events []LedgerEvent, leadID string) (string, bool, error) {
+	status := ""
+	exists := false
+	for _, event := range events {
+		if event.Object != "lead" || event.ObjectID != leadID {
+			continue
+		}
+		switch event.Type {
+		case "lead.created":
+			status = "open"
+			exists = true
+		case "lead.closed":
+			status = stringData(event.Data, "status")
+			exists = true
 		}
 	}
-	return "", false, nil
+	return status, exists, nil
 }
 
 func findingCommand(args []string, stdout, stderr io.Writer) error {
@@ -330,11 +363,22 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if task.Phase != *phase {
+		return fmt.Errorf("current task phase %q cannot record %s verdict", task.Phase, *phase)
+	}
 	if err := requireLedgerObject(runDir, "finding", *findingID); err != nil {
 		return err
 	}
+	if *phase == "deduplicate" {
+		if err := requireReviewAcceptedFinding(runDir, *findingID); err != nil {
+			return err
+		}
+	}
 	if *canonicalFindingID != "" {
 		if err := requireLedgerObject(runDir, "finding", *canonicalFindingID); err != nil {
+			return err
+		}
+		if err := requireReviewAcceptedFinding(runDir, *canonicalFindingID); err != nil {
 			return err
 		}
 	}
@@ -356,6 +400,17 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintln(stdout, verdictID)
+	return nil
+}
+
+func requireReviewAcceptedFinding(runDir, findingID string) error {
+	verdict, ok, err := ledgerFindingVerdict(runDir, findingID, "review")
+	if err != nil {
+		return err
+	}
+	if !ok || verdict.Value != "accepted" {
+		return fmt.Errorf("finding %s must have a completed accepted review verdict", findingID)
+	}
 	return nil
 }
 
@@ -408,6 +463,13 @@ func reportCommand(args []string, stdout, stderr io.Writer) error {
 	jsonRel, err := requirePathInsideRunDir(runDir, *jsonPath)
 	if err != nil {
 		return err
+	}
+	jsonBytes, err := os.ReadFile(filepath.Join(runDir, filepath.FromSlash(jsonRel)))
+	if err != nil {
+		return err
+	}
+	if !json.Valid(jsonBytes) {
+		return fmt.Errorf("report JSON is not valid JSON: %s", jsonRel)
 	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,

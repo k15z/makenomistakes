@@ -103,11 +103,24 @@ func currentTaskPath(runDir string) (string, error) {
 }
 
 func appendLedgerEvent(runDir string, event LedgerEvent) error {
+	event, err := prepareLedgerEvent(runDir, event)
+	if err != nil {
+		return err
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return appendLedgerEventUnlocked(runDir, event)
+}
+
+func prepareLedgerEvent(runDir string, event LedgerEvent) (LedgerEvent, error) {
 	if event.RunID == "" {
-		return errors.New("event run_id is required")
+		return LedgerEvent{}, errors.New("event run_id is required")
 	}
 	if event.Type == "" || event.Object == "" || event.ObjectID == "" {
-		return errors.New("event type, object, and object_id are required")
+		return LedgerEvent{}, errors.New("event type, object, and object_id are required")
 	}
 	if event.ID == "" {
 		event.ID = "event_" + uuid.NewString()
@@ -119,15 +132,12 @@ func appendLedgerEvent(runDir string, event LedgerEvent) error {
 		event.Data = map[string]any{}
 	}
 	if err := os.MkdirAll(runDir, dirPerm); err != nil {
-		return err
+		return LedgerEvent{}, err
 	}
+	return event, nil
+}
 
-	unlock, err := lockRunDir(runDir)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
+func appendLedgerEventUnlocked(runDir string, event LedgerEvent) error {
 	path := filepath.Join(runDir, eventsFile)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
 	if err != nil {
@@ -154,7 +164,10 @@ func readLedgerEvents(runDir string) ([]LedgerEvent, error) {
 		return nil, err
 	}
 	defer unlock()
+	return readLedgerEventsUnlocked(runDir)
+}
 
+func readLedgerEventsUnlocked(runDir string) ([]LedgerEvent, error) {
 	path := filepath.Join(runDir, eventsFile)
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {

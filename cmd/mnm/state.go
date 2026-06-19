@@ -78,6 +78,48 @@ func (s *Store) migrate() error {
 		created_at text not null,
 		updated_at text not null
 	)`)
+	if err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "config_snapshot_path", ddl: "config_snapshot_path text not null default ''"},
+		{name: "snapshot_path", ddl: "snapshot_path text not null default ''"},
+	} {
+		if err := s.ensureRunColumn(column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureRunColumn(name, ddl string) error {
+	rows, err := s.db.Query(`pragma table_info(runs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var columnName string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if columnName == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`alter table runs add column ` + ddl)
 	return err
 }
 
