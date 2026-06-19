@@ -35,6 +35,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return initCommand(args[1:], stdout, stderr)
 	case "analyze":
 		return analyzeCommand(args[1:], stdout, stderr)
+	case "task":
+		return taskCommand(args[1:], stdout, stderr)
+	case "lead":
+		return leadCommand(args[1:], stdout, stderr)
+	case "finding":
+		return findingCommand(args[1:], stdout, stderr)
+	case "evidence":
+		return evidenceCommand(args[1:], stdout, stderr)
+	case "verdict":
+		return verdictCommand(args[1:], stdout, stderr)
+	case "report":
+		return reportCommand(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -46,10 +58,17 @@ func printUsage(w io.Writer) {
 Usage:
   mnm init [--force] [path]
   mnm analyze [path]
+  mnm task|lead|finding|evidence|verdict|report ...
 
 Commands:
-  init      Create mnm.toml and .mnmignore in a workspace.
-  analyze   Prepare a durable local audit run.
+  init       Create mnm.toml and .mnmignore in a workspace.
+  analyze    Prepare a durable local audit run.
+  task       Read or complete the current VM-side task.
+  lead       Create or close audit leads.
+  finding    Create candidate findings.
+  evidence   Register evidence files.
+  verdict    Record review, deduplication, or validation decisions.
+  report     Finalize generated reports.
 `)
 }
 
