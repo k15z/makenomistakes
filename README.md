@@ -28,7 +28,9 @@ include cloud VMs.
 
 The VM runner owns all model execution. It installs `opencode` inside the VM,
 injects the `mnm` CLI as the structured ledger interface, and bootstraps a
-pinned Node.js toolchain when the snapshot contains `package.json` files.
+pinned Node.js toolchain when the snapshot contains `package.json` files. It
+also ensures `ripgrep` is available so agents have a reliable fast search tool
+inside the disposable audit environment.
 The extracted snapshot is kept as a pristine base; each OpenCode task receives a
 disposable workspace copy so build artifacts, package installs, and repro files
 do not leak between agents.

@@ -105,16 +105,35 @@ func (runner LimaRunner) copyInputs(ctx context.Context, instanceName, payloadPa
 }
 
 func (runner LimaRunner) runGuestRunner(ctx context.Context, instanceName string, run RunRecord) error {
-	command := strings.Join([]string{
+	return runner.Executor.Run(ctx, "limactl", "shell", instanceName, "bash", "-lc", guestRunnerCommand(run))
+}
+
+func guestRunnerCommand(run RunRecord) string {
+	return strings.Join([]string{
 		"set -euo pipefail",
 		"chmod +x /tmp/mnm",
+		bootstrapAuditToolbeltCommand(),
 		"mkdir -p \"$HOME/.local/share/opencode\"",
 		"if [ -f /tmp/opencode-auth.json ]; then mv /tmp/opencode-auth.json \"$HOME/.local/share/opencode/auth.json\"; chmod 600 \"$HOME/.local/share/opencode/auth.json\"; fi",
 		"rm -rf /tmp/mnm-run",
 		"mkdir -p /tmp/mnm-run",
 		fmt.Sprintf("/tmp/mnm runner --run-id %s --run-dir /tmp/mnm-run --snapshot /tmp/snapshot.tar.zst --config /tmp/mnm.toml", shellQuote(run.ID)),
 	}, "\n")
-	return runner.Executor.Run(ctx, "limactl", "shell", instanceName, "bash", "-lc", command)
+}
+
+func bootstrapAuditToolbeltCommand() string {
+	return strings.Join([]string{
+		"if ! command -v rg >/dev/null 2>&1; then",
+		"  if ! command -v apt-get >/dev/null 2>&1; then",
+		"    echo \"mnm: ripgrep is required in the audit VM but apt-get is unavailable\" >&2",
+		"    exit 1",
+		"  fi",
+		"  apt_install_prefix=\"\"",
+		"  if command -v sudo >/dev/null 2>&1; then apt_install_prefix=\"sudo\"; fi",
+		"  $apt_install_prefix env DEBIAN_FRONTEND=noninteractive apt-get update",
+		"  $apt_install_prefix env DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep",
+		"fi",
+	}, "\n")
 }
 
 func (runner LimaRunner) copyOutputs(ctx context.Context, instanceName, runDir string) error {
