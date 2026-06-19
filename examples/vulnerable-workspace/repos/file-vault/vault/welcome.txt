@@ -1,0 +1,3 @@
+Welcome to the file vault.
+
+Only files in this vault directory are meant to be served.
