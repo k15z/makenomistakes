@@ -49,3 +49,23 @@ func TestConfigUsesReconModelWhenSet(t *testing.T) {
 		t.Fatalf("expected recon model, got %q", resolved.Model)
 	}
 }
+
+func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
+	cfg := Config{
+		Models: ModelConfig{
+			Default:     "openrouter/default",
+			Recon:       "openrouter/recon",
+			Investigate: "openrouter/investigate",
+		},
+	}
+	if got := phaseModel(cfg, "recon"); got != "openrouter/recon" {
+		t.Fatalf("recon model = %q", got)
+	}
+	if got := phaseModel(cfg, "investigate"); got != "openrouter/investigate" {
+		t.Fatalf("investigate model = %q", got)
+	}
+	cfg.Models.Investigate = ""
+	if got := phaseModel(cfg, "investigate"); got != "openrouter/default" {
+		t.Fatalf("investigate fallback = %q", got)
+	}
+}

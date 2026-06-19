@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
-	prependFakeOpenCode(t, "1.15.11\n")
+	prependFakeOpenCode(t, opencodeVersion+"\n")
 	source := t.TempDir()
 	writeWorkspaceFile(t, source, "repo/app.go", "package main")
 	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.zst")
@@ -55,11 +55,19 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 			t.Fatalf("missing recon event type %q in %#v", want, types)
 		}
 	}
+	for _, want := range []string{"finding.created", "lead.closed"} {
+		if !contains(types, want) {
+			t.Fatalf("missing investigate event type %q in %#v", want, types)
+		}
+	}
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, `"opencode_version": "1.15.11"`) {
+	if strings.Contains(manifest, "mutated-by-opencode") {
+		t.Fatalf("manifest included task-local mutation:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, `"opencode_version": "`+opencodeVersion+`"`) {
 		t.Fatalf("manifest missing opencode version:\n%s", manifest)
 	}
 }
@@ -161,7 +169,35 @@ if [ "${1:-}" = "--version" ]; then
 fi
 if [ "${1:-}" = "run" ]; then
   : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+  : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+  prompt=""
+  workspace=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--dir" ]; then
+      shift
+      workspace="${1:-}"
+    fi
+    prompt="$1"
+    shift
+  done
+  : "${workspace:?workspace is required}"
+  printf '%s\n' "$MNM_TASK_ID" > "$workspace/mutated-by-opencode"
   mkdir -p "$MNM_RUN_DIR/evidence"
+  if printf '%s' "$prompt" | grep -q 'makenomistakes Investigate'; then
+    : "${MNM_LEAD_ID:?MNM_LEAD_ID is required}"
+    cat > "$MNM_RUN_DIR/evidence/finding-$MNM_LEAD_ID.md" <<'EOF'
+# Finding
+
+Fake finding for tests.
+EOF
+    cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_fake_finding_$MNM_LEAD_ID","run_id":"run_test","type":"finding.created","object":"finding","object_id":"finding_fake_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"title":"Fake candidate finding","lead_id":"$MNM_LEAD_ID","category":"authz","severity":"high","confidence":"medium","body_path":"evidence/finding-$MNM_LEAD_ID.md"}}
+{"id":"event_fake_lead_closed_$MNM_LEAD_ID","run_id":"run_test","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"status":"promoted_to_finding","reason":"Promoted by fake investigate."}}
+{"id":"event_fake_investigate_done_$MNM_LEAD_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:06Z","data":{"status":"completed","summary":"Investigated $MNM_LEAD_ID"}}
+EOF
+    printf '{"type":"done"}\n'
+    exit 0
+  fi
   cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
 # Codebase Map
 

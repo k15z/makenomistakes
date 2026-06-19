@@ -5,8 +5,9 @@ inputs. The goal is to produce defensible findings, not just scanner-style
 warnings: findings should be reviewed, deduplicated, and validated with concrete
 evidence whenever possible.
 
-This repository is currently in the planning/prototype stage. It does not yet
-contain a working implementation.
+This repository is currently in the local prototype stage. The CLI, run state,
+workspace snapshotting, Lima runner lifecycle, VM-side OpenCode bootstrap, Recon,
+and Investigate phases are being built as a stack of reviewable PRs.
 
 ## MVP Direction
 
@@ -23,6 +24,13 @@ pipeline, and generate local reports.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
 include cloud VMs.
+
+The VM runner owns all model execution. It installs `opencode` inside the VM,
+injects the `mnm` CLI as the structured ledger interface, and bootstraps a
+pinned Node.js toolchain when the snapshot contains `package.json` files.
+The extracted snapshot is kept as a pristine base; each OpenCode task receives a
+disposable workspace copy so build artifacts, package installs, and repro files
+do not leak between agents.
 
 ## Audit Pipeline
 
@@ -48,6 +56,10 @@ validating audit ledger entries:
 - verdicts: review, deduplication, and validation decisions.
 - reports: final rendered audit output.
 
+Recon creates bounded leads. Investigate runs OpenCode tasks for open leads,
+allows follow-up leads, and records `investigate.limit_reached` if the configured
+investigation cap is exhausted before all open leads are consumed.
+
 ## Reports
 
 The planned output is:
@@ -62,5 +74,5 @@ and duplicate findings.
 
 ## Status
 
-This repository currently contains design documentation only. Implementation
-will follow after the MVP plan is reviewed.
+Implementation is in progress. The current stack is intentionally CLI-first and
+local-only while the audit pipeline is proven end to end.

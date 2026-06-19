@@ -133,6 +133,30 @@ func TestTaskCurrentPrintsCurrentTask(t *testing.T) {
 	}
 }
 
+func TestTaskCurrentUsesTaskFileEnv(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	task := TaskRecord{
+		RunID:       "run_test",
+		TaskID:      "task_investigate_lead_test",
+		Phase:       "investigate",
+		Title:       "Investigate lead",
+		Instruction: "Investigate one lead.",
+	}
+	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(taskFileEnv, taskPath)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"task", "current", "--run-dir", runDir}, &stdout, &stderr); err != nil {
+		t.Fatalf("task current failed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"task_id": "task_investigate_lead_test"`) {
+		t.Fatalf("unexpected task current output:\n%s", stdout.String())
+	}
+}
+
 func TestEvidenceRejectsPathOutsideRunDir(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	outside := filepath.Join(t.TempDir(), "outside.log")

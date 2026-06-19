@@ -16,6 +16,7 @@ import (
 const (
 	currentTaskFile = "current-task.json"
 	eventsFile      = "events.jsonl"
+	taskFileEnv     = "MNM_TASK_FILE"
 )
 
 type LedgerEvent struct {
@@ -50,7 +51,10 @@ func resolveRunDir(explicit string) (string, error) {
 
 func readCurrentTask(runDir string) (TaskRecord, error) {
 	var task TaskRecord
-	path := filepath.Join(runDir, currentTaskFile)
+	path, err := currentTaskPath(runDir)
+	if err != nil {
+		return task, err
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return task, fmt.Errorf("read current task: %w", err)
@@ -62,6 +66,40 @@ func readCurrentTask(runDir string) (TaskRecord, error) {
 		return task, errors.New("current task must include run_id, task_id, and phase")
 	}
 	return task, nil
+}
+
+func writeTaskFile(path string, task TaskRecord) error {
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	return os.WriteFile(path, b, filePerm)
+}
+
+func currentTaskPath(runDir string) (string, error) {
+	if override := os.Getenv(taskFileEnv); override != "" {
+		absRunDir, err := filepath.Abs(runDir)
+		if err != nil {
+			return "", err
+		}
+		absOverride, err := filepath.Abs(override)
+		if err != nil {
+			return "", err
+		}
+		rel, err := filepath.Rel(absRunDir, absOverride)
+		if err != nil {
+			return "", err
+		}
+		if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+			return "", fmt.Errorf("%s must point inside run directory: %s", taskFileEnv, override)
+		}
+		return absOverride, nil
+	}
+	return filepath.Join(runDir, currentTaskFile), nil
 }
 
 func appendLedgerEvent(runDir string, event LedgerEvent) error {
@@ -108,6 +146,15 @@ func appendLedgerEvent(runDir string, event LedgerEvent) error {
 }
 
 func readLedgerEvents(runDir string) ([]LedgerEvent, error) {
+	if err := os.MkdirAll(runDir, dirPerm); err != nil {
+		return nil, err
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	path := filepath.Join(runDir, eventsFile)
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
