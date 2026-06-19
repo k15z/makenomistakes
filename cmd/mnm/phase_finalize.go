@@ -78,6 +78,22 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		Prompt:   prompt,
 		LogPath:  logPath,
 		TaskFile: taskPath,
+		Verify: func() error {
+			report, ok, err := latestFinalizedReportForTask(runDir, task.TaskID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("finalize opencode task did not register report outputs")
+			}
+			if err := validateFinalizedReport(runDir, task, report); err != nil {
+				return err
+			}
+			if !ledgerTaskCompleted(runDir, task.TaskID) {
+				return fmt.Errorf("finalize opencode task did not complete task %s", task.TaskID)
+			}
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -94,19 +110,6 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		},
 	}); err != nil {
 		return err
-	}
-	report, ok, err := latestFinalizedReportForTask(runDir, task.TaskID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("finalize opencode task did not register report outputs")
-	}
-	if err := validateFinalizedReport(runDir, task, report); err != nil {
-		return err
-	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return fmt.Errorf("finalize opencode task did not complete task %s", task.TaskID)
 	}
 	return nil
 }

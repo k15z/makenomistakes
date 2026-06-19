@@ -121,6 +121,15 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 		Prompt:    prompt,
 		LogPath:   logPath,
 		TaskFile:  taskPath,
+		Verify: func() error {
+			if !ledgerFindingHasVerdict(runDir, finding.ID, "review") {
+				return fmt.Errorf("review opencode task did not record review verdict for finding %s", finding.ID)
+			}
+			if !ledgerTaskCompleted(runDir, task.TaskID) {
+				return fmt.Errorf("review opencode task did not complete task %s", task.TaskID)
+			}
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -138,12 +147,6 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 		},
 	}); err != nil {
 		return err
-	}
-	if !ledgerFindingHasVerdict(runDir, finding.ID, "review") {
-		return fmt.Errorf("review opencode task did not record review verdict for finding %s", finding.ID)
-	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return fmt.Errorf("review opencode task did not complete task %s", task.TaskID)
 	}
 	return nil
 }

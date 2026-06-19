@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,6 +272,129 @@ printf '{"type":"done"}\n'
 	}
 	if retries != 1 {
 		t.Fatalf("retry event count = %d, want 1", retries)
+	}
+}
+
+func TestRunOpenCodeTaskRetriesMissingPostcondition(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+printf '{"type":"done","attempt":%s}\n' "$count"
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_postcondition_retry",
+		TaskID:  "task_postcondition_retry",
+		Phase:   "validate",
+		Title:   "mnm postcondition retry test",
+		Model:   "openrouter/test",
+		Prompt:  "retry until the verdict exists",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-postcondition-retry.jsonl"),
+		Verify: func() error {
+			count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+			if count != "2" {
+				return errors.New("validate opencode task did not record validation verdict for finding finding_retry")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected postcondition retry to recover, got: %v", err)
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "2" {
+		t.Fatalf("attempt count = %s, want 2", count)
+	}
+	log := readFile(t, filepath.Join(runDir, "evidence", "opencode-postcondition-retry.jsonl"))
+	if !strings.Contains(log, `"attempt":1`) || !strings.Contains(log, `"attempt":2`) {
+		t.Fatalf("retry log did not preserve both attempts:\n%s", log)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retries := 0
+	for _, event := range events {
+		if event.Type == "task.retrying" && event.ObjectID == "task_postcondition_retry" {
+			retries++
+			reason, _ := event.Data["reason"].(string)
+			if !strings.Contains(reason, "validation verdict") {
+				t.Fatalf("retry reason = %q, want validation verdict context", reason)
+			}
+		}
+	}
+	if retries != 1 {
+		t.Fatalf("retry event count = %d, want 1", retries)
+	}
+}
+
+func TestRunOpenCodeTaskDoesNotRetryMissingPostconditionAfterLedgerWrite(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_attempt_$count","run_id":"run_dirty_postcondition","type":"evidence.added","object":"evidence","object_id":"evidence_attempt_$count","task_id":"task_dirty_postcondition","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"log","title":"Attempt $count","path":"evidence/attempt.log"}}
+EOF
+printf '{"type":"done","attempt":%s}\n' "$count"
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_dirty_postcondition",
+		TaskID:  "task_dirty_postcondition",
+		Phase:   "validate",
+		Title:   "mnm dirty postcondition retry test",
+		Model:   "openrouter/test",
+		Prompt:  "do not retry after partial ledger writes",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-dirty-postcondition.jsonl"),
+		Verify: func() error {
+			return errors.New("validate opencode task did not record validation verdict for finding finding_dirty")
+		},
+	})
+	if err == nil {
+		t.Fatal("expected dirty missing-postcondition failure")
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "1" {
+		t.Fatalf("attempt count = %s, want 1", count)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == "task.retrying" {
+			t.Fatalf("unexpected retry event after ledger write: %#v", event)
+		}
 	}
 }
 

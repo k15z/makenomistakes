@@ -165,6 +165,15 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 		Prompt:   prompt,
 		LogPath:  logPath,
 		TaskFile: taskPath,
+		Verify: func() error {
+			if !ledgerLeadClosed(runDir, lead.ID) {
+				return fmt.Errorf("investigate opencode task did not close lead %s", lead.ID)
+			}
+			if !ledgerTaskCompleted(runDir, task.TaskID) {
+				return fmt.Errorf("investigate opencode task did not complete task %s", task.TaskID)
+			}
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -182,12 +191,6 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 		},
 	}); err != nil {
 		return err
-	}
-	if !ledgerLeadClosed(runDir, lead.ID) {
-		return fmt.Errorf("investigate opencode task did not close lead %s", lead.ID)
-	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return fmt.Errorf("investigate opencode task did not complete task %s", task.TaskID)
 	}
 	return nil
 }

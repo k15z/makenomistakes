@@ -194,6 +194,9 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Model:   phaseModel(cfg, "recon"),
 		Prompt:  prompt,
 		LogPath: logPath,
+		Verify: func() error {
+			return validateReconLedgerOutputs(runDir, task.TaskID)
+		},
 	}); err != nil {
 		return err
 	}
@@ -211,9 +214,6 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}); err != nil {
 		return err
 	}
-	if err := validateReconLedgerOutputs(runDir, task.TaskID); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -228,6 +228,7 @@ type opencodeTask struct {
 	Prompt    string
 	LogPath   string
 	TaskFile  string
+	Verify    func() error
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
@@ -235,7 +236,15 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	attempts := 0
 	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
 		attempts = attempt
-		err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		result, err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		if err == nil && task.Verify != nil {
+			if verifyErr := task.Verify(); verifyErr != nil {
+				err = retryableOpenCodePostconditionError{
+					err:            verifyErr,
+					ledgerModified: result.ledgerModified,
+				}
+			}
+		}
 		if err == nil {
 			return nil
 		}
@@ -253,7 +262,12 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w", task.TaskID, attempts, lastErr)
 }
 
-func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) error {
+type openCodeAttemptResult struct {
+	logText        string
+	ledgerModified bool
+}
+
+func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	var logOffset int64
 	if attempt > 1 {
@@ -264,11 +278,11 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	}
 	ledgerOffset, err := fileSize(filepath.Join(runDir, eventsFile))
 	if err != nil {
-		return err
+		return openCodeAttemptResult{}, err
 	}
 	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
 	if err != nil {
-		return err
+		return openCodeAttemptResult{}, err
 	}
 	command := exec.Command(opencodePath,
 		"run",
@@ -299,16 +313,20 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	command.Stderr = os.Stderr
 	runErr := command.Run()
 	if closeErr := logFile.Close(); closeErr != nil && runErr == nil {
-		return closeErr
+		return openCodeAttemptResult{}, closeErr
+	}
+	result := openCodeAttemptResult{
+		logText:        readLogSuffix(task.LogPath, logOffset),
+		ledgerModified: fileModifiedSince(filepath.Join(runDir, eventsFile), ledgerOffset),
 	}
 	if runErr != nil {
-		return openCodeAttemptError{
+		return result, openCodeAttemptError{
 			err:            runErr,
-			logText:        readLogSuffix(task.LogPath, logOffset),
-			ledgerModified: fileModifiedSince(filepath.Join(runDir, eventsFile), ledgerOffset),
+			logText:        result.logText,
+			ledgerModified: result.ledgerModified,
 		}
 	}
-	return nil
+	return result, nil
 }
 
 type openCodeAttemptError struct {
@@ -352,9 +370,26 @@ func fileModifiedSince(path string, previousSize int64) bool {
 	return err != nil || currentSize != previousSize
 }
 
+type retryableOpenCodePostconditionError struct {
+	err            error
+	ledgerModified bool
+}
+
+func (e retryableOpenCodePostconditionError) Error() string {
+	return e.err.Error()
+}
+
+func (e retryableOpenCodePostconditionError) Unwrap() error {
+	return e.err
+}
+
 func retryableOpenCodeError(logPath string, err error) bool {
 	if err == nil {
 		return false
+	}
+	var postconditionErr retryableOpenCodePostconditionError
+	if errors.As(err, &postconditionErr) {
+		return !postconditionErr.ledgerModified
 	}
 	text := strings.ToLower(err.Error())
 	var attemptErr openCodeAttemptError
