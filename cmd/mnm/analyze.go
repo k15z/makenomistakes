@@ -137,7 +137,11 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 		ModelAPIKey: os.Getenv(resolved.APIKeyEnv),
 		KeepVM:      options.KeepVM,
 	}); err != nil {
-		_ = store.UpdateRunStatus(runID, RunStatusFailed)
+		status := RunStatusFailed
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			status = RunStatusTimedOut
+		}
+		_ = store.UpdateRunStatus(runID, status)
 		return err
 	}
 	if err := store.UpdateRunStatus(runID, RunStatusCompleted); err != nil {
