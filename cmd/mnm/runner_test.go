@@ -50,6 +50,11 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 			t.Fatalf("missing event type %q in %#v", want, types)
 		}
 	}
+	for _, want := range []string{"task.started", "lead.created", "task.completed"} {
+		if !contains(types, want) {
+			t.Fatalf("missing recon event type %q in %#v", want, types)
+		}
+	}
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
@@ -93,6 +98,52 @@ func TestRunnerCommandRejectsUnsafeRunID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid run id") {
 		t.Fatalf("expected invalid run id error, got %v", err)
+	}
+}
+
+func TestRunReconTaskRejectsFailedTaskCompletion(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_failed_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"failed","summary":"Recon failed"}}
+EOF
+exit 0
+`)
+
+	err := runReconTask(runDir, "run_test", workspace, reconTestConfig(), opencodePath)
+	if err == nil {
+		t.Fatal("expected failed recon completion error")
+	}
+	if !strings.Contains(err.Error(), "did not complete successfully") {
+		t.Fatalf("expected completion status error, got %v", err)
+	}
+}
+
+func TestRunReconTaskRequiresRegisteredOutputs(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_done_only","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"Recon completed"}}
+EOF
+exit 0
+`)
+
+	err := runReconTask(runDir, "run_test", workspace, reconTestConfig(), opencodePath)
+	if err == nil {
+		t.Fatal("expected missing recon output error")
+	}
+	if !strings.Contains(err.Error(), "codebase map") {
+		t.Fatalf("expected missing codebase map error, got %v", err)
 	}
 }
 
@@ -142,6 +193,36 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 	}
 }
 
+func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
+	cfg := Config{
+		Runner: RunnerConfig{MaxLeads: 3},
+		Instructions: InstructionConfig{
+			Scope: "Focus on parser bugs.",
+		},
+	}
+	prompt := reconPrompt("/tmp/run", "/tmp/workspace", cfg)
+	for _, want := range []string{
+		"Maximum leads: 3",
+		"Focus on parser bugs.",
+		"mnm lead create --title",
+		"--body-file /tmp/run/evidence/lead-specific-name.md",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func reconTestConfig() Config {
+	return Config{
+		Models: ModelConfig{Recon: "openrouter/test"},
+		Runner: RunnerConfig{MaxLeads: 3},
+		Instructions: InstructionConfig{
+			Scope: "Focus on parser bugs.",
+		},
+	}
+}
+
 type recordingExecutor struct {
 	commands []string
 }
@@ -163,12 +244,45 @@ func (executor *recordingExecutor) Run(_ context.Context, name string, args ...s
 
 func prependFakeOpenCode(t *testing.T, version string) {
 	t.Helper()
+	writeFakeOpenCode(t, version, `
+  : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+  mkdir -p "$MNM_RUN_DIR/evidence"
+  cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase Map
+
+Fake map for tests.
+EOF
+  cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk Register
+
+Fake risk register for tests.
+EOF
+  cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+
+Investigate authentication boundaries.
+EOF
+  cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_fake_map","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_map","task_id":"task_recon","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md"}}
+{"id":"event_fake_risk","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_risk","task_id":"task_recon","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md"}}
+{"id":"event_fake_lead","run_id":"run_test","type":"lead.created","object":"lead","object_id":"lead_fake_auth","task_id":"task_recon","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate authentication boundaries","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_fake_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"Recon completed"}}
+EOF
+  printf '{"type":"done"}\n'
+  exit 0
+`)
+}
+
+func writeFakeOpenCode(t *testing.T, version, runScript string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
-	if err := os.WriteFile(path, []byte(fakeOpenCodeScript(version)), 0o755); err != nil {
+	body := fakeOpenCodeScript(version, runScript)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return path
 }
 
 func prependFakeOpenCodeInstaller(t *testing.T, version string) {
@@ -179,7 +293,7 @@ func prependFakeOpenCodeInstaller(t *testing.T, version string) {
 set -eu
 mkdir -p "$HOME/.opencode/bin"
 cat > "$HOME/.opencode/bin/opencode" <<'SCRIPT'
-` + fakeOpenCodeScript(version) + `SCRIPT
+` + fakeOpenCodeScript(version, "") + `SCRIPT
 chmod +x "$HOME/.opencode/bin/opencode"
 `
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
@@ -188,6 +302,16 @@ chmod +x "$HOME/.opencode/bin/opencode"
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func fakeOpenCodeScript(version string) string {
-	return "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '" + version + "'; exit 0; fi\nprintf 'fake opencode\\n'\n"
+func fakeOpenCodeScript(version, runScript string) string {
+	return `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  printf '` + version + `'
+  exit 0
+fi
+if [ "${1:-}" = "run" ]; then
+` + runScript + `
+fi
+printf 'fake opencode\n'
+`
 }

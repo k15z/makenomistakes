@@ -132,9 +132,10 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 		return err
 	}
 	if err := runner.Run(runCtx, RunnerRequest{
-		Run:    run,
-		Config: cfg,
-		KeepVM: options.KeepVM,
+		Run:         run,
+		Config:      cfg,
+		ModelAPIKey: os.Getenv(resolved.APIKeyEnv),
+		KeepVM:      options.KeepVM,
 	}); err != nil {
 		_ = store.UpdateRunStatus(runID, RunStatusFailed)
 		return err

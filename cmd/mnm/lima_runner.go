@@ -70,7 +70,7 @@ func (runner LimaRunner) Run(ctx context.Context, request RunnerRequest) error {
 	if err := runner.Executor.Run(ctx, "limactl", "start", "--tty=false", instanceName); err != nil {
 		return err
 	}
-	if err := runner.copyInputs(ctx, instanceName, payloadPath, request.Run); err != nil {
+	if err := runner.copyInputs(ctx, instanceName, payloadPath, request); err != nil {
 		return err
 	}
 	if err := runner.runGuestRunner(ctx, instanceName, request.Run); err != nil {
@@ -83,14 +83,24 @@ func (runner LimaRunner) Run(ctx context.Context, request RunnerRequest) error {
 	return nil
 }
 
-func (runner LimaRunner) copyInputs(ctx context.Context, instanceName, payloadPath string, run RunRecord) error {
+func (runner LimaRunner) copyInputs(ctx context.Context, instanceName, payloadPath string, request RunnerRequest) error {
 	copies := [][2]string{
 		{payloadPath, instanceName + ":/tmp/mnm"},
-		{run.SnapshotPath, instanceName + ":/tmp/snapshot.tar.zst"},
-		{run.ConfigSnapshotPath, instanceName + ":/tmp/mnm.toml"},
+		{request.Run.SnapshotPath, instanceName + ":/tmp/snapshot.tar.zst"},
+		{request.Run.ConfigSnapshotPath, instanceName + ":/tmp/mnm.toml"},
 	}
 	for _, item := range copies {
 		if err := runner.Executor.Run(ctx, "limactl", "copy", "--backend=scp", item[0], item[1]); err != nil {
+			return err
+		}
+	}
+	if request.ModelAPIKey != "" {
+		authPath, cleanup, err := writeOpenCodeAuthFile(request.ModelAPIKey)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		if err := runner.Executor.Run(ctx, "limactl", "copy", "--backend=scp", authPath, instanceName+":/tmp/opencode-auth.json"); err != nil {
 			return err
 		}
 	}
@@ -101,6 +111,8 @@ func (runner LimaRunner) runGuestRunner(ctx context.Context, instanceName string
 	command := strings.Join([]string{
 		"set -euo pipefail",
 		"chmod +x /tmp/mnm",
+		"mkdir -p \"$HOME/.local/share/opencode\"",
+		"if [ -f /tmp/opencode-auth.json ]; then mv /tmp/opencode-auth.json \"$HOME/.local/share/opencode/auth.json\"; chmod 600 \"$HOME/.local/share/opencode/auth.json\"; fi",
 		"rm -rf /tmp/mnm-run",
 		"mkdir -p /tmp/mnm-run",
 		fmt.Sprintf("/tmp/mnm runner --run-id %s --run-dir /tmp/mnm-run --snapshot /tmp/snapshot.tar.zst --config /tmp/mnm.toml", shellQuote(run.ID)),
