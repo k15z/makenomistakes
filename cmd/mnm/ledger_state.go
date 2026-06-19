@@ -8,6 +8,7 @@ import (
 
 type LeadRecord struct {
 	ID       string
+	TaskID   string
 	Title    string
 	Category string
 	Priority string
@@ -76,6 +77,7 @@ func ledgerLeads(runDir string) ([]LeadRecord, error) {
 		case "lead.created":
 			lead := LeadRecord{
 				ID:       event.ObjectID,
+				TaskID:   event.TaskID,
 				Title:    stringData(event.Data, "title"),
 				Category: stringData(event.Data, "category"),
 				Priority: stringData(event.Data, "priority"),
@@ -101,6 +103,20 @@ func ledgerLeads(runDir string) ([]LeadRecord, error) {
 		leads = append(leads, leadsByID[id])
 	}
 	return leads, nil
+}
+
+func ledgerTaskLeadCount(runDir, taskID string) (int, error) {
+	leads, err := ledgerLeads(runDir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, lead := range leads {
+		if lead.TaskID == taskID {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func openLedgerLeads(runDir string) ([]LeadRecord, error) {
@@ -259,6 +275,22 @@ func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 		})
 	}
 	return evidence, nil
+}
+
+func ledgerTaskEvidence(runDir, taskID, relPath string) (EvidenceRecord, bool) {
+	evidence, err := ledgerEvidence(runDir)
+	if err != nil {
+		return EvidenceRecord{}, false
+	}
+	var match EvidenceRecord
+	found := false
+	for _, item := range evidence {
+		if item.TaskID == taskID && item.Path == relPath {
+			match = item
+			found = true
+		}
+	}
+	return match, found
 }
 
 func ledgerEvidenceForFinding(runDir, findingID string) ([]EvidenceRecord, error) {

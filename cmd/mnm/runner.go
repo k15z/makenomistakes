@@ -236,7 +236,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Title:       "Recon",
 		Instruction: "Map the workspace, interpret scope, identify risks, and create focused leads for later investigation.",
 	}
-	if ledgerTaskCompleted(runDir, task.TaskID) {
+	if reconTaskComplete(runDir, task.TaskID, cfg) {
 		return nil
 	}
 	if err := writeTaskFile(filepath.Join(runDir, currentTaskFile), task); err != nil {
@@ -290,7 +290,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Prompt:  prompt,
 		LogPath: logPath,
 		Verify: func() error {
-			return validateReconLedgerOutputs(runDir, task.TaskID)
+			return validateReconTaskComplete(runDir, task.TaskID, cfg)
 		},
 	}); err != nil {
 		return err
@@ -308,6 +308,48 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		},
 	}); err != nil {
 		return err
+	}
+	return nil
+}
+
+func reconTaskComplete(runDir, taskID string, cfg Config) bool {
+	return validateReconTaskComplete(runDir, taskID, cfg) == nil
+}
+
+func validateReconTaskComplete(runDir, taskID string, cfg Config) error {
+	if !ledgerTaskCompleted(runDir, taskID) {
+		return errors.New("recon opencode task did not complete successfully through mnm task complete")
+	}
+	if err := validateReconOutputs(runDir, taskID, cfg); err != nil {
+		return err
+	}
+	return validateReconLedgerOutputs(runDir, taskID)
+}
+
+func validateReconOutputs(runDir, taskID string, cfg Config) error {
+	requiredEvidence := []string{
+		filepath.ToSlash(filepath.Join("evidence", "recon-codebase-map.md")),
+		filepath.ToSlash(filepath.Join("evidence", "recon-risk-register.md")),
+	}
+	for _, relPath := range requiredEvidence {
+		evidence, ok := ledgerTaskEvidence(runDir, taskID, relPath)
+		if !ok {
+			return fmt.Errorf("recon opencode task did not register required evidence %s", relPath)
+		}
+		if err := registeredEvidenceFileError(runDir, relPath, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+			return err
+		}
+	}
+	leadCount, err := ledgerTaskLeadCount(runDir, taskID)
+	if err != nil {
+		return err
+	}
+	if leadCount == 0 {
+		return errors.New("recon opencode task did not create any investigation leads")
+	}
+	maxLeads := cfg.Runner.MaxLeads
+	if maxLeads > 0 && leadCount > maxLeads {
+		return fmt.Errorf("recon opencode task created %d leads, exceeding configured max_leads %d", leadCount, maxLeads)
 	}
 	return nil
 }

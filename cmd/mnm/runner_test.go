@@ -236,7 +236,7 @@ exit 0
 	if err == nil {
 		t.Fatal("expected missing recon output error")
 	}
-	if !strings.Contains(err.Error(), "codebase map") {
+	if !strings.Contains(err.Error(), "recon-codebase-map.md") {
 		t.Fatalf("expected missing codebase map error, got %v", err)
 	}
 }
@@ -581,6 +581,54 @@ func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 
 func TestRunReconTaskSkipsCompletedTask(t *testing.T) {
 	runDir := t.TempDir()
+	writeRunFile(t, runDir, "evidence/recon-codebase-map.md", "# Codebase map\n\nMap.\n")
+	writeRunFile(t, runDir, "evidence/recon-risk-register.md", "# Risk register\n\nRisks.\n")
+	writeRunFile(t, runDir, "evidence/lead-auth.md", "# Lead\n\nInvestigate auth.\n")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_resume",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_map",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Recon codebase map",
+			"path":           "evidence/recon-codebase-map.md",
+			"content_sha256": runFileSHA256ForTest(t, runDir, "evidence/recon-codebase-map.md"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_resume",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_risk",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Recon risk register",
+			"path":           "evidence/recon-risk-register.md",
+			"content_sha256": runFileSHA256ForTest(t, runDir, "evidence/recon-risk-register.md"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_resume",
+		Type:     "lead.created",
+		Object:   "lead",
+		ObjectID: "lead_auth",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"title":     "Investigate auth",
+			"category":  "authz",
+			"priority":  "high",
+			"body_path": "evidence/lead-auth.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_resume",
 		Type:     "task.completed",
@@ -605,6 +653,285 @@ exit 42
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "evidence", "recon-prompt.md")); !os.IsNotExist(err) {
 		t.Fatalf("completed recon should not rewrite prompt, stat err=%v", err)
+	}
+}
+
+func TestRunReconTaskRetriesCompletedTaskWithMissingOutputs(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_resume",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_recon",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Recon completed without outputs",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+
+Investigate auth.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_resume","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"}}
+{"id":"event_recon_risk_$$","run_id":"run_resume","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_lead_$$","run_id":"run_resume","type":"lead.created","object":"lead","object_id":"lead_auth","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate auth","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_recon_done_$$","run_id":"run_resume","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_resume", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err != nil {
+		t.Fatalf("recon should retry incomplete completion, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "evidence", "recon-prompt.md")); err != nil {
+		t.Fatalf("recon should rerun and write prompt: %v", err)
+	}
+}
+
+func TestRunReconTaskRequiresContextEvidence(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing recon context evidence error")
+	}
+	if !strings.Contains(err.Error(), "did not register required evidence evidence/recon-codebase-map.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReconTaskRequiresContextEvidenceFiles(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+
+Investigate auth.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md"}}
+{"id":"event_recon_risk_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md"}}
+{"id":"event_recon_lead_$$","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_auth","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate auth","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing recon evidence file error")
+	}
+	if !strings.Contains(err.Error(), "read evidence file evidence/recon-codebase-map.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReconTaskRequiresLeads(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"}}
+{"id":"event_recon_risk_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing recon lead error")
+	}
+	if !strings.Contains(err.Error(), "did not create any investigation leads") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReconTaskRequiresRegisteredOutputHashes(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md"}}
+{"id":"event_recon_risk_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_lead_$$","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_auth","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate auth","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing recon output hash error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/recon-codebase-map.md is missing registered content hash") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReconTaskRejectsChangedRegisteredOutputs(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"}}
+{"id":"event_recon_risk_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_lead_$$","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_auth","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate auth","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Changed after registration.
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected changed recon output error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/recon-codebase-map.md changed after registration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReconTaskRejectsTooManyLeads(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-one.md" <<'EOF'
+# Lead one
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-two.md" <<'EOF'
+# Lead two
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"}}
+{"id":"event_recon_risk_$$","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_lead_one_$$","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate one","category":"authz","priority":"high","body_path":"evidence/lead-one.md"}}
+{"id":"event_recon_lead_two_$$","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"title":"Investigate two","category":"authz","priority":"medium","body_path":"evidence/lead-two.md"}}
+{"id":"event_recon_done_$$","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 1}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected too many leads error")
+	}
+	if !strings.Contains(err.Error(), "created 2 leads, exceeding configured max_leads 1") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1206,8 +1533,8 @@ EOF
 Investigate authentication boundaries.
 EOF
   cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
-{"id":"event_fake_map","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_map","task_id":"task_recon","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md"}}
-{"id":"event_fake_risk","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_risk","task_id":"task_recon","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md"}}
+{"id":"event_fake_map","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_map","task_id":"task_recon","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"65436a552f256fcf8ebab9137a9da88cf3f7423cf2803802ebaf24ad183a637d"}}
+{"id":"event_fake_risk","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_risk","task_id":"task_recon","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"5b33af9248d2149e751ada01be70c5e946e802ece2008241ee7c62d5b272d25f"}}
 {"id":"event_fake_lead","run_id":"run_test","type":"lead.created","object":"lead","object_id":"lead_fake_auth","task_id":"task_recon","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate authentication boundaries","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
 {"id":"event_fake_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"Recon completed"}}
 EOF
