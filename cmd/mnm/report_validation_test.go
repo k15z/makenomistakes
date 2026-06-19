@@ -100,6 +100,52 @@ func TestReportKnownStateIgnoresVerdictsWithoutCompletedTask(t *testing.T) {
 	}
 }
 
+func TestReportKnownStateIgnoresValidateVerdictWithoutValidationEvidence(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+
+	taskID := "task_validate_" + safeFileID(findingID)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_validate_without_evidence",
+		TaskID:   taskID,
+		Data: map[string]any{
+			"finding_id": findingID,
+			"phase":      "validate",
+			"value":      "proven",
+			"reason":     "missing validation evidence",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Completed without validation evidence.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := reportKnownState(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reportBucketForFinding(state.Verdicts[findingID]); got != "unvalidated" {
+		t.Fatalf("bucket = %q, want unvalidated", got)
+	}
+}
+
 func TestReportStatusAllowedForBucket(t *testing.T) {
 	tests := []struct {
 		bucket string

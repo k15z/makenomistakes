@@ -256,8 +256,39 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(pendingValidate) != 1 || pendingValidate[0].ID != "finding_one" {
+		t.Fatalf("validate verdict without evidence should remain pending, got %#v", pendingValidate)
+	}
+	if ledgerFindingHasVerdict(runDir, "finding_one", "validate") {
+		t.Fatal("validate verdict without validation evidence should not be complete")
+	}
+
+	notesRel := validationNotesRelPath("finding_one")
+	writeRunFile(t, runDir, notesRel, "Validation proof.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_validate_one",
+		TaskID:   "task_validate_finding_one",
+		Data: map[string]any{
+			"kind":       "markdown",
+			"title":      "Validation notes",
+			"path":       notesRel,
+			"finding_id": "finding_one",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pendingValidate, err = unvalidatedCanonicalFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(pendingValidate) != 0 {
 		t.Fatalf("expected no unvalidated canonical findings, got %#v", pendingValidate)
+	}
+	if !ledgerFindingHasVerdict(runDir, "finding_one", "validate") {
+		t.Fatal("expected validate verdict with validation evidence to be complete")
 	}
 	if ledgerReportFinalized(runDir) {
 		t.Fatal("did not expect report to be finalized yet")

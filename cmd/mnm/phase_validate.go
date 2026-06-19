@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,6 +81,7 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-validate-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
+	notesRel := validationNotesRelPath(finding.ID)
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
 		RunID:     runID,
 		TaskID:    task.TaskID,
@@ -91,6 +93,12 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		LogPath:   logPath,
 		TaskFile:  taskPath,
 		Verify: func() error {
+			if !ledgerFindingHasTaskEvidencePath(runDir, finding.ID, task.TaskID, notesRel) {
+				return fmt.Errorf("validate opencode task did not register validation evidence %s for finding %s", notesRel, finding.ID)
+			}
+			if err := validateNonEmptyValidationEvidence(runDir, notesRel); err != nil {
+				return err
+			}
 			if !ledgerFindingHasVerdict(runDir, finding.ID, "validate") {
 				return fmt.Errorf("validate opencode task did not record validation verdict for finding %s", finding.ID)
 			}
@@ -118,6 +126,22 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		return err
 	}
 	return nil
+}
+
+func validateNonEmptyValidationEvidence(runDir, relPath string) error {
+	path := filepath.Join(runDir, filepath.FromSlash(relPath))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read validation evidence %s: %w", relPath, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Errorf("validation evidence %s must not be empty", relPath)
+	}
+	return nil
+}
+
+func validationNotesRelPath(findingID string) string {
+	return filepath.ToSlash(filepath.Join("evidence", "validate-"+safeFileID(findingID)+"-notes.md"))
 }
 
 func validatePrompt(runDir, workspace string, cfg Config, finding FindingRecord) (string, error) {
