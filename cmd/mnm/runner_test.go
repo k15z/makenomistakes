@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -708,6 +709,92 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRegisterTaskStartedIsIdempotentForSameMetadata(t *testing.T) {
+	runDir := t.TempDir()
+	task := TaskRecord{
+		RunID:       "run_task_start",
+		TaskID:      "task_deduplicate",
+		Phase:       "deduplicate",
+		Title:       "Deduplicate reviewed findings",
+		Instruction: "Cluster findings.",
+	}
+	extra := map[string]any{
+		"findings": []string{"finding_one", "finding_two"},
+	}
+
+	if err := registerTaskStarted(runDir, task, extra); err != nil {
+		t.Fatalf("first task start failed: %v", err)
+	}
+	if err := registerTaskStarted(runDir, task, extra); err != nil {
+		t.Fatalf("idempotent task start failed: %v", err)
+	}
+	assertTaskStartedEventCount(t, runDir, task.TaskID, 1)
+}
+
+func TestRegisterTaskStartedIsAtomicForParallelSameMetadata(t *testing.T) {
+	runDir := t.TempDir()
+	task := TaskRecord{
+		RunID:       "run_task_start",
+		TaskID:      "task_deduplicate",
+		Phase:       "deduplicate",
+		Title:       "Deduplicate reviewed findings",
+		Instruction: "Cluster findings.",
+	}
+	extra := map[string]any{
+		"findings": []string{"finding_one", "finding_two"},
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- registerTaskStarted(runDir, task, extra)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel task start failed: %v", err)
+		}
+	}
+	assertTaskStartedEventCount(t, runDir, task.TaskID, 1)
+}
+
+func TestRegisterTaskStartedRejectsConflictingMetadata(t *testing.T) {
+	runDir := t.TempDir()
+	task := TaskRecord{
+		RunID:       "run_task_start",
+		TaskID:      "task_review_finding_auth",
+		Phase:       "review",
+		Title:       "Review: auth finding",
+		Instruction: "Review finding.",
+	}
+
+	if err := registerTaskStarted(runDir, task, map[string]any{
+		"finding_id": "finding_auth",
+	}); err != nil {
+		t.Fatalf("first task start failed: %v", err)
+	}
+	err := registerTaskStarted(runDir, task, map[string]any{
+		"finding_id": "finding_other",
+	})
+	if err == nil {
+		t.Fatal("expected conflicting task start metadata error")
+	}
+	if !strings.Contains(err.Error(), "task task_review_finding_auth already started with different metadata") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertTaskStartedEventCount(t, runDir, task.TaskID, 1)
+}
+
 func TestRunReconTaskRequiresContextEvidence(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
@@ -788,6 +875,7 @@ printf '{"type":"done","attempt":%s}\n' "$count"
 
 	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-prompt.md", 1)
 	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/opencode-recon.jsonl", 1)
+	assertTaskStartedEventCount(t, runDir, "task_recon", 1)
 }
 
 func TestRunReconTaskRequiresContextEvidenceFiles(t *testing.T) {
@@ -1394,6 +1482,23 @@ func writeRetryFakeOpenCode(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func assertTaskStartedEventCount(t *testing.T, runDir, taskID string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type == "task.started" && event.ObjectID == taskID {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("task.started event count for %s = %d, want %d", taskID, got, want)
+	}
 }
 
 func fileSizeOrZero(t *testing.T, path string) int64 {

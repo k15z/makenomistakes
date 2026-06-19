@@ -23,17 +23,7 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	if err := writeTaskFile(taskPath, task); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "task.started",
-		Object:   "task",
-		ObjectID: task.TaskID,
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"phase": task.Phase,
-			"title": task.Title,
-		},
-	}); err != nil {
+	if err := registerTaskStarted(runDir, task, nil); err != nil {
 		return err
 	}
 
