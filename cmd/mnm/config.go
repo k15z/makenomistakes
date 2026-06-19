@@ -31,17 +31,20 @@ type WorkspaceConfig struct {
 }
 
 type ModelConfig struct {
-	APIKeyEnv string `toml:"api_key_env"`
-	Default   string `toml:"default"`
-	Recon     string `toml:"recon"`
+	APIKeyEnv   string `toml:"api_key_env"`
+	Default     string `toml:"default"`
+	Recon       string `toml:"recon"`
+	Investigate string `toml:"investigate"`
 }
 
 type RunnerConfig struct {
-	CPUs           int `toml:"cpus"`
-	MemoryGB       int `toml:"memory_gb"`
-	DiskGB         int `toml:"disk_gb"`
-	TimeoutMinutes int `toml:"timeout_minutes"`
-	MaxLeads       int `toml:"max_leads"`
+	CPUs              int `toml:"cpus"`
+	MemoryGB          int `toml:"memory_gb"`
+	DiskGB            int `toml:"disk_gb"`
+	TimeoutMinutes    int `toml:"timeout_minutes"`
+	MaxLeads          int `toml:"max_leads"`
+	MaxInvestigations int `toml:"max_investigations"`
+	ParallelTasks     int `toml:"parallel_tasks"`
 }
 
 type ResolvedConfig struct {
@@ -125,6 +128,12 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 	}
 	if cfg.Runner.MaxLeads <= 0 {
 		return ResolvedConfig{}, errors.New("runner.max_leads must be greater than zero")
+	}
+	if cfg.Runner.MaxInvestigations < 0 {
+		return ResolvedConfig{}, errors.New("runner.max_investigations must not be negative")
+	}
+	if cfg.Runner.ParallelTasks < 0 {
+		return ResolvedConfig{}, errors.New("runner.parallel_tasks must not be negative")
 	}
 
 	return ResolvedConfig{

@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const opencodeVersion = "1.15.11"
+const opencodeVersion = "1.17.8"
 
 type AnalyzeRunner interface {
 	Run(context.Context, RunnerRequest) error
@@ -59,6 +59,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := extractWorkspaceSnapshot(*snapshot, workspace); err != nil {
 		return err
 	}
+	if err := ensureWorkspaceToolchains(workspace); err != nil {
+		return err
+	}
 	opencodePath, opencodeVersionOutput, err := ensureOpenCode()
 	if err != nil {
 		return err
@@ -77,6 +80,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if err := runReconTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+		return err
+	}
+	if err := runInvestigatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
 
@@ -121,7 +127,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Title:       "Recon",
 		Instruction: "Map the workspace, interpret scope, identify risks, and create focused leads for later investigation.",
 	}
-	if err := writeJSON(filepath.Join(runDir, currentTaskFile), task); err != nil {
+	if err := writeTaskFile(filepath.Join(runDir, currentTaskFile), task); err != nil {
 		return err
 	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
@@ -137,7 +143,13 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}); err != nil {
 		return err
 	}
-	prompt := reconPrompt(runDir, workspace, cfg)
+	taskWorkspace, cleanupWorkspace, err := prepareTaskWorkspace(workspace, runID, task.TaskID)
+	if err != nil {
+		return err
+	}
+	defer cleanupWorkspace()
+
+	prompt := reconPrompt(runDir, taskWorkspace, cfg)
 	promptPath := filepath.Join(runDir, "evidence", "recon-prompt.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), filePerm); err != nil {
 		return err
@@ -157,7 +169,14 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		return err
 	}
 	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
-	if err := runOpenCodeRecon(opencodePath, workspace, runDir, reconModel(cfg), prompt, logPath); err != nil {
+	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		TaskID:  task.TaskID,
+		Phase:   task.Phase,
+		Title:   "mnm recon",
+		Model:   phaseModel(cfg, "recon"),
+		Prompt:  prompt,
+		LogPath: logPath,
+	}); err != nil {
 		return err
 	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
@@ -180,8 +199,19 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	return nil
 }
 
-func runOpenCodeRecon(opencodePath, workspace, runDir, model, prompt, logPath string) error {
-	logFile, err := os.Create(logPath)
+type opencodeTask struct {
+	TaskID   string
+	Phase    string
+	LeadID   string
+	Title    string
+	Model    string
+	Prompt   string
+	LogPath  string
+	TaskFile string
+}
+
+func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
+	logFile, err := os.Create(task.LogPath)
 	if err != nil {
 		return err
 	}
@@ -190,25 +220,62 @@ func runOpenCodeRecon(opencodePath, workspace, runDir, model, prompt, logPath st
 		"run",
 		"--format", "json",
 		"--dir", workspace,
-		"--model", model,
-		"--title", "mnm recon",
+		"--model", task.Model,
+		"--title", task.Title,
 		"--dangerously-skip-permissions",
-		prompt,
+		task.Prompt,
 	)
-	command.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"MNM_RUN_DIR="+runDir,
+		"MNM_TASK_ID="+task.TaskID,
+		"MNM_PHASE="+task.Phase,
 		"PATH=/tmp:"+os.Getenv("PATH"),
 	)
+	if task.LeadID != "" {
+		env = append(env, "MNM_LEAD_ID="+task.LeadID)
+	}
+	if task.TaskFile != "" {
+		env = append(env, taskFileEnv+"="+task.TaskFile)
+	}
+	command.Env = env
 	command.Stdout = io.MultiWriter(os.Stdout, logFile)
 	command.Stderr = os.Stderr
 	return command.Run()
 }
 
-func reconModel(cfg Config) string {
-	if strings.TrimSpace(cfg.Models.Recon) != "" {
-		return strings.TrimSpace(cfg.Models.Recon)
+func prepareTaskWorkspace(baseWorkspace, runID, taskID string) (string, func(), error) {
+	workspace := filepath.Join(os.TempDir(), "mnm-task-workspace-"+safeFileID(runID)+"-"+safeFileID(taskID))
+	cleanup := func() { _ = os.RemoveAll(workspace) }
+	if err := os.RemoveAll(workspace); err != nil {
+		return "", cleanup, err
 	}
-	return strings.TrimSpace(cfg.Models.Default)
+	if err := os.MkdirAll(workspace, dirPerm); err != nil {
+		return "", cleanup, err
+	}
+	if err := copyDirContents(baseWorkspace, workspace); err != nil {
+		cleanup()
+		return "", cleanup, err
+	}
+	return workspace, cleanup, nil
+}
+
+func phaseModel(cfg Config, phase string) string {
+	defaultModel := strings.TrimSpace(cfg.Models.Default)
+	reconModel := strings.TrimSpace(cfg.Models.Recon)
+	switch phase {
+	case "recon":
+		if reconModel != "" {
+			return reconModel
+		}
+	case "investigate":
+		if strings.TrimSpace(cfg.Models.Investigate) != "" {
+			return strings.TrimSpace(cfg.Models.Investigate)
+		}
+		if defaultModel == "" {
+			return reconModel
+		}
+	}
+	return defaultModel
 }
 
 func validateReconLedgerOutputs(runDir, taskID string) error {
@@ -258,6 +325,19 @@ func validateReconLedgerOutputs(runDir, taskID string) error {
 	return nil
 }
 
+func ledgerTaskCompleted(runDir, taskID string) bool {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return false
+	}
+	for _, event := range events {
+		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
+			return event.Data["status"] == "completed"
+		}
+	}
+	return false
+}
+
 func reconPrompt(runDir, workspace string, cfg Config) string {
 	scope := strings.TrimSpace(cfg.Instructions.Scope)
 	if scope == "" {
@@ -279,13 +359,15 @@ Required actions:
 
 1. Run: mnm task current
 2. Inspect the workspace using local tools such as find, rg, package manifests, framework configs, tests, docs, and build files.
-3. Write a concise codebase map to: %[2]s/evidence/recon-codebase-map.md
-4. Register it with: mnm evidence add --kind markdown --title "Recon codebase map" --path %[2]s/evidence/recon-codebase-map.md
-5. Write a risk register to: %[2]s/evidence/recon-risk-register.md
-6. Register it with: mnm evidence add --kind markdown --title "Recon risk register" --path %[2]s/evidence/recon-risk-register.md
-7. Create focused leads. For each lead, write a body file under %[2]s/evidence/, then run: mnm lead create --title "Specific lead title" --category security --priority medium --body-file %[2]s/evidence/lead-specific-name.md
-8. Create no more than %[3]d leads.
-9. Complete the task with: mnm task complete --status completed --summary "Recon completed"
+3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
+4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
+5. Write a concise codebase map to: %[2]s/evidence/recon-codebase-map.md
+6. Register it with: mnm evidence add --kind markdown --title "Recon codebase map" --path %[2]s/evidence/recon-codebase-map.md
+7. Write a risk register to: %[2]s/evidence/recon-risk-register.md
+8. Register it with: mnm evidence add --kind markdown --title "Recon risk register" --path %[2]s/evidence/recon-risk-register.md
+9. Create focused leads. For each lead, write a body file under %[2]s/evidence/, then run: mnm lead create --title "Specific lead title" --category security --priority medium --body-file %[2]s/evidence/lead-specific-name.md
+10. Create no more than %[3]d leads.
+11. Complete the task with: mnm task complete --status completed --summary "Recon completed"
 
 Lead quality bar:
 

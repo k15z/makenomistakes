@@ -140,6 +140,7 @@ exclude = []
 api_key_env = "OPENROUTER_API_KEY"
 default = "openrouter/z-ai/glm-5.2"
 recon = "openrouter/z-ai/glm-5.2"
+investigate = "openrouter/z-ai/glm-5.2"
 
 [runner]
 cpus = 4
@@ -147,6 +148,8 @@ memory_gb = 8
 disk_gb = 80
 timeout_minutes = 120
 max_leads = 24
+max_investigations = 24
+parallel_tasks = 2
 `
 }
 
