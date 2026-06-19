@@ -14,8 +14,10 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		Title:       "Finalize report",
 		Instruction: "Render the final Markdown and JSON audit reports from the ledger and evidence files.",
 	}
-	if ledgerReportFinalized(runDir) {
-		return validateLatestFinalizedReport(runDir, task)
+	if report, ok, err := latestFinalizedReportForTask(runDir, task.TaskID); err != nil {
+		return err
+	} else if ok && ledgerTaskCompleted(runDir, task.TaskID) {
+		return validateFinalizedReport(runDir, task, report)
 	}
 	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
 	if err := writeTaskFile(taskPath, task); err != nil {
@@ -93,10 +95,14 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	}); err != nil {
 		return err
 	}
-	if !ledgerReportFinalized(runDir) {
+	report, ok, err := latestFinalizedReportForTask(runDir, task.TaskID)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return fmt.Errorf("finalize opencode task did not register report outputs")
 	}
-	if err := validateLatestFinalizedReport(runDir, task); err != nil {
+	if err := validateFinalizedReport(runDir, task, report); err != nil {
 		return err
 	}
 	if !ledgerTaskCompleted(runDir, task.TaskID) {
@@ -105,15 +111,20 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	return nil
 }
 
-func validateLatestFinalizedReport(runDir string, task TaskRecord) error {
+func latestFinalizedReportForTask(runDir, taskID string) (ReportRecord, bool, error) {
 	reports, err := ledgerReports(runDir)
 	if err != nil {
-		return err
+		return ReportRecord{}, false, err
 	}
-	if len(reports) == 0 {
-		return fmt.Errorf("finalize opencode task did not register report outputs")
+	for i := len(reports) - 1; i >= 0; i-- {
+		if reports[i].TaskID == taskID {
+			return reports[i], true, nil
+		}
 	}
-	report := reports[len(reports)-1]
+	return ReportRecord{}, false, nil
+}
+
+func validateFinalizedReport(runDir string, task TaskRecord, report ReportRecord) error {
 	if report.MarkdownPath == "" || report.JSONPath == "" {
 		return fmt.Errorf("finalized report %s is missing markdown_path or json_path", report.ID)
 	}
