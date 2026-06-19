@@ -44,7 +44,8 @@ func TestAnalyzePreparesRunState(t *testing.T) {
 	}
 
 	var configSnapshotPath string
-	if err := db.QueryRow(`select config_snapshot_path from runs where status = ?`, RunStatusPrepared).Scan(&configSnapshotPath); err != nil {
+	var snapshotPath string
+	if err := db.QueryRow(`select config_snapshot_path, snapshot_path from runs where status = ?`, RunStatusPrepared).Scan(&configSnapshotPath, &snapshotPath); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(configSnapshotPath, filepath.Join("mnm.toml")) {
@@ -52,6 +53,12 @@ func TestAnalyzePreparesRunState(t *testing.T) {
 	}
 	if _, err := os.Stat(configSnapshotPath); err != nil {
 		t.Fatalf("config snapshot not readable: %v", err)
+	}
+	if !strings.HasSuffix(snapshotPath, "snapshot.tar.zst") {
+		t.Fatalf("expected snapshot path, got %q", snapshotPath)
+	}
+	if _, err := os.Stat(snapshotPath); err != nil {
+		t.Fatalf("snapshot not readable: %v", err)
 	}
 }
 

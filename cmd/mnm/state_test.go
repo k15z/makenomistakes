@@ -22,6 +22,7 @@ func TestStoreCreatesAndReadsRun(t *testing.T) {
 		WorkspaceRoot:      dir,
 		ConfigPath:         filepath.Join(dir, "mnm.toml"),
 		ConfigSnapshotPath: filepath.Join(dir, ".mnm", "runs", "run_test", "mnm.toml"),
+		SnapshotPath:       filepath.Join(dir, ".mnm", "runs", "run_test", "snapshot.tar.zst"),
 		RunDir:             filepath.Join(dir, ".mnm", "runs", "run_test"),
 		Model:              "openrouter/z-ai/glm-5.2",
 		CreatedAt:          now,
