@@ -112,6 +112,7 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-review-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:     runID,
 		TaskID:    task.TaskID,
 		Phase:     task.Phase,
 		FindingID: finding.ID,

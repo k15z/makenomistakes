@@ -76,6 +76,7 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-deduplicate.jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
 		Title:    "mnm deduplicate",

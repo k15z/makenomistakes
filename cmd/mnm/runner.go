@@ -10,9 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const opencodeVersion = "1.17.8"
+
+const openCodeMaxAttempts = 3
+
+var openCodeRetryDelay = 2 * time.Second
 
 type AnalyzeRunner interface {
 	Run(context.Context, RunnerRequest) error
@@ -179,6 +184,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}
 	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+		RunID:   runID,
 		TaskID:  task.TaskID,
 		Phase:   task.Phase,
 		Title:   "mnm recon",
@@ -209,6 +215,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 }
 
 type opencodeTask struct {
+	RunID     string
 	TaskID    string
 	Phase     string
 	LeadID    string
@@ -221,7 +228,34 @@ type opencodeTask struct {
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
-	logFile, err := os.Create(task.LogPath)
+	var lastErr error
+	attempts := 0
+	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
+		attempts = attempt
+		err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == openCodeMaxAttempts || !retryableOpenCodeError(task.LogPath, err) {
+			break
+		}
+		if err := appendOpenCodeRetryEvent(runDir, task, attempt, openCodeMaxAttempts, err); err != nil {
+			return err
+		}
+		if openCodeRetryDelay > 0 {
+			time.Sleep(openCodeRetryDelay * time.Duration(attempt))
+		}
+	}
+	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w", task.TaskID, attempts, lastErr)
+}
+
+func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) error {
+	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if attempt > 1 {
+		flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	}
+	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
 	if err != nil {
 		return err
 	}
@@ -252,8 +286,55 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	}
 	command.Env = env
 	command.Stdout = io.MultiWriter(os.Stdout, logFile)
-	command.Stderr = os.Stderr
+	command.Stderr = io.MultiWriter(os.Stderr, logFile)
 	return command.Run()
+}
+
+func retryableOpenCodeError(logPath string, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	if b, readErr := os.ReadFile(logPath); readErr == nil {
+		text += "\n" + strings.ToLower(string(b))
+	}
+	for _, marker := range []string{
+		`"code":502`,
+		"provider_unavailable",
+		"network connection lost",
+		"bad gateway",
+		"service unavailable",
+		"temporarily unavailable",
+		"temporary failure",
+		"connection reset",
+		"econnreset",
+		"timeout",
+		"timed out",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendOpenCodeRetryEvent(runDir string, task opencodeTask, attempt, maxAttempts int, cause error) error {
+	if task.RunID == "" {
+		return nil
+	}
+	return appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    task.RunID,
+		Type:     "task.retrying",
+		Object:   "task",
+		ObjectID: task.TaskID,
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"phase":        task.Phase,
+			"attempt":      attempt,
+			"max_attempts": maxAttempts,
+			"reason":       cause.Error(),
+		},
+	})
 }
 
 func prepareTaskWorkspace(baseWorkspace, runID, taskID string) (string, func(), error) {
