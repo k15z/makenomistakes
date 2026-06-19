@@ -775,7 +775,7 @@ func requireEvidenceOwnerPhase(task TaskRecord, leadID, findingID string) error 
 	}
 }
 
-func ledgerTaskEvidencePathUnlocked(runDir, taskID, relPath string) (EvidenceRecord, bool, error) {
+func ledgerTaskEvidenceRegistrationUnlocked(runDir string, registration taskEvidenceRegistration) (EvidenceRecord, bool, error) {
 	events, err := readLedgerEventsUnlocked(runDir)
 	if err != nil {
 		return EvidenceRecord{}, false, err
@@ -783,7 +783,10 @@ func ledgerTaskEvidencePathUnlocked(runDir, taskID, relPath string) (EvidenceRec
 	var match EvidenceRecord
 	found := false
 	for _, item := range evidenceFromEvents(events) {
-		if item.TaskID == taskID && item.Path == relPath {
+		if item.TaskID == registration.TaskID &&
+			item.Path == registration.Path &&
+			item.LeadID == registration.LeadID &&
+			item.FindingID == registration.FindingID {
 			match = item
 			found = true
 		}
@@ -839,7 +842,7 @@ func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) 
 		return "", err
 	}
 	defer unlock()
-	existing, exists, err := ledgerTaskEvidencePathUnlocked(runDir, registration.TaskID, registration.Path)
+	existing, exists, err := ledgerTaskEvidenceRegistrationUnlocked(runDir, registration)
 	if err != nil {
 		return "", err
 	}
