@@ -63,6 +63,7 @@ Usage:
   mnm init [--force] [path]
   mnm analyze [--prepare-only] [--keep-vm] [--resume RUN_ID] [path]
   mnm runs [--json] [path]
+  mnm report show [--json] RUN_ID [path]
   mnm task|lead|finding|evidence|verdict|report ...
 
 Commands:
@@ -74,7 +75,7 @@ Commands:
   finding    Create candidate findings.
   evidence   Register evidence files.
   verdict    Record review, deduplication, or validation decisions.
-  report     Finalize generated reports.
+  report     Finalize or show generated reports.
   runner     Internal VM-side runner entrypoint.
 `)
 }

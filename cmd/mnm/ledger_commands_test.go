@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLedgerCommandFlow(t *testing.T) {
@@ -466,6 +467,123 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 	if !ledgerReportFinalized(runDir) {
 		t.Fatal("expected traceable report to be finalized")
+	}
+}
+
+func TestReportShowPrintsFinalizedMarkdown(t *testing.T) {
+	workspace, runRecord := newStoredReportRun(t)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr); err != nil {
+		t.Fatalf("report show failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := stdout.String(); got != "# Final Report\n\nReal findings.\n" {
+		t.Fatalf("unexpected markdown report:\n%s", got)
+	}
+}
+
+func TestReportShowPrintsFinalizedJSON(t *testing.T) {
+	workspace, runRecord := newStoredReportRun(t)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"report", "show", "--json", runRecord.ID, workspace}, &stdout, &stderr); err != nil {
+		t.Fatalf("report show failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"run_id":"`+runRecord.ID+`"`) {
+		t.Fatalf("unexpected JSON report:\n%s", stdout.String())
+	}
+}
+
+func TestReportShowRequiresFinalizedReport(t *testing.T) {
+	workspace := t.TempDir()
+	runRecord := testRunRecord(workspace, "run_no_report", RunStatusCompleted, nowForTest())
+	if err := os.MkdirAll(runRecord.RunDir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(runRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing finalized report error")
+	}
+	if !strings.Contains(err.Error(), "has no finalized report") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReportShowRequiresCompletedFinalizeTask(t *testing.T) {
+	workspace, runRecord := newStoredReportRun(t)
+	if err := appendLedgerEvent(runRecord.RunDir, LedgerEvent{
+		RunID:    runRecord.ID,
+		Type:     "report.finalized",
+		Object:   "report",
+		ObjectID: "report_partial",
+		TaskID:   "task_finalize_incomplete",
+		Data: map[string]any{
+			"markdown_path": "report.md",
+			"json_path":     "report.json",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runRecord.RunDir, LedgerEvent{
+		RunID:    runRecord.ID,
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_finalize",
+		TaskID:   "task_finalize",
+		Data: map[string]any{
+			"status":  "failed",
+			"summary": "later finalize failed",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected incomplete finalized report error")
+	}
+	if !strings.Contains(err.Error(), "has no finalized report") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReportShowRejectsSymlinkReport(t *testing.T) {
+	workspace, runRecord := newStoredReportRun(t)
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside secret"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(runRecord.RunDir, "report.md")
+	if err := os.Remove(reportPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, reportPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected symlink report error")
+	}
+	if !strings.Contains(err.Error(), "must not be a symlink") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "outside secret") {
+		t.Fatalf("report show leaked symlink target:\n%s", stdout.String())
 	}
 }
 
@@ -1001,6 +1119,62 @@ func appendReviewAcceptedVerdictForTest(t *testing.T, runDir, findingID string) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newStoredReportRun(t *testing.T) (string, RunRecord) {
+	t.Helper()
+	workspace := t.TempDir()
+	runRecord := testRunRecord(workspace, "run_report", RunStatusCompleted, nowForTest())
+	if err := os.MkdirAll(runRecord.RunDir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(runRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRecord.RunDir, "report.md"), []byte("# Final Report\n\nReal findings.\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRecord.RunDir, "report.json"), []byte(`{"run_id":"`+runRecord.ID+`","counts":{"findings_proven":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[]}`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runRecord.RunDir, LedgerEvent{
+		RunID:    runRecord.ID,
+		Type:     "report.finalized",
+		Object:   "report",
+		ObjectID: "report_final",
+		TaskID:   "task_finalize",
+		Data: map[string]any{
+			"markdown_path": "report.md",
+			"json_path":     "report.json",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runRecord.RunDir, LedgerEvent{
+		RunID:    runRecord.ID,
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_finalize",
+		TaskID:   "task_finalize",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Finalized report",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return workspace, runRecord
+}
+
+func nowForTest() time.Time {
+	return time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC)
 }
 
 func eventTypes(events []LedgerEvent) []string {

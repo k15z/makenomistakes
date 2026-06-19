@@ -31,6 +31,8 @@ events.
     exits, for local debugging.
   - `mnm runs`: list local run IDs, statuses, resumability, update times, and
     run directories for resume and report lookup.
+  - `mnm report show <run_id>`: print the latest finalized Markdown or JSON
+    report for a local run.
   - `mnm runner`: hidden VM-side runner entrypoint.
   - `mnm task`, `mnm lead`, `mnm finding`, `mnm evidence`, `mnm verdict`, and
     `mnm report`: VM-side ledger commands used by `opencode`.
