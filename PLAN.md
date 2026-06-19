@@ -231,6 +231,8 @@ Finding statuses:
   ledger evidence for the reported finding.
 - Final report validation rejects proven findings that do not cite at least one
   registered evidence path.
+- Final report validation rejects status fields that do not match the report
+  bucket implied by ledger verdicts.
 
 ## PR Sequence
 

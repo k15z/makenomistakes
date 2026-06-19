@@ -211,6 +211,10 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 			return fmt.Errorf("%s.%w", prefix, err)
 		}
 	}
+	status, _ := requiredStringField(item, "status")
+	if !reportStatusAllowedForBucket(bucket, status) {
+		return fmt.Errorf("%s.status = %q is not valid for bucket %q; expected one of: %s", prefix, status, bucket, reportStatusValues(bucket))
+	}
 	sourceLeadID, err := requiredStringField(item, "source_lead_id")
 	if err != nil {
 		return fmt.Errorf("%s.%w", prefix, err)
@@ -247,6 +251,46 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		}
 	}
 	return nil
+}
+
+func reportStatusAllowedForBucket(bucket, status string) bool {
+	for _, allowed := range reportStatusesForBucket(bucket) {
+		if status == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func reportStatusValues(bucket string) string {
+	values := reportStatusesForBucket(bucket)
+	if len(values) == 0 {
+		return ""
+	}
+	out := values[0]
+	for _, value := range values[1:] {
+		out += ", " + value
+	}
+	return out
+}
+
+func reportStatusesForBucket(bucket string) []string {
+	switch bucket {
+	case "proven":
+		return []string{"validation_proven"}
+	case "inconclusive":
+		return []string{"validation_inconclusive"}
+	case "failed":
+		return []string{"validation_failed"}
+	case "rejected":
+		return []string{"review_rejected"}
+	case "duplicate":
+		return []string{"duplicate"}
+	case "unvalidated":
+		return []string{"candidate", "reviewed", "validation_pending"}
+	default:
+		return nil
+	}
 }
 
 func reportBucketForFinding(verdicts map[string]VerdictRecord) string {

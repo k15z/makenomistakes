@@ -99,3 +99,30 @@ func TestReportKnownStateIgnoresVerdictsWithoutCompletedTask(t *testing.T) {
 		t.Fatalf("bucket = %q, want unvalidated", got)
 	}
 }
+
+func TestReportStatusAllowedForBucket(t *testing.T) {
+	tests := []struct {
+		bucket string
+		status string
+		want   bool
+	}{
+		{bucket: "proven", status: "validation_proven", want: true},
+		{bucket: "proven", status: "validation_failed", want: false},
+		{bucket: "inconclusive", status: "validation_inconclusive", want: true},
+		{bucket: "failed", status: "validation_failed", want: true},
+		{bucket: "rejected", status: "review_rejected", want: true},
+		{bucket: "duplicate", status: "duplicate", want: true},
+		{bucket: "unvalidated", status: "candidate", want: true},
+		{bucket: "unvalidated", status: "reviewed", want: true},
+		{bucket: "unvalidated", status: "validation_pending", want: true},
+		{bucket: "unvalidated", status: "validation_proven", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.bucket+"/"+test.status, func(t *testing.T) {
+			if got := reportStatusAllowedForBucket(test.bucket, test.status); got != test.want {
+				t.Fatalf("allowed = %t, want %t", got, test.want)
+			}
+		})
+	}
+}

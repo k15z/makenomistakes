@@ -615,6 +615,51 @@ func TestReportFinalizeRejectsProvenFindingWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsStatusThatDoesNotMatchBucket(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_failed",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "The bucket is proven, but status says failed.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected mismatched status error")
+	}
+	if !strings.Contains(err.Error(), `status = "validation_failed" is not valid for bucket "proven"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with mismatched status should not be finalized")
+	}
+}
+
 func TestReportShowPrintsFinalizedMarkdown(t *testing.T) {
 	workspace, runRecord := newStoredReportRun(t)
 
