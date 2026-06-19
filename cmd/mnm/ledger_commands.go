@@ -642,7 +642,7 @@ func reportFinalizeCommand(args []string, stdout, stderr io.Writer) error {
 	if err := validateReportArtifacts(runDir, task, markdownRel, jsonRel); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
+	event, err := prepareLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
 		Type:     "report.finalized",
 		Object:   "report",
@@ -652,11 +652,71 @@ func reportFinalizeCommand(args []string, stdout, stderr io.Writer) error {
 			"markdown_path": markdownRel,
 			"json_path":     jsonRel,
 		},
-	}); err != nil {
+	})
+	if err != nil {
+		return err
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	existing, exists, err := ledgerTaskFinalizedReportUnlocked(runDir, task.TaskID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if existing.MarkdownPath == markdownRel && existing.JSONPath == jsonRel {
+			fmt.Fprintln(stdout, "report finalized")
+			return nil
+		}
+		return fmt.Errorf("task %s already finalized report %s with different paths", task.TaskID, existing.ID)
+	}
+	if err := appendLedgerEventUnlocked(runDir, event); err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, "report finalized")
 	return nil
+}
+
+func ledgerTaskFinalizedReport(runDir, taskID string) (ReportRecord, bool, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return ReportRecord{}, false, err
+	}
+	return taskFinalizedReportFromEvents(events, taskID), taskFinalizedReportExists(events, taskID), nil
+}
+
+func ledgerTaskFinalizedReportUnlocked(runDir, taskID string) (ReportRecord, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return ReportRecord{}, false, err
+	}
+	return taskFinalizedReportFromEvents(events, taskID), taskFinalizedReportExists(events, taskID), nil
+}
+
+func taskFinalizedReportFromEvents(events []LedgerEvent, taskID string) ReportRecord {
+	var report ReportRecord
+	for _, event := range events {
+		if event.Type != "report.finalized" || event.Object != "report" || event.TaskID != taskID {
+			continue
+		}
+		report = ReportRecord{
+			ID:           event.ObjectID,
+			MarkdownPath: stringData(event.Data, "markdown_path"),
+			JSONPath:     stringData(event.Data, "json_path"),
+		}
+	}
+	return report
+}
+
+func taskFinalizedReportExists(events []LedgerEvent, taskID string) bool {
+	for _, event := range events {
+		if event.Type == "report.finalized" && event.Object == "report" && event.TaskID == taskID {
+			return true
+		}
+	}
+	return false
 }
 
 func currentTaskForCommand(runDirFlag string) (string, TaskRecord, error) {

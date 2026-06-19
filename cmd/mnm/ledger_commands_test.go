@@ -404,6 +404,106 @@ func TestReportFinalizeRejectsNullScalarFields(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeIsIdempotentForSamePaths(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first report finalize failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent report finalize failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "report finalized") {
+		t.Fatalf("unexpected stdout: %s", stdout.String())
+	}
+	assertReportFinalizedEventCount(t, runDir, "task_recon", 1)
+}
+
+func TestReportFinalizeIsAtomicForParallelSamePaths(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
+
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"report", "finalize",
+				"--run-dir", runDir,
+				"--markdown", reportMD,
+				"--json", reportJSON,
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel report finalize failed: %v", err)
+		}
+	}
+	assertReportFinalizedEventCount(t, runDir, "task_recon", 1)
+}
+
+func TestReportFinalizeRejectsConflictingPathsForSameTask(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
+	altReportMD := writeRunFile(t, runDir, "alt-report.md", "# Alternate Report")
+	altReportJSON := writeRunFile(t, runDir, "alt-report.json", validReportJSON(t, "run_test", "alt-report.md", "alt-report.json", nil))
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first report finalize failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", altReportMD,
+		"--json", altReportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting finalized report path error")
+	}
+	if !strings.Contains(err.Error(), "already finalized report") || !strings.Contains(err.Error(), "different paths") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertReportFinalizedEventCount(t, runDir, "task_recon", 1)
+}
+
 func TestReportFinalizeValidatesFindingItems(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
@@ -2825,6 +2925,23 @@ func assertTaskCompletedEventCount(t *testing.T, runDir, taskID string, want int
 	}
 	if got != want {
 		t.Fatalf("task.completed event count for %s = %d, want %d", taskID, got, want)
+	}
+}
+
+func assertReportFinalizedEventCount(t *testing.T, runDir, taskID string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type == "report.finalized" && event.TaskID == taskID {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("report.finalized event count for %s = %d, want %d", taskID, got, want)
 	}
 }
 
