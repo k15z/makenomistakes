@@ -201,6 +201,7 @@ JSON report requirements:
 - For each duplicate finding object, also include canonical_finding_id matching the deduplication verdict.
 - "verdicts" must exactly match ledger verdicts in phase order using strings like "review accepted", "deduplicate canonical", and "validation proven".
 - Use empty arrays instead of null for absent lists.
+- "affected_paths" entries must be clean slash-separated relative workspace paths, never absolute paths, empty strings, or paths containing ".." traversal.
 - The JSON must parse with standard JSON parsers.
 - "id" must be the real ledger ID of a finding, and each "evidence_paths" entry must point to evidence that was registered for that finding through mnm evidence add.
 - Every finding in "proven" must include at least one evidence_paths entry.

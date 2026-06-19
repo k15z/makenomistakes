@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -262,12 +263,17 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if !stringSlicesEqual(verdicts, expectedVerdicts) {
 		return fmt.Errorf("%s.verdicts = %q, want %q from ledger", prefix, verdicts, expectedVerdicts)
 	}
-	for _, field := range []string{"evidence_paths", "affected_paths"} {
-		if _, err := requiredStringArrayField(item, field); err != nil {
-			return fmt.Errorf("%s.%w", prefix, err)
-		}
+	evidencePaths, err := requiredStringArrayField(item, "evidence_paths")
+	if err != nil {
+		return fmt.Errorf("%s.%w", prefix, err)
 	}
-	evidencePaths, _ := requiredStringArrayField(item, "evidence_paths")
+	affectedPaths, err := requiredStringArrayField(item, "affected_paths")
+	if err != nil {
+		return fmt.Errorf("%s.%w", prefix, err)
+	}
+	if err := validateAffectedPaths(prefix, affectedPaths); err != nil {
+		return err
+	}
 	if bucket == "proven" && len(evidencePaths) == 0 {
 		return fmt.Errorf("%s.evidence_paths must include at least one registered evidence path for a proven finding", prefix)
 	}
@@ -282,6 +288,35 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		}
 		if err := registeredEvidenceFileError(runDir, evidenceRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 			return fmt.Errorf("%s.evidence_paths contains unusable evidence %q: %w", prefix, evidencePath, err)
+		}
+	}
+	return nil
+}
+
+func validateAffectedPaths(prefix string, paths []string) error {
+	for i, path := range paths {
+		itemPrefix := fmt.Sprintf("%s.affected_paths[%d]", prefix, i)
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("%s must not be empty", itemPrefix)
+		}
+		if path != strings.TrimSpace(path) {
+			return fmt.Errorf("%s must not contain leading or trailing whitespace", itemPrefix)
+		}
+		if strings.Contains(path, "\\") {
+			return fmt.Errorf("%s = %q must use slash-separated relative paths", itemPrefix, path)
+		}
+		if pathpkg.IsAbs(path) {
+			return fmt.Errorf("%s = %q must be a relative workspace path", itemPrefix, path)
+		}
+		if len(path) >= 2 && path[1] == ':' {
+			return fmt.Errorf("%s = %q must be a relative workspace path", itemPrefix, path)
+		}
+		clean := pathpkg.Clean(path)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("%s = %q must be a relative workspace path", itemPrefix, path)
+		}
+		if clean != path {
+			return fmt.Errorf("%s = %q, want clean relative path %q", itemPrefix, path, clean)
 		}
 	}
 	return nil

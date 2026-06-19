@@ -727,6 +727,97 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsInvalidAffectedPaths(t *testing.T) {
+	tests := []struct {
+		name          string
+		affectedPath  string
+		wantErrSubstr string
+	}{
+		{
+			name:          "empty",
+			affectedPath:  "",
+			wantErrSubstr: "affected_paths[0] must not be empty",
+		},
+		{
+			name:          "leading whitespace",
+			affectedPath:  " server/auth.go",
+			wantErrSubstr: "must not contain leading or trailing whitespace",
+		},
+		{
+			name:          "absolute path",
+			affectedPath:  "/etc/passwd",
+			wantErrSubstr: "must be a relative workspace path",
+		},
+		{
+			name:          "windows absolute path",
+			affectedPath:  "C:/Windows/System32",
+			wantErrSubstr: "must be a relative workspace path",
+		},
+		{
+			name:          "parent traversal",
+			affectedPath:  "../secret.txt",
+			wantErrSubstr: "must be a relative workspace path",
+		},
+		{
+			name:          "unclean path",
+			affectedPath:  "server/../auth.go",
+			wantErrSubstr: "want clean relative path",
+		},
+		{
+			name:          "backslash path",
+			affectedPath:  `server\auth.go`,
+			wantErrSubstr: "must use slash-separated relative paths",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runDir := newLedgerTestRun(t)
+			leadID := createLeadForTest(t, runDir)
+			findingID := createFindingForTest(t, runDir, leadID)
+			proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+			proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+			recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+			recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+			recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+			reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+			reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+				{
+					"id":             findingID,
+					"title":          "Missing authorization check",
+					"category":       "authz",
+					"severity":       "high",
+					"confidence":     "medium",
+					"source_lead_id": leadID,
+					"status":         "validation_proven",
+					"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
+					"evidence_paths": []string{proofRel},
+					"summary":        "Traceable finding with an invalid affected path.",
+					"affected_paths": []string{test.affectedPath},
+				},
+			}))
+
+			var stdout, stderr bytes.Buffer
+			err := run([]string{
+				"report", "finalize",
+				"--run-dir", runDir,
+				"--markdown", reportMD,
+				"--json", reportJSON,
+			}, &stdout, &stderr)
+			if err == nil {
+				t.Fatal("expected invalid affected path error")
+			}
+			if !strings.Contains(err.Error(), test.wantErrSubstr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ledgerReportFinalized(runDir) {
+				t.Fatal("report with invalid affected path should not be finalized")
+			}
+		})
+	}
+}
+
 func TestReportFinalizeRejectsFindingMetadataMismatch(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
