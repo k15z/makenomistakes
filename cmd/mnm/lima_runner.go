@@ -94,6 +94,15 @@ func (runner LimaRunner) copyInputs(ctx context.Context, instanceName, payloadPa
 			return err
 		}
 	}
+	if request.Resume {
+		if err := runner.Executor.Run(ctx, "limactl", "shell", instanceName, "bash", "-lc", "rm -rf /tmp/mnm-run && mkdir -p /tmp/mnm-run"); err != nil {
+			return err
+		}
+		runDirContents := filepath.Clean(request.Run.RunDir) + string(filepath.Separator) + "."
+		if err := runner.Executor.Run(ctx, "limactl", "copy", "--backend=scp", "-r", runDirContents, instanceName+":/tmp/mnm-run"); err != nil {
+			return err
+		}
+	}
 	if request.ModelAPIKey != "" {
 		authPath, cleanup, err := writeOpenCodeAuthFile(request.ModelAPIKey)
 		if err != nil {
@@ -118,8 +127,8 @@ func guestRunnerCommand(run RunRecord) string {
 		bootstrapAuditToolbeltCommand(),
 		"mkdir -p \"$HOME/.local/share/opencode\"",
 		"if [ -f /tmp/opencode-auth.json ]; then mv /tmp/opencode-auth.json \"$HOME/.local/share/opencode/auth.json\"; chmod 600 \"$HOME/.local/share/opencode/auth.json\"; fi",
-		"rm -rf /tmp/mnm-run",
 		"mkdir -p /tmp/mnm-run",
+		"rm -f /tmp/mnm-run/.events.lock",
 		fmt.Sprintf("/tmp/mnm runner --run-id %s --run-dir /tmp/mnm-run --snapshot /tmp/snapshot.tar.zst --config /tmp/mnm.toml", shellQuote(run.ID)),
 	}, "\n")
 }

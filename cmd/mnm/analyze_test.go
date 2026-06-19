@@ -135,6 +135,96 @@ func TestAnalyzeRunsConfiguredRunnerByDefault(t *testing.T) {
 	}
 }
 
+func TestAnalyzeResumesPreparedRun(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		PrepareOnly:  true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, &recordingRunner{}); err != nil {
+		t.Fatalf("prepare analyze failed: %v", err)
+	}
+	runID := onlyRunIDWithStatus(t, dir, RunStatusPrepared)
+
+	stdout.Reset()
+	runner := &recordingRunner{}
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		ResumeRunID:  runID,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, runner); err != nil {
+		t.Fatalf("resume analyze failed: %v", err)
+	}
+	if !runner.called {
+		t.Fatal("expected resume to call runner")
+	}
+	if runner.request.Run.ID != runID {
+		t.Fatalf("resumed runner got run id %q, want %q", runner.request.Run.ID, runID)
+	}
+	if !runner.request.Resume {
+		t.Fatal("expected resumed runner request to be marked Resume")
+	}
+	if !strings.Contains(stdout.String(), "resuming run "+runID) {
+		t.Fatalf("stdout missing resume message:\n%s", stdout.String())
+	}
+	if got := runCount(t, dir); got != 1 {
+		t.Fatalf("resume created %d runs, want 1", got)
+	}
+	_ = onlyRunIDWithStatus(t, dir, RunStatusCompleted)
+}
+
+func TestAnalyzeRejectsCompletedResume(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, &recordingRunner{}); err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	runID := onlyRunIDWithStatus(t, dir, RunStatusCompleted)
+
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		ResumeRunID:  runID,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, &recordingRunner{})
+	if err == nil {
+		t.Fatal("expected completed resume to fail")
+	}
+	if !strings.Contains(err.Error(), "cannot be resumed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAnalyzeRejectsPrepareOnlyResume(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"analyze", "--prepare-only", "--resume", "run_test", t.TempDir()}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected prepare-only resume to fail")
+	}
+	if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestAnalyzeMarksDeadlineExceededRunsTimedOut(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
@@ -253,11 +343,13 @@ func TestAnalyzeMarksCancelingRunsStoppingBeforeRunnerReturns(t *testing.T) {
 }
 
 type recordingRunner struct {
-	called bool
+	called  bool
+	request RunnerRequest
 }
 
 func (runner *recordingRunner) Run(_ context.Context, request RunnerRequest) error {
 	runner.called = true
+	runner.request = request
 	if request.Run.ID == "" {
 		return errors.New("missing run id")
 	}
@@ -338,4 +430,47 @@ func runStatusCount(dir string, status string) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+func onlyRunIDWithStatus(t *testing.T, workspace, status string) string {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`select id from runs where status = ?`, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("runs with status %q = %v, want exactly one", status, ids)
+	}
+	return ids[0]
+}
+
+func runCount(t *testing.T, workspace string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`select count(*) from runs`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
