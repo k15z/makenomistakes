@@ -153,6 +153,22 @@ func ledgerFindings(runDir string) ([]FindingRecord, error) {
 	return findings, nil
 }
 
+func ledgerLeadHasFinding(runDir, leadID string) bool {
+	if leadID == "" {
+		return false
+	}
+	findings, err := ledgerFindings(runDir)
+	if err != nil {
+		return false
+	}
+	for _, finding := range findings {
+		if finding.LeadID == leadID {
+			return true
+		}
+	}
+	return false
+}
+
 func unreviewedLedgerFindings(runDir string) ([]FindingRecord, error) {
 	findings, err := ledgerFindings(runDir)
 	if err != nil {
@@ -302,14 +318,24 @@ func ledgerFindingHasValidReviewEvidence(runDir, findingID, taskID string, befor
 }
 
 func validateRegisteredEvidenceFile(runDir, relPath, contentSHA256 string, validate func(string, string) error) bool {
-	if contentSHA256 == "" {
-		return false
+	return registeredEvidenceFileError(runDir, relPath, contentSHA256, validate) == nil
+}
+
+func registeredEvidenceFileError(runDir, relPath, contentSHA256 string, validate func(string, string) error) error {
+	if err := validate(runDir, relPath); err != nil {
+		return err
 	}
-	if validate(runDir, relPath) != nil {
-		return false
+	if contentSHA256 == "" {
+		return fmt.Errorf("evidence file %s is missing registered content hash", relPath)
 	}
 	currentSHA256, err := evidenceFileSHA256(runDir, relPath)
-	return err == nil && currentSHA256 == contentSHA256
+	if err != nil {
+		return fmt.Errorf("hash evidence file %s: %w", relPath, err)
+	}
+	if currentSHA256 != contentSHA256 {
+		return fmt.Errorf("evidence file %s changed after registration", relPath)
+	}
+	return nil
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -329,6 +355,31 @@ func ledgerEvidenceForLead(runDir, leadID string) ([]EvidenceRecord, error) {
 		}
 	}
 	return matches, nil
+}
+
+func ledgerLeadTaskEvidence(runDir, leadID, taskID, relPath string) (EvidenceRecord, bool) {
+	evidence, err := ledgerEvidenceForLead(runDir, leadID)
+	if err != nil {
+		return EvidenceRecord{}, false
+	}
+	var match EvidenceRecord
+	found := false
+	for _, item := range evidence {
+		if item.TaskID == taskID && item.Path == relPath {
+			match = item
+			found = true
+		}
+	}
+	return match, found
+}
+
+func ledgerLeadHasValidInvestigationEvidence(runDir, leadID, taskID string) bool {
+	notesRel := investigationNotesRelPath(leadID)
+	item, ok := ledgerLeadTaskEvidence(runDir, leadID, taskID, notesRel)
+	if !ok {
+		return false
+	}
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyEvidenceFile)
 }
 
 func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {

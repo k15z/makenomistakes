@@ -215,6 +215,9 @@ Finding statuses:
   if any phase executes `opencode` on the host.
 - VM-side `mnm` rejects malformed leads, findings, verdicts, invalid status
   transitions, missing references, and evidence paths outside the run directory.
+- Investigate tasks fail postcondition checks unless they register a non-empty
+  investigation evidence file for the lead being processed, and promoted leads
+  must create at least one finding.
 - Review tasks fail postcondition checks unless they register a non-empty review
   evidence file for the finding being assessed.
 - Validate tasks fail postcondition checks unless they register a non-empty
