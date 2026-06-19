@@ -144,6 +144,7 @@ investigate = "openrouter/z-ai/glm-5.2"
 review = "openrouter/z-ai/glm-5.2"
 deduplicate = "openrouter/z-ai/glm-5.2"
 validate = "openrouter/z-ai/glm-5.2"
+finalize = "openrouter/z-ai/glm-5.2"
 
 [runner]
 cpus = 4

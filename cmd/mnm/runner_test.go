@@ -66,6 +66,12 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	if !ledgerTaskCompleted(runDir, "task_validate_finding_fake_lead_fake_auth") {
 		t.Fatal("expected validate task to complete")
 	}
+	if !ledgerTaskCompleted(runDir, "task_finalize") {
+		t.Fatal("expected finalize task to complete")
+	}
+	if !ledgerReportFinalized(runDir) {
+		t.Fatal("expected report to be finalized")
+	}
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
@@ -189,6 +195,22 @@ if [ "${1:-}" = "run" ]; then
   : "${workspace:?workspace is required}"
   printf '%s\n' "$MNM_TASK_ID" > "$workspace/mutated-by-opencode"
   mkdir -p "$MNM_RUN_DIR/evidence"
+  if printf '%s' "$prompt" | grep -q 'makenomistakes Finalize'; then
+    cat > "$MNM_RUN_DIR/report.md" <<'EOF'
+# Report
+
+Fake final report.
+EOF
+    cat > "$MNM_RUN_DIR/report.json" <<'EOF'
+{"findings":[]}
+EOF
+    cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_fake_report","run_id":"run_test","type":"report.finalized","object":"report","object_id":"report_fake","task_id":"task_finalize","timestamp":"2026-01-01T00:00:13Z","data":{"markdown_path":"report.md","json_path":"report.json"}}
+{"id":"event_fake_finalize_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_finalize","task_id":"task_finalize","timestamp":"2026-01-01T00:00:14Z","data":{"status":"completed","summary":"Finalized fake report"}}
+EOF
+    printf '{"type":"done"}\n'
+    exit 0
+  fi
   if printf '%s' "$prompt" | grep -q 'makenomistakes Validate'; then
     : "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF

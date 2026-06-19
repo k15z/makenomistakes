@@ -7,8 +7,8 @@ evidence whenever possible.
 
 This repository is currently in the local prototype stage. The CLI, run state,
 workspace snapshotting, Lima runner lifecycle, VM-side OpenCode bootstrap,
-Recon, Investigate, Review, Deduplicate, and Validate phases are being built as
-a stack of reviewable PRs.
+Recon, Investigate, Review, Deduplicate, Validate, and Finalize phases are being
+built as a stack of reviewable PRs.
 
 ## MVP Direction
 
@@ -64,7 +64,8 @@ one skeptical OpenCode task per candidate finding and records an `accepted` or
 `rejected` review verdict. Deduplicate compares review-accepted findings and
 records each one as `canonical` or `duplicate`. Validate makes a heavier
 end-to-end reproduction or exploit attempt for each canonical finding and
-records `proven`, `failed`, or `inconclusive`.
+records `proven`, `failed`, or `inconclusive`. Finalize renders `report.md` and
+`report.json` from the ledger and evidence.
 
 ## Reports
 

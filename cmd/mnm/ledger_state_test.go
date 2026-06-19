@@ -209,4 +209,23 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 	if len(pendingValidate) != 0 {
 		t.Fatalf("expected no unvalidated canonical findings, got %#v", pendingValidate)
 	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("did not expect report to be finalized yet")
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "report.finalized",
+		Object:   "report",
+		ObjectID: "report_one",
+		TaskID:   "task_finalize",
+		Data: map[string]any{
+			"markdown_path": "report.md",
+			"json_path":     "report.json",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !ledgerReportFinalized(runDir) {
+		t.Fatal("expected report to be finalized")
+	}
 }
