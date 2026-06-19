@@ -9,6 +9,10 @@ import (
 )
 
 func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	allFindings, err := reviewAcceptedLedgerFindings(runDir)
+	if err != nil {
+		return err
+	}
 	findings, err := undeduplicatedLedgerFindings(runDir)
 	if err != nil {
 		return err
@@ -49,7 +53,7 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	}
 	defer cleanupWorkspace()
 
-	prompt, err := deduplicatePrompt(runDir, taskWorkspace, cfg, findings)
+	prompt, err := deduplicatePrompt(runDir, taskWorkspace, cfg, allFindings, findings)
 	if err != nil {
 		return err
 	}
@@ -101,6 +105,9 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		return err
 	}
 
+	if !ledgerTaskCompleted(runDir, task.TaskID) {
+		return errors.New("deduplicate opencode task did not complete task_deduplicate")
+	}
 	var missing []string
 	for _, finding := range findings {
 		if !ledgerFindingHasVerdict(runDir, finding.ID, "deduplicate") {
@@ -110,24 +117,23 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	if len(missing) > 0 {
 		return fmt.Errorf("deduplicate opencode task did not record verdicts for findings: %s", strings.Join(missing, ", "))
 	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return errors.New("deduplicate opencode task did not complete task_deduplicate")
-	}
-	return nil
+	return validateDeduplicateGraph(runDir, findings)
 }
 
-func deduplicatePrompt(runDir, workspace string, cfg Config, findings []FindingRecord) (string, error) {
-	findingText, err := formatDeduplicateFindings(runDir, findings)
+func deduplicatePrompt(runDir, workspace string, cfg Config, allFindings, pendingFindings []FindingRecord) (string, error) {
+	findingText, err := formatDeduplicateFindings(runDir, allFindings, findingIDSet(pendingFindings))
 	if err != nil {
 		return "", err
 	}
+	pendingIDs := strings.Join(findingIDs(pendingFindings), ", ")
 	return fmt.Sprintf(`# makenomistakes Deduplicate
 
 You are running inside an isolated VM. Your job is to cluster review-accepted candidate findings and write durable deduplication verdicts through the injected mnm CLI.
 
 Workspace: %[1]s
 Run directory: %[2]s
-Reviewed finding count: %[3]d
+Review-accepted finding count: %[3]d
+Findings requiring deduplicate verdicts: %[6]s
 
 Scope instructions:
 
@@ -148,7 +154,7 @@ Required actions:
 2. Read the finding bodies, review notes, attached evidence, recon context, and relevant source code when needed to decide whether two findings describe the same root defect.
 3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. For every listed finding, record exactly one deduplicate verdict.
+5. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
 6. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
 7. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
 8. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
@@ -159,10 +165,10 @@ Deduplication quality bar:
 - Findings in the same file, framework, category, or symptom family are not automatically duplicates.
 - Do not reject findings in Deduplicate. If a reviewed finding seems weak, mark it canonical and leave proof or failure to Validate.
 - Prefer the clearest, most complete finding as the canonical finding for a duplicate cluster.
-`, workspace, runDir, len(findings), scopeText(cfg), findingText), nil
+`, workspace, runDir, len(allFindings), scopeText(cfg), findingText, pendingIDs), nil
 }
 
-func formatDeduplicateFindings(runDir string, findings []FindingRecord) (string, error) {
+func formatDeduplicateFindings(runDir string, findings []FindingRecord, pending map[string]struct{}) (string, error) {
 	var builder strings.Builder
 	for _, finding := range findings {
 		bodyPath, err := findingBodyPath(runDir, finding)
@@ -181,6 +187,18 @@ func formatDeduplicateFindings(runDir string, findings []FindingRecord) (string,
 		if ok {
 			reviewReason = review.Reason
 		}
+		status := "Pending deduplicate verdict"
+		if _, isPending := pending[finding.ID]; !isPending {
+			status = "Existing deduplicate verdict"
+			if dedup, ok, err := ledgerFindingVerdict(runDir, finding.ID, "deduplicate"); err != nil {
+				return "", err
+			} else if ok {
+				status = fmt.Sprintf("Existing deduplicate verdict: %s", dedup.Value)
+				if dedup.CanonicalFindingID != "" {
+					status += " of " + dedup.CanonicalFindingID
+				}
+			}
+		}
 		evidence, err := ledgerEvidenceForFinding(runDir, finding.ID)
 		if err != nil {
 			return "", err
@@ -191,6 +209,7 @@ Title: %s
 Category: %s
 Severity: %s
 Confidence: %s
+Deduplicate status: %s
 Body path: %s
 Review reason: %s
 
@@ -201,9 +220,48 @@ Finding body:
 
 %s
 
-`, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, bodyPath, reviewReason, formatEvidenceList(runDir, evidence), string(body))
+`, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, status, bodyPath, reviewReason, formatEvidenceList(runDir, evidence), string(body))
 	}
 	return builder.String(), nil
+}
+
+func validateDeduplicateGraph(runDir string, findings []FindingRecord) error {
+	accepted, err := reviewAcceptedLedgerFindings(runDir)
+	if err != nil {
+		return err
+	}
+	acceptedIDs := findingIDSet(accepted)
+	for _, finding := range findings {
+		verdict, ok, err := ledgerFindingVerdict(runDir, finding.ID, "deduplicate")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("finding %s is missing deduplicate verdict", finding.ID)
+		}
+		if verdict.Value != "duplicate" {
+			continue
+		}
+		if _, ok := acceptedIDs[verdict.CanonicalFindingID]; !ok {
+			return fmt.Errorf("deduplicate duplicate %s points at non-review-accepted finding %s", finding.ID, verdict.CanonicalFindingID)
+		}
+		canonical, ok, err := ledgerFindingVerdict(runDir, verdict.CanonicalFindingID, "deduplicate")
+		if err != nil {
+			return err
+		}
+		if !ok || canonical.Value != "canonical" {
+			return fmt.Errorf("deduplicate duplicate %s points at non-canonical finding %s", finding.ID, verdict.CanonicalFindingID)
+		}
+	}
+	return nil
+}
+
+func findingIDSet(findings []FindingRecord) map[string]struct{} {
+	ids := make(map[string]struct{}, len(findings))
+	for _, finding := range findings {
+		ids[finding.ID] = struct{}{}
+	}
+	return ids
 }
 
 func findingIDs(findings []FindingRecord) []string {
