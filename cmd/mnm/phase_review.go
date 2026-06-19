@@ -111,6 +111,7 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-review-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
+	notesRel := reviewNotesRelPath(finding.ID)
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
 		RunID:     runID,
 		TaskID:    task.TaskID,
@@ -122,6 +123,12 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 		LogPath:   logPath,
 		TaskFile:  taskPath,
 		Verify: func() error {
+			if !ledgerFindingHasTaskEvidencePath(runDir, finding.ID, task.TaskID, notesRel) {
+				return fmt.Errorf("review opencode task did not register review evidence %s for finding %s", notesRel, finding.ID)
+			}
+			if err := validateNonEmptyEvidenceFile(runDir, notesRel); err != nil {
+				return err
+			}
 			if !ledgerFindingHasVerdict(runDir, finding.ID, "review") {
 				return fmt.Errorf("review opencode task did not record review verdict for finding %s", finding.ID)
 			}
@@ -149,6 +156,10 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 		return err
 	}
 	return nil
+}
+
+func reviewNotesRelPath(findingID string) string {
+	return filepath.ToSlash(filepath.Join("evidence", "review-"+safeFileID(findingID)+"-notes.md"))
 }
 
 func reviewPrompt(runDir, workspace string, cfg Config, finding FindingRecord) (string, error) {

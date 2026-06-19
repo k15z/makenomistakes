@@ -1346,6 +1346,15 @@ func writeRunFile(t *testing.T, runDir, rel, body string) string {
 	return path
 }
 
+func runFileSHA256ForTest(t *testing.T, runDir, rel string) string {
+	t.Helper()
+	hash, err := evidenceFileSHA256(runDir, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
 func createLeadForTest(t *testing.T, runDir string) string {
 	t.Helper()
 	leadBody := writeRunFile(t, runDir, "evidence/lead-test.md", "Investigate something.")
@@ -1410,9 +1419,25 @@ func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonic
 	if canonicalFindingID != "" {
 		args = append(args, "--canonical-finding", canonicalFindingID)
 	}
-	var stdout, stderr bytes.Buffer
-	if err := run(args, &stdout, &stderr); err != nil {
-		t.Fatalf("verdict record failed: %v\nstderr: %s", err, stderr.String())
+	if phase == "review" {
+		notesRel := reviewNotesRelPath(findingID)
+		writeRunFile(t, runDir, notesRel, "Review evidence for test.")
+		if err := appendLedgerEvent(runDir, LedgerEvent{
+			RunID:    "run_test",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_review_" + safeFileID(findingID),
+			TaskID:   taskID,
+			Data: map[string]any{
+				"kind":           "markdown",
+				"title":          "Review notes",
+				"path":           notesRel,
+				"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+				"finding_id":     findingID,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if phase == "validate" {
 		notesRel := validationNotesRelPath(findingID)
@@ -1424,14 +1449,19 @@ func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonic
 			ObjectID: "evidence_validate_" + safeFileID(findingID),
 			TaskID:   taskID,
 			Data: map[string]any{
-				"kind":       "markdown",
-				"title":      "Validation notes",
-				"path":       notesRel,
-				"finding_id": findingID,
+				"kind":           "markdown",
+				"title":          "Validation notes",
+				"path":           notesRel,
+				"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+				"finding_id":     findingID,
 			},
 		}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(args, &stdout, &stderr); err != nil {
+		t.Fatalf("verdict record failed: %v\nstderr: %s", err, stderr.String())
 	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_test",
@@ -1537,6 +1567,24 @@ func validReportJSONFromBuckets(t *testing.T, runID, markdownPath, jsonPath stri
 func appendReviewAcceptedVerdictForTest(t *testing.T, runDir, findingID string) {
 	t.Helper()
 	taskID := "task_review_" + safeFileID(findingID)
+	notesRel := reviewNotesRelPath(findingID)
+	writeRunFile(t, runDir, notesRel, "Review evidence for test.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_review_" + safeFileID(findingID),
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_test",
 		Type:     "verdict.recorded",

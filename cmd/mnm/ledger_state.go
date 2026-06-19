@@ -26,16 +26,19 @@ type FindingRecord struct {
 }
 
 type EvidenceRecord struct {
-	ID        string
-	TaskID    string
-	Kind      string
-	Title     string
-	Path      string
-	LeadID    string
-	FindingID string
+	eventIndex    int
+	ID            string
+	TaskID        string
+	Kind          string
+	Title         string
+	Path          string
+	ContentSHA256 string
+	LeadID        string
+	FindingID     string
 }
 
 type VerdictRecord struct {
+	eventIndex         int
 	ID                 string
 	TaskID             string
 	FindingID          string
@@ -223,18 +226,20 @@ func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 		return nil, err
 	}
 	var evidence []EvidenceRecord
-	for _, event := range events {
+	for i, event := range events {
 		if event.Type != "evidence.added" || event.Object != "evidence" {
 			continue
 		}
 		evidence = append(evidence, EvidenceRecord{
-			ID:        event.ObjectID,
-			TaskID:    event.TaskID,
-			Kind:      stringData(event.Data, "kind"),
-			Title:     stringData(event.Data, "title"),
-			Path:      stringData(event.Data, "path"),
-			LeadID:    stringData(event.Data, "lead_id"),
-			FindingID: stringData(event.Data, "finding_id"),
+			eventIndex:    i,
+			ID:            event.ObjectID,
+			TaskID:        event.TaskID,
+			Kind:          stringData(event.Data, "kind"),
+			Title:         stringData(event.Data, "title"),
+			Path:          stringData(event.Data, "path"),
+			ContentSHA256: stringData(event.Data, "content_sha256"),
+			LeadID:        stringData(event.Data, "lead_id"),
+			FindingID:     stringData(event.Data, "finding_id"),
 		})
 	}
 	return evidence, nil
@@ -258,25 +263,56 @@ func ledgerEvidenceForFinding(runDir, findingID string) ([]EvidenceRecord, error
 }
 
 func ledgerFindingHasTaskEvidencePath(runDir, findingID, taskID, relPath string) bool {
-	evidence, err := ledgerEvidenceForFinding(runDir, findingID)
-	if err != nil {
-		return false
-	}
-	for _, item := range evidence {
-		if item.TaskID == taskID && item.Path == relPath {
-			return true
-		}
-	}
-	return false
+	_, ok := ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, relPath, maxInt)
+	return ok
 }
 
-func ledgerFindingHasValidValidationEvidence(runDir, findingID, taskID string) bool {
+func ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, relPath string, beforeIndex int) (EvidenceRecord, bool) {
+	evidence, err := ledgerEvidenceForFinding(runDir, findingID)
+	if err != nil {
+		return EvidenceRecord{}, false
+	}
+	var match EvidenceRecord
+	found := false
+	for _, item := range evidence {
+		if item.TaskID == taskID && item.Path == relPath && item.eventIndex < beforeIndex {
+			match = item
+			found = true
+		}
+	}
+	return match, found
+}
+
+func ledgerFindingHasValidValidationEvidence(runDir, findingID, taskID string, beforeIndex int) bool {
 	notesRel := validationNotesRelPath(findingID)
-	if !ledgerFindingHasTaskEvidencePath(runDir, findingID, taskID, notesRel) {
+	item, ok := ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, notesRel, beforeIndex)
+	if !ok {
 		return false
 	}
-	return validateNonEmptyValidationEvidence(runDir, notesRel) == nil
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyValidationEvidence)
 }
+
+func ledgerFindingHasValidReviewEvidence(runDir, findingID, taskID string, beforeIndex int) bool {
+	notesRel := reviewNotesRelPath(findingID)
+	item, ok := ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, notesRel, beforeIndex)
+	if !ok {
+		return false
+	}
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyEvidenceFile)
+}
+
+func validateRegisteredEvidenceFile(runDir, relPath, contentSHA256 string, validate func(string, string) error) bool {
+	if contentSHA256 == "" {
+		return false
+	}
+	if validate(runDir, relPath) != nil {
+		return false
+	}
+	currentSHA256, err := evidenceFileSHA256(runDir, relPath)
+	return err == nil && currentSHA256 == contentSHA256
+}
+
+const maxInt = int(^uint(0) >> 1)
 
 func ledgerEvidenceForLead(runDir, leadID string) ([]EvidenceRecord, error) {
 	if leadID == "" {
@@ -301,11 +337,12 @@ func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {
 		return nil, err
 	}
 	var verdicts []VerdictRecord
-	for _, event := range events {
+	for i, event := range events {
 		if event.Type != "verdict.recorded" || event.Object != "verdict" {
 			continue
 		}
 		verdicts = append(verdicts, VerdictRecord{
+			eventIndex:         i,
 			ID:                 event.ObjectID,
 			TaskID:             event.TaskID,
 			FindingID:          stringData(event.Data, "finding_id"),
@@ -335,13 +372,34 @@ func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool,
 }
 
 func ledgerVerdictComplete(runDir string, verdict VerdictRecord) bool {
-	if !ledgerTaskCompleted(runDir, verdict.TaskID) {
+	if !ledgerTaskCompletedAfter(runDir, verdict.TaskID, verdict.eventIndex) {
 		return false
 	}
-	if verdict.Phase == "validate" {
-		return ledgerFindingHasValidValidationEvidence(runDir, verdict.FindingID, verdict.TaskID)
+	switch verdict.Phase {
+	case "review":
+		return ledgerFindingHasValidReviewEvidence(runDir, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
+	case "validate":
+		return ledgerFindingHasValidValidationEvidence(runDir, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
+	default:
+		return true
 	}
-	return true
+}
+
+func ledgerTaskCompletedAfter(runDir, taskID string, afterIndex int) bool {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return false
+	}
+	status := ""
+	for i, event := range events {
+		if i <= afterIndex {
+			continue
+		}
+		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
+			status, _ = event.Data["status"].(string)
+		}
+	}
+	return status == "completed"
 }
 
 func ledgerFindingHasVerdict(runDir, findingID, phase string) bool {

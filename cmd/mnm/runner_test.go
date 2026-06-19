@@ -1138,7 +1138,7 @@ EOF
 Fake validate proof for tests.
 EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_fake_validate_evidence_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:11Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_fake_validate_evidence_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:11Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"57edc8df5ef1d937269fa86ae284e7e5b701dea91b34b3cc512b2b36c7911e6c","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
 {"id":"event_fake_validate_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:12Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"Proven by fake validate.","canonical_finding_id":""}}
 {"id":"event_fake_validate_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:13Z","data":{"status":"completed","summary":"Validated $MNM_FINDING_ID"}}
 EOF
@@ -1155,9 +1155,15 @@ EOF
   fi
   if printf '%s' "$prompt" | grep -q 'makenomistakes Review'; then
     : "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+    cat > "$MNM_RUN_DIR/evidence/review-$MNM_FINDING_ID-notes.md" <<'EOF'
+# Review notes
+
+Fake review notes for tests.
+EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_fake_review_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:07Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"Accepted by fake review."}}
-{"id":"event_fake_review_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:08Z","data":{"status":"completed","summary":"Reviewed $MNM_FINDING_ID"}}
+{"id":"event_fake_review_evidence_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_review_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:07Z","data":{"kind":"markdown","title":"Review notes","path":"evidence/review-$MNM_FINDING_ID-notes.md","content_sha256":"ad3899e2ddf4134f602646d7a65035fd673efb36e906c437d4950529912b0042","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_fake_review_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:08Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"Accepted by fake review."}}
+{"id":"event_fake_review_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:09Z","data":{"status":"completed","summary":"Reviewed $MNM_FINDING_ID"}}
 EOF
     printf '{"type":"done"}\n'
     exit 0

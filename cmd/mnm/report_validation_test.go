@@ -90,6 +90,129 @@ func TestReportKnownStateIgnoresVerdictsWithoutCompletedTask(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	state, err := reportKnownState(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reportBucketForFinding(state.Verdicts[findingID]); got != "unvalidated" {
+		t.Fatalf("bucket = %q, want unvalidated", got)
+	}
+}
+
+func TestReportKnownStateIgnoresReviewVerdictWithoutReviewEvidence(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+
+	taskID := "task_review_" + safeFileID(findingID)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_review_without_evidence",
+		TaskID:   taskID,
+		Data: map[string]any{
+			"finding_id": findingID,
+			"phase":      "review",
+			"value":      "accepted",
+			"reason":     "missing review evidence",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Completed without review evidence.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	notesRel := reviewNotesRelPath(findingID)
+	writeRunFile(t, runDir, notesRel, "Late review evidence.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_review_after_stale_verdict",
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := reportKnownState(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reportBucketForFinding(state.Verdicts[findingID]); got != "unvalidated" {
+		t.Fatalf("bucket = %q, want unvalidated", got)
+	}
+}
+
+func TestReportKnownStateIgnoresReviewVerdictWhenEvidenceContentChanges(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+
+	taskID := "task_review_" + safeFileID(findingID)
+	notesRel := reviewNotesRelPath(findingID)
+	writeRunFile(t, runDir, notesRel, " \n")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_review_blank",
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_review_blank",
+		TaskID:   taskID,
+		Data: map[string]any{
+			"finding_id": findingID,
+			"phase":      "review",
+			"value":      "accepted",
+			"reason":     "registered blank notes first",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Completed with blank notes.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeRunFile(t, runDir, notesRel, "Late review evidence.")
 
 	state, err := reportKnownState(runDir)
 	if err != nil {
@@ -132,6 +255,24 @@ func TestReportKnownStateIgnoresValidateVerdictWithoutValidationEvidence(t *test
 		Data: map[string]any{
 			"status":  "completed",
 			"summary": "Completed without validation evidence.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	notesRel := validationNotesRelPath(findingID)
+	writeRunFile(t, runDir, notesRel, "Late validation evidence.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_validate_after_stale_verdict",
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Validation notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     findingID,
 		},
 	}); err != nil {
 		t.Fatal(err)

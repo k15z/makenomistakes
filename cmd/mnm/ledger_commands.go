@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 )
 
 func taskCommand(args []string, stdout, stderr io.Writer) error {
@@ -303,6 +305,15 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	contentSHA256 := ""
+	if info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(relPath))); err == nil && info.Mode().IsRegular() {
+		contentSHA256, err = evidenceFileSHA256(runDir, relPath)
+		if err != nil {
+			return fmt.Errorf("hash evidence file %s: %w", relPath, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("stat evidence path %s: %w", relPath, err)
+	}
 	evidenceID := newLedgerID("evidence")
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
@@ -311,11 +322,12 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 		ObjectID: evidenceID,
 		TaskID:   task.TaskID,
 		Data: map[string]any{
-			"kind":       *kind,
-			"title":      *title,
-			"path":       relPath,
-			"lead_id":    *leadID,
-			"finding_id": *findingID,
+			"kind":           *kind,
+			"title":          *title,
+			"path":           relPath,
+			"lead_id":        *leadID,
+			"finding_id":     *findingID,
+			"content_sha256": contentSHA256,
 		},
 	}); err != nil {
 		return err
