@@ -33,7 +33,9 @@ Use `mnm report show RUN_ID` to print the latest finalized Markdown report, or
 `mnm report show --json RUN_ID` for the structured report.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
-include cloud VMs.
+include cloud VMs. `mnm analyze` checks for the local VM tooling before it
+creates run state; `mnm analyze --prepare-only` only snapshots local inputs and
+does not require Lima.
 
 The VM runner owns all model execution. It installs `opencode` inside the VM,
 injects the `mnm` CLI as the structured ledger interface, and bootstraps a

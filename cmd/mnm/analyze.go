@@ -78,6 +78,11 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 	if err != nil {
 		return err
 	}
+	if !options.PrepareOnly {
+		if err := preflightAnalyzeRunner(ctx, runner, RunnerPreflightRequest{Config: cfg}); err != nil {
+			return err
+		}
+	}
 
 	mnmDir := filepath.Join(workspaceDir, ".mnm")
 	if err := os.MkdirAll(mnmDir, dirPerm); err != nil {
@@ -181,6 +186,12 @@ func resumeAnalyzeRun(ctx context.Context, options AnalyzeOptions, runner Analyz
 	if err != nil {
 		return err
 	}
+	if err := preflightAnalyzeRunner(ctx, runner, RunnerPreflightRequest{
+		Config: cfg,
+		Resume: true,
+	}); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(options.Stdout, "resuming run %s\n", run.ID)
 	fmt.Fprintf(options.Stdout, "workspace: %s\n", run.WorkspaceRoot)
@@ -264,6 +275,14 @@ func updateRunStatusUntilRunnerDone(store *Store, runID, status string, runnerDo
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+func preflightAnalyzeRunner(ctx context.Context, runner AnalyzeRunner, request RunnerPreflightRequest) error {
+	preflightRunner, ok := runner.(AnalyzePreflightRunner)
+	if !ok {
+		return nil
+	}
+	return preflightRunner.Preflight(ctx, request)
 }
 
 func resumableRunStatus(status string) bool {
