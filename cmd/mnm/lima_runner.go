@@ -91,33 +91,43 @@ func defaultHostResourceDetector() (HostResources, error) {
 }
 
 func validateHostResources(resources HostResources, runner RunnerConfig) error {
+	parallelTasks := effectiveParallelTasks(runner)
+	parallelTasksLabel := effectiveParallelTasksLabel(runner, parallelTasks)
 	if runner.CPUs > 0 {
 		if resources.CPUs <= 0 {
 			return errors.New("host CPU count could not be detected")
 		}
-		if runner.CPUs > resources.CPUs {
-			return fmt.Errorf("runner.cpus requests %d CPUs, but host reports %d", runner.CPUs, resources.CPUs)
+		requiredCPUs := runner.CPUs * parallelTasks
+		if requiredCPUs > resources.CPUs {
+			return fmt.Errorf("runner.cpus requests %d CPUs per task VM with %s (%d CPUs total), but host reports %d", runner.CPUs, parallelTasksLabel, requiredCPUs, resources.CPUs)
 		}
 	}
 	if runner.MemoryGB > 0 {
 		if resources.MemoryBytes == 0 {
 			return errors.New("host memory could not be detected")
 		}
-		required := uint64(runner.MemoryGB) * bytesPerGiB
+		required := uint64(runner.MemoryGB) * uint64(parallelTasks) * bytesPerGiB
 		if required > resources.MemoryBytes {
-			return fmt.Errorf("runner.memory_gb requests %d GiB, but host reports %s GiB total memory", runner.MemoryGB, gibString(resources.MemoryBytes))
+			return fmt.Errorf("runner.memory_gb requests %d GiB per task VM with %s (%s GiB total), but host reports %s GiB total memory", runner.MemoryGB, parallelTasksLabel, gibString(required), gibString(resources.MemoryBytes))
 		}
 	}
 	if runner.DiskGB > 0 {
 		if resources.DiskFreeBytes == 0 {
 			return fmt.Errorf("free disk space could not be detected for %s", resources.DiskPath)
 		}
-		required := uint64(runner.DiskGB) * bytesPerGiB
+		required := uint64(runner.DiskGB) * uint64(parallelTasks) * bytesPerGiB
 		if required > resources.DiskFreeBytes {
-			return fmt.Errorf("runner.disk_gb requests %d GiB, but %s has %s GiB free", runner.DiskGB, resources.DiskPath, gibString(resources.DiskFreeBytes))
+			return fmt.Errorf("runner.disk_gb requests %d GiB per task VM with %s (%s GiB total), but %s has %s GiB free", runner.DiskGB, parallelTasksLabel, gibString(required), resources.DiskPath, gibString(resources.DiskFreeBytes))
 		}
 	}
 	return nil
+}
+
+func effectiveParallelTasksLabel(runner RunnerConfig, effective int) string {
+	if runner.ParallelTasks > 0 {
+		return fmt.Sprintf("runner.parallel_tasks=%d", runner.ParallelTasks)
+	}
+	return fmt.Sprintf("effective runner.parallel_tasks=%d", effective)
 }
 
 func hostMemoryBytes() (uint64, error) {

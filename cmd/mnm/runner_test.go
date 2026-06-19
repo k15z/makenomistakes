@@ -602,12 +602,31 @@ func TestLimaRunnerPreflightRejectsCPURequestAboveHost(t *testing.T) {
 	})
 
 	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
-		Config: Config{Runner: RunnerConfig{CPUs: 8}},
+		Config: Config{Runner: RunnerConfig{CPUs: 3, ParallelTasks: 2}},
 	})
 	if err == nil {
 		t.Fatal("expected CPU resource error")
 	}
-	if !strings.Contains(err.Error(), "runner.cpus requests 8 CPUs, but host reports 4") {
+	if !strings.Contains(err.Error(), "runner.cpus requests 3 CPUs per task VM with runner.parallel_tasks=2 (6 CPUs total), but host reports 4") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightLabelsImplicitParallelism(t *testing.T) {
+	runner := limaRunnerWithHostResources(t, HostResources{
+		CPUs:          4,
+		MemoryBytes:   16 * bytesPerGiB,
+		DiskFreeBytes: 100 * bytesPerGiB,
+		DiskPath:      "/tmp",
+	})
+
+	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
+		Config: Config{Runner: RunnerConfig{CPUs: 3}},
+	})
+	if err == nil {
+		t.Fatal("expected CPU resource error")
+	}
+	if !strings.Contains(err.Error(), "effective runner.parallel_tasks=2") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -621,12 +640,12 @@ func TestLimaRunnerPreflightRejectsMemoryRequestAboveHost(t *testing.T) {
 	})
 
 	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
-		Config: Config{Runner: RunnerConfig{MemoryGB: 16}},
+		Config: Config{Runner: RunnerConfig{MemoryGB: 8, ParallelTasks: 2}},
 	})
 	if err == nil {
 		t.Fatal("expected memory resource error")
 	}
-	if !strings.Contains(err.Error(), "runner.memory_gb requests 16 GiB") {
+	if !strings.Contains(err.Error(), "runner.memory_gb requests 8 GiB per task VM with runner.parallel_tasks=2 (16.0 GiB total)") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -640,12 +659,12 @@ func TestLimaRunnerPreflightRejectsDiskRequestAboveLimaFreeSpace(t *testing.T) {
 	})
 
 	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
-		Config: Config{Runner: RunnerConfig{DiskGB: 80}},
+		Config: Config{Runner: RunnerConfig{DiskGB: 25, ParallelTasks: 2}},
 	})
 	if err == nil {
 		t.Fatal("expected disk resource error")
 	}
-	if !strings.Contains(err.Error(), "runner.disk_gb requests 80 GiB") || !strings.Contains(err.Error(), "/tmp/lima") {
+	if !strings.Contains(err.Error(), "runner.disk_gb requests 25 GiB per task VM with runner.parallel_tasks=2 (50.0 GiB total)") || !strings.Contains(err.Error(), "/tmp/lima") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -660,9 +679,10 @@ func TestLimaRunnerPreflightAcceptsSufficientHostResources(t *testing.T) {
 
 	if err := runner.Preflight(context.Background(), RunnerPreflightRequest{
 		Config: Config{Runner: RunnerConfig{
-			CPUs:     4,
-			MemoryGB: 8,
-			DiskGB:   80,
+			CPUs:          4,
+			MemoryGB:      8,
+			DiskGB:        40,
+			ParallelTasks: 2,
 		}},
 	}); err != nil {
 		t.Fatalf("preflight failed: %v", err)

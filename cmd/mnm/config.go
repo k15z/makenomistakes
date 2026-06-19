@@ -170,3 +170,13 @@ func effectiveOpenCodeTaskTimeoutMinutes(cfg Config) int {
 func openCodeTaskTimeout(cfg Config) time.Duration {
 	return time.Duration(effectiveOpenCodeTaskTimeoutMinutes(cfg)) * time.Minute
 }
+
+func effectiveParallelTasks(runner RunnerConfig) int {
+	if runner.ParallelTasks > 0 {
+		return runner.ParallelTasks
+	}
+	if runner.CPUs > 1 {
+		return 2
+	}
+	return 1
+}
