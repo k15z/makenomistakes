@@ -1,0 +1,143 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+const (
+	filePerm = 0o644
+	dirPerm  = 0o755
+)
+
+func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "mnm:", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		printUsage(stdout)
+		return nil
+	}
+
+	switch args[0] {
+	case "help", "-h", "--help":
+		printUsage(stdout)
+		return nil
+	case "init":
+		return initCommand(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, `mnm
+
+Usage:
+  mnm init [--force] [path]
+
+Commands:
+  init    Create mnm.toml and .mnmignore in a workspace.
+`)
+}
+
+func initCommand(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("init", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	force := flags.Bool("force", false, "overwrite existing files")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	if flags.NArg() > 1 {
+		return errors.New("init accepts at most one path")
+	}
+
+	target := "."
+	if flags.NArg() == 1 {
+		target = flags.Arg(0)
+	}
+
+	workspace, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(workspace, dirPerm); err != nil {
+		return err
+	}
+
+	configPath := filepath.Join(workspace, "mnm.toml")
+	ignorePath := filepath.Join(workspace, ".mnmignore")
+	if !*force {
+		for _, path := range []string{configPath, ignorePath} {
+			if _, err := os.Stat(path); err == nil {
+				return fmt.Errorf("%s already exists; pass --force to overwrite", filepath.Base(path))
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+
+	if err := os.WriteFile(configPath, []byte(defaultConfig()), filePerm); err != nil {
+		return err
+	}
+	if err := os.WriteFile(ignorePath, []byte(defaultIgnore()), filePerm); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "created %s\n", configPath)
+	fmt.Fprintf(stdout, "created %s\n", ignorePath)
+	return nil
+}
+
+func defaultConfig() string {
+	return `version = 1
+
+[instructions]
+scope = """
+Describe what is in scope, out of scope, and what the audit should care about.
+"""
+
+[workspace]
+root = "."
+exclude = []
+
+[models]
+api_key_env = "OPENROUTER_API_KEY"
+default = "openrouter/z-ai/glm-5.2"
+recon = "openrouter/z-ai/glm-5.2"
+
+[runner]
+cpus = 4
+memory_gb = 8
+disk_gb = 80
+timeout_minutes = 120
+max_leads = 24
+`
+}
+
+func defaultIgnore() string {
+	return `.mnm/
+.git/
+node_modules/
+vendor/
+dist/
+build/
+coverage/
+.cache/
+.next/
+target/
+tmp/
+temp/
+*.log
+.DS_Store
+`
+}
