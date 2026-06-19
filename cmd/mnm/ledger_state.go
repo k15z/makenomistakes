@@ -46,6 +46,7 @@ type VerdictRecord struct {
 
 type ReportRecord struct {
 	ID           string
+	TaskID       string
 	MarkdownPath string
 	JSONPath     string
 }
@@ -321,6 +322,7 @@ func ledgerReports(runDir string) ([]ReportRecord, error) {
 		}
 		reports = append(reports, ReportRecord{
 			ID:           event.ObjectID,
+			TaskID:       event.TaskID,
 			MarkdownPath: stringData(event.Data, "markdown_path"),
 			JSONPath:     stringData(event.Data, "json_path"),
 		})

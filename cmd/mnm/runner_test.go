@@ -287,7 +287,7 @@ func prependFakeOpenCode(t *testing.T, version string) {
 Fake final report.
 EOF
     cat > "$MNM_RUN_DIR/report.json" <<'EOF'
-{"findings":[]}
+{"run_id":"run_test","counts":{"findings_proven":0,"findings_inconclusive":0,"findings_failed":0,"findings_rejected":0,"findings_duplicate":0,"findings_unvalidated":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[],"inconclusive":[],"failed":[],"rejected":[],"duplicate":[],"unvalidated":[]}
 EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
 {"id":"event_fake_report","run_id":"run_test","type":"report.finalized","object":"report","object_id":"report_fake","task_id":"task_finalize","timestamp":"2026-01-01T00:00:13Z","data":{"markdown_path":"report.md","json_path":"report.json"}}
