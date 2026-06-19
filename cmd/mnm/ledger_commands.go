@@ -290,6 +290,9 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	if !oneOf(*phase, "review", "deduplicate", "validate") {
 		return fmt.Errorf("invalid verdict phase %q", *phase)
 	}
+	if !validVerdictValue(*phase, *value) {
+		return fmt.Errorf("invalid %s verdict value %q; expected one of: %s", *phase, *value, verdictValues(*phase))
+	}
 	runDir, task, err := currentTaskForCommand(*runDirFlag)
 	if err != nil {
 		return err
@@ -315,6 +318,32 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stdout, verdictID)
 	return nil
+}
+
+func validVerdictValue(phase, value string) bool {
+	switch phase {
+	case "review":
+		return oneOf(value, "accepted", "rejected")
+	case "deduplicate":
+		return oneOf(value, "canonical", "duplicate")
+	case "validate":
+		return oneOf(value, "proven", "failed", "inconclusive")
+	default:
+		return false
+	}
+}
+
+func verdictValues(phase string) string {
+	switch phase {
+	case "review":
+		return "accepted, rejected"
+	case "deduplicate":
+		return "canonical, duplicate"
+	case "validate":
+		return "proven, failed, inconclusive"
+	default:
+		return ""
+	}
 }
 
 func reportCommand(args []string, stdout, stderr io.Writer) error {

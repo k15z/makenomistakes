@@ -197,6 +197,39 @@ func TestLeadCloseRequiresExistingLead(t *testing.T) {
 	}
 }
 
+func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingBody := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate auth defect.")
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "Missing authorization check",
+		"--severity", "high",
+		"--confidence", "medium",
+		"--body-file", findingBody,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("finding create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	findingID := strings.TrimSpace(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "maybe",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected invalid verdict value error")
+	}
+	if !strings.Contains(err.Error(), "invalid review verdict value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func newLedgerTestRun(t *testing.T) string {
 	t.Helper()
 	runDir := t.TempDir()

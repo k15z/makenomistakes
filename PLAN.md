@@ -122,15 +122,11 @@ root = "."
 exclude = []
 
 [models]
-base_url_env = "OPENAI_BASE_URL"
-api_key_env = "OPENAI_API_KEY"
-default = "openai/gpt-5"
-recon = "openai/gpt-5"
-investigate = "openai/gpt-5"
-review = "openai/gpt-5"
-deduplicate = "openai/gpt-5"
-validate = "openai/gpt-5"
-finalize = "openai/gpt-5"
+api_key_env = "OPENROUTER_API_KEY"
+default = "openrouter/z-ai/glm-5.2"
+recon = "openrouter/z-ai/glm-5.2"
+investigate = "openrouter/z-ai/glm-5.2"
+review = "openrouter/z-ai/glm-5.2"
 
 [runner]
 cpus = 4
@@ -138,6 +134,8 @@ memory_gb = 8
 disk_gb = 80
 timeout_minutes = 120
 max_leads = 24
+max_investigations = 24
+parallel_tasks = 2
 ```
 
 ## Local State
@@ -233,9 +231,15 @@ and pass GitHub Actions before later work builds on it.
 7. Recon phase:
    - Run Recon through VM-side `opencode`, require ledger writes through `mnm`,
      and generate codebase map, risk register, and leads.
-8. Investigate, Review, Deduplicate, Validate, and Finalize:
+8. Investigate phase:
+   - Run one OpenCode task per lead, allow follow-up leads, promote concrete
+     findings, and cap investigation growth.
+9. Review phase:
+   - Run one skeptical OpenCode task per candidate finding and record accepted
+     or rejected review verdicts.
+10. Deduplicate, Validate, and Finalize:
    - Add one phase per PR, with fixture coverage and report-quality checks.
-9. End-to-end acceptance:
+11. End-to-end acceptance:
    - Run `mnm analyze` against one or more real open-source repos in a scratch
      workspace and commit only reusable fixtures/docs, never secrets or scratch
      outputs.
