@@ -254,7 +254,15 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if sourceLeadID != "" && !state.Leads[sourceLeadID] {
 		return fmt.Errorf("%s.source_lead_id %q does not reference a known lead", prefix, sourceLeadID)
 	}
-	for _, field := range []string{"verdicts", "evidence_paths", "affected_paths"} {
+	verdicts, err := requiredStringArrayField(item, "verdicts")
+	if err != nil {
+		return fmt.Errorf("%s.%w", prefix, err)
+	}
+	expectedVerdicts := reportVerdictLabels(state.Verdicts[id])
+	if !stringSlicesEqual(verdicts, expectedVerdicts) {
+		return fmt.Errorf("%s.verdicts = %q, want %q from ledger", prefix, verdicts, expectedVerdicts)
+	}
+	for _, field := range []string{"evidence_paths", "affected_paths"} {
 		if _, err := requiredStringArrayField(item, field); err != nil {
 			return fmt.Errorf("%s.%w", prefix, err)
 		}
@@ -277,6 +285,41 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		}
 	}
 	return nil
+}
+
+func reportVerdictLabels(verdicts map[string]VerdictRecord) []string {
+	if len(verdicts) == 0 {
+		return []string{}
+	}
+	phases := []struct {
+		name  string
+		label string
+	}{
+		{name: "review", label: "review"},
+		{name: "deduplicate", label: "deduplicate"},
+		{name: "validate", label: "validation"},
+	}
+	var labels []string
+	for _, phase := range phases {
+		verdict, ok := verdicts[phase.name]
+		if !ok {
+			continue
+		}
+		labels = append(labels, phase.label+" "+verdict.Value)
+	}
+	return labels
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDuplicateCanonicalFinding(item map[string]json.RawMessage, prefix, findingID string, state reportLedgerState) error {

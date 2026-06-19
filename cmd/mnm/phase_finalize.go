@@ -199,6 +199,7 @@ JSON report requirements:
 - "report_paths.markdown" and "report_paths.json" must point to the same files passed to "mnm report finalize".
 - For each finding object, include id, title, category, severity, confidence, source_lead_id, status, verdicts, evidence_paths, summary, and affected_paths when known.
 - For each duplicate finding object, also include canonical_finding_id matching the deduplication verdict.
+- "verdicts" must exactly match ledger verdicts in phase order using strings like "review accepted", "deduplicate canonical", and "validation proven".
 - Use empty arrays instead of null for absent lists.
 - The JSON must parse with standard JSON parsers.
 - "id" must be the real ledger ID of a finding, and each "evidence_paths" entry must point to evidence that was registered for that finding through mnm evidence add.
