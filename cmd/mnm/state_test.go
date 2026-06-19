@@ -48,6 +48,64 @@ func TestStoreCreatesAndReadsRun(t *testing.T) {
 	}
 }
 
+func TestStoreListsRunsNewestFirst(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openStore(filepath.Join(dir, "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	older := testRunRecord(dir, "run_old", RunStatusStopped, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	newer := testRunRecord(dir, "run_new", RunStatusCompleted, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	if err := store.CreateRun(older); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(newer); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.ListRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("run count = %d, want 2", len(runs))
+	}
+	if runs[0].ID != "run_new" || runs[1].ID != "run_old" {
+		t.Fatalf("runs not sorted newest first: %#v", runs)
+	}
+}
+
+func TestStoreListsRunsNewestFirstWithFractionalSeconds(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openStore(filepath.Join(dir, "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	exactSecond := testRunRecord(dir, "run_exact", RunStatusStopped, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	fractionalSecond := testRunRecord(dir, "run_fractional", RunStatusCompleted, time.Date(2026, 1, 1, 12, 0, 0, 100_000_000, time.UTC))
+	if err := store.CreateRun(exactSecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(fractionalSecond); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.ListRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("run count = %d, want 2", len(runs))
+	}
+	if runs[0].ID != "run_fractional" || runs[1].ID != "run_exact" {
+		t.Fatalf("runs not sorted by parsed timestamps: %#v", runs)
+	}
+}
+
 func TestStoreRejectsInvalidStatus(t *testing.T) {
 	dir := t.TempDir()
 	store, err := openStore(filepath.Join(dir, "mnm.sqlite"))
@@ -127,5 +185,21 @@ func TestStoreMigratesSnapshotColumns(t *testing.T) {
 	}
 	if got.SnapshotPath != "" {
 		t.Fatalf("expected empty migrated snapshot path, got %q", got.SnapshotPath)
+	}
+}
+
+func testRunRecord(workspace, id, status string, timestamp time.Time) RunRecord {
+	return RunRecord{
+		ID:                 id,
+		Status:             status,
+		WorkspaceDir:       workspace,
+		WorkspaceRoot:      workspace,
+		ConfigPath:         filepath.Join(workspace, "mnm.toml"),
+		ConfigSnapshotPath: filepath.Join(workspace, ".mnm", "runs", id, "mnm.toml"),
+		SnapshotPath:       filepath.Join(workspace, ".mnm", "runs", id, "snapshot.tar.zst"),
+		RunDir:             filepath.Join(workspace, ".mnm", "runs", id),
+		Model:              "openrouter/z-ai/glm-5.2",
+		CreatedAt:          timestamp,
+		UpdatedAt:          timestamp,
 	}
 }

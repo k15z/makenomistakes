@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -224,6 +225,70 @@ func (s *Store) GetRun(runID string) (RunRecord, error) {
 		return RunRecord{}, err
 	}
 	return run, nil
+}
+
+func (s *Store) ListRuns() ([]RunRecord, error) {
+	rows, err := s.db.Query(`select
+		id,
+		status,
+		workspace_dir,
+		workspace_root,
+		config_path,
+		config_snapshot_path,
+		snapshot_path,
+		run_dir,
+		model,
+		created_at,
+		updated_at
+		from runs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []RunRecord
+	for rows.Next() {
+		var run RunRecord
+		var createdAt string
+		var updatedAt string
+		if err := rows.Scan(
+			&run.ID,
+			&run.Status,
+			&run.WorkspaceDir,
+			&run.WorkspaceRoot,
+			&run.ConfigPath,
+			&run.ConfigSnapshotPath,
+			&run.SnapshotPath,
+			&run.RunDir,
+			&run.Model,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		run.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		run.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if !runs[i].UpdatedAt.Equal(runs[j].UpdatedAt) {
+			return runs[i].UpdatedAt.After(runs[j].UpdatedAt)
+		}
+		if !runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			return runs[i].CreatedAt.After(runs[j].CreatedAt)
+		}
+		return runs[i].ID > runs[j].ID
+	})
+	return runs, nil
 }
 
 func validateRunStatus(status string) error {

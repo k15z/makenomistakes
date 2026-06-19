@@ -35,6 +35,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return initCommand(args[1:], stdout, stderr)
 	case "analyze":
 		return analyzeCommand(args[1:], stdout, stderr)
+	case "runs":
+		return runsCommand(args[1:], stdout, stderr)
 	case "task":
 		return taskCommand(args[1:], stdout, stderr)
 	case "lead":
@@ -59,12 +61,14 @@ func printUsage(w io.Writer) {
 
 Usage:
   mnm init [--force] [path]
-  mnm analyze [--prepare-only] [--keep-vm] [path]
+  mnm analyze [--prepare-only] [--keep-vm] [--resume RUN_ID] [path]
+  mnm runs [--json] [path]
   mnm task|lead|finding|evidence|verdict|report ...
 
 Commands:
   init       Create mnm.toml and .mnmignore in a workspace.
-  analyze    Prepare a durable local audit run.
+  analyze    Prepare, run, or resume a durable local audit.
+  runs       List local audit runs, statuses, and resumability.
   task       Read or complete the current VM-side task.
   lead       Create or close audit leads.
   finding    Create candidate findings.
