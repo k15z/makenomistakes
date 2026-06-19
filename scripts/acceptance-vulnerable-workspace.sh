@@ -73,16 +73,52 @@ if not isinstance(proven, list):
 if not proven:
     raise SystemExit(f"{report_json} contains no proven findings")
 
-combined = "\n".join(
-    " ".join(str(item.get(field, "")) for field in ("title", "summary", "status", "category"))
-    for item in proven
-).lower()
-report_text = report_md.read_text(errors="replace").lower()
 keywords = ("path traversal", "directory traversal", "arbitrary file read", "file disclosure")
-if not any(keyword in combined or keyword in report_text for keyword in keywords):
+target_markers = (
+    "repos/file-vault/src/vault.js",
+    "file-vault/src/vault.js",
+    "src/vault.js",
+    "file-vault",
+    "vault.js",
+    "/documents",
+    "resolvedocumentpath",
+    "readdocument",
+)
+
+
+def strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from strings(item)
+
+
+def evidence_texts(item):
+    for evidence_path in item.get("evidence_paths", []):
+        candidate = (run_dir / evidence_path).resolve()
+        try:
+            candidate.relative_to(run_dir.resolve())
+        except ValueError:
+            raise SystemExit(f"evidence path escapes run dir: {evidence_path}")
+        if candidate.is_file():
+            yield candidate.read_text(errors="replace")[:65536]
+
+
+matched_expected = False
+for item in proven:
+    item_text = "\n".join([*strings(item), *evidence_texts(item)]).lower()
+    if any(keyword in item_text for keyword in keywords) and any(marker in item_text for marker in target_markers):
+        matched_expected = True
+        break
+
+if not matched_expected:
     raise SystemExit(
-        "proven findings did not appear to include the expected file-access vulnerability; "
-        f"inspect {report_json} and {report_md}"
+        "no proven finding item appeared to describe the expected file-vault file-access vulnerability; "
+        f"inspect {report_json}"
     )
 
 for index, item in enumerate(proven):
