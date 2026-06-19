@@ -29,6 +29,8 @@ events.
     and run state without launching a VM.
   - `mnm analyze --keep-vm`: stop but do not delete the Lima VM after the runner
     exits, for local debugging.
+  - `mnm runs`: list local run IDs, statuses, resumability, update times, and
+    run directories for resume and report lookup.
   - `mnm runner`: hidden VM-side runner entrypoint.
   - `mnm task`, `mnm lead`, `mnm finding`, `mnm evidence`, `mnm verdict`, and
     `mnm report`: VM-side ledger commands used by `opencode`.
@@ -205,8 +207,8 @@ Finding statuses:
   if any phase executes `opencode` on the host.
 - VM-side `mnm` rejects malformed leads, findings, verdicts, invalid status
   transitions, missing references, and evidence paths outside the run directory.
-- Interrupted runs checkpoint to `stopped`; rerunning `mnm analyze` resumes
-  incomplete tasks.
+- Interrupted runs checkpoint to `stopped`; rerunning
+  `mnm analyze --resume <run_id>` resumes incomplete tasks.
 - Fixture repos cover clean, vulnerable, duplicate-finding,
   malformed-agent-output, and broken-dev-environment cases.
 - A manual acceptance fixture under `examples/vulnerable-workspace` exercises a

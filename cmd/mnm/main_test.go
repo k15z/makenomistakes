@@ -84,6 +84,23 @@ func TestUnknownCommandFails(t *testing.T) {
 	}
 }
 
+func TestUsageMentionsRunsAndResume(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run(nil, &stdout, &stderr); err != nil {
+		t.Fatalf("usage failed: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"mnm analyze [--prepare-only] [--keep-vm] [--resume RUN_ID] [path]",
+		"mnm runs [--json] [path]",
+		"runs       List local audit runs, statuses, and resumability.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("usage missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

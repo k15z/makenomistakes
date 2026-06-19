@@ -17,6 +17,7 @@ The first usable version is planned as a local CLI-first product:
 ```sh
 mnm init
 mnm analyze
+mnm runs
 ```
 
 `mnm init` will create a project-level configuration file. `mnm analyze` will
@@ -25,7 +26,8 @@ pipeline, and generate local reports.
 Interrupting `mnm analyze` asks the runner to stop and records the run as
 `stopped`; configured runner deadlines are recorded as `timed_out`.
 Use `mnm analyze --resume RUN_ID` to continue a prepared, stopped, timed out, or
-failed run from its saved snapshot and ledger.
+failed run from its saved snapshot and ledger. Use `mnm runs` to rediscover run
+IDs, statuses, resumability, update times, and run directories.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
 include cloud VMs.
