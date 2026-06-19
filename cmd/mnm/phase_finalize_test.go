@@ -144,7 +144,7 @@ func TestReportFinalizeRejectsMalformedJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected malformed JSON error")
 	}
-	if !strings.Contains(err.Error(), "not valid JSON") {
+	if !strings.Contains(err.Error(), "report JSON must parse") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
