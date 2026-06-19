@@ -579,7 +579,44 @@ func TestReportShowRejectsSymlinkReport(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected symlink report error")
 	}
-	if !strings.Contains(err.Error(), "must not be a symlink") {
+	if !strings.Contains(err.Error(), "must not contain symlinks") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "outside secret") {
+		t.Fatalf("report show leaked symlink target:\n%s", stdout.String())
+	}
+}
+
+func TestReportShowRejectsSymlinkReportParent(t *testing.T) {
+	workspace, runRecord := newStoredReportRun(t)
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "outside.md")
+	if err := os.WriteFile(outside, []byte("outside secret"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(runRecord.RunDir, "leak")); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runRecord.RunDir, LedgerEvent{
+		RunID:    runRecord.ID,
+		Type:     "report.finalized",
+		Object:   "report",
+		ObjectID: "report_symlink_parent",
+		TaskID:   "task_finalize",
+		Data: map[string]any{
+			"markdown_path": "leak/outside.md",
+			"json_path":     "report.json",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected symlink parent report error")
+	}
+	if !strings.Contains(err.Error(), "must not contain symlinks") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(stdout.String(), "outside secret") {

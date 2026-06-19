@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func reportShowCommand(args []string, stdout, stderr io.Writer) error {
@@ -42,7 +43,7 @@ func reportShowCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectSymlink(reportPath); err != nil {
+	if err := rejectSymlinkPath(run.RunDir, reportPath); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(reportPath)
@@ -96,13 +97,42 @@ func finalizedReportPath(run RunRecord, jsonOutput bool) (string, error) {
 	return filepath.Join(run.RunDir, filepath.FromSlash(normalized)), nil
 }
 
-func rejectSymlink(path string) error {
+func rejectSymlinkPath(runDir, path string) error {
+	absRunDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(absRunDir, absPath)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("report path must be inside run directory: %s", path)
+	}
+	if err := rejectPathIfSymlink(absRunDir); err != nil {
+		return err
+	}
+	current := absRunDir
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		if err := rejectPathIfSymlink(current); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectPathIfSymlink(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("report path must not be a symlink: %s", path)
+		return fmt.Errorf("report path must not contain symlinks: %s", path)
 	}
 	return nil
 }
