@@ -284,6 +284,7 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if bucket == "proven" && len(evidencePaths) == 0 {
 		return fmt.Errorf("%s.evidence_paths must include at least one registered evidence path for a proven finding", prefix)
 	}
+	citedEvidence := make([]EvidenceRecord, 0, len(evidencePaths))
 	for _, evidencePath := range evidencePaths {
 		evidenceRel, err := normalizeReportPath(runDir, evidencePath)
 		if err != nil {
@@ -299,9 +300,25 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		if err := registeredEvidenceFileError(runDir, evidenceRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 			return fmt.Errorf("%s.evidence_paths contains unusable evidence %q: %w", prefix, evidencePath, err)
 		}
+		citedEvidence = append(citedEvidence, evidence)
 		citedEvidencePaths[evidenceRel] = true
 	}
+	if bucket == "proven" && !citesValidationProofEvidence(id, state.Verdicts[id]["validate"], citedEvidence) {
+		return fmt.Errorf("%s.evidence_paths must include at least one validation proof artifact for a proven finding", prefix)
+	}
 	return nil
+}
+
+func citesValidationProofEvidence(findingID string, verdict VerdictRecord, evidence []EvidenceRecord) bool {
+	for _, item := range evidence {
+		if item.TaskID != verdict.TaskID || item.eventIndex >= verdict.eventIndex {
+			continue
+		}
+		if isValidationProofArtifact(findingID, item.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateAffectedPaths(prefix string, paths []string) error {

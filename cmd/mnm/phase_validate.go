@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func runValidatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
@@ -175,6 +176,15 @@ func validationProofEvidence(runDir, findingID, taskID string, beforeIndex int, 
 		proof = append(proof, item)
 	}
 	return proof, nil
+}
+
+func isValidationProofArtifact(findingID, relPath string) bool {
+	safeFindingID := safeFileID(findingID)
+	notesRel := validationNotesRelPath(findingID)
+	transcriptRel := filepath.ToSlash(filepath.Join("evidence", "opencode-validate-"+safeFindingID+".jsonl"))
+	return relPath != notesRel &&
+		relPath != transcriptRel &&
+		!strings.HasPrefix(relPath, "evidence/validate-"+safeFindingID+"-prompt.")
 }
 
 func validationNotesRelPath(findingID string) string {
