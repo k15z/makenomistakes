@@ -38,6 +38,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if *runID == "" || *runDir == "" || *snapshot == "" || *configPath == "" {
 		return errors.New("runner requires --run-id, --run-dir, --snapshot, and --config")
 	}
+	if err := validateRunnerRunID(*runID); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
 		return err
 	}
@@ -171,8 +174,8 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}); err != nil {
 		return err
 	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return errors.New("recon opencode task did not complete through mnm task complete")
+	if err := validateReconLedgerOutputs(runDir, task.TaskID); err != nil {
+		return err
 	}
 	return nil
 }
@@ -208,17 +211,51 @@ func reconModel(cfg Config) string {
 	return strings.TrimSpace(cfg.Models.Default)
 }
 
-func ledgerTaskCompleted(runDir, taskID string) bool {
+func validateReconLedgerOutputs(runDir, taskID string) error {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
-		return false
+		return err
 	}
+	completed := false
+	hasMap := false
+	hasRiskRegister := false
+	hasLead := false
 	for _, event := range events {
 		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
-			return true
+			if event.Data["status"] == "completed" {
+				completed = true
+			}
+			continue
+		}
+		if event.TaskID != taskID {
+			continue
+		}
+		if event.Type == "evidence.added" && event.Object == "evidence" {
+			path, _ := event.Data["path"].(string)
+			switch path {
+			case "evidence/recon-codebase-map.md":
+				hasMap = true
+			case "evidence/recon-risk-register.md":
+				hasRiskRegister = true
+			}
+		}
+		if event.Type == "lead.created" && event.Object == "lead" {
+			hasLead = true
 		}
 	}
-	return false
+	if !completed {
+		return errors.New("recon opencode task did not complete successfully through mnm task complete")
+	}
+	if !hasMap {
+		return errors.New("recon opencode task did not register the codebase map")
+	}
+	if !hasRiskRegister {
+		return errors.New("recon opencode task did not register the risk register")
+	}
+	if !hasLead {
+		return errors.New("recon opencode task did not create any leads")
+	}
+	return nil
 }
 
 func reconPrompt(runDir, workspace string, cfg Config) string {
@@ -296,7 +333,12 @@ func workspaceFileList(root string) ([]string, error) {
 func ensureOpenCode() (string, string, error) {
 	if path, err := exec.LookPath("opencode"); err == nil {
 		version, err := commandOutput(path, "--version")
-		return path, version, err
+		if err != nil {
+			return "", "", err
+		}
+		if opencodeVersionMatches(version) {
+			return path, version, nil
+		}
 	}
 
 	install := fmt.Sprintf("curl -fsSL https://opencode.ai/install | bash -s -- --version %s --no-modify-path", shellQuote(opencodeVersion))
@@ -311,14 +353,24 @@ func ensureOpenCode() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	pathEnv := filepath.Join(home, ".opencode", "bin") + string(os.PathListSeparator) + os.Getenv("PATH")
-	os.Setenv("PATH", pathEnv)
-	path, err := exec.LookPath("opencode")
-	if err != nil {
-		return "", "", fmt.Errorf("opencode install completed but binary was not found: %w", err)
-	}
+	path := filepath.Join(home, ".opencode", "bin", "opencode")
 	version, err := commandOutput(path, "--version")
-	return path, version, err
+	if err != nil {
+		return "", "", err
+	}
+	if !opencodeVersionMatches(version) {
+		return "", "", fmt.Errorf("opencode install produced version %q, want %s", strings.TrimSpace(version), opencodeVersion)
+	}
+	return path, version, nil
+}
+
+func opencodeVersionMatches(output string) bool {
+	for _, field := range strings.Fields(output) {
+		if field == opencodeVersion {
+			return true
+		}
+	}
+	return strings.TrimSpace(output) == opencodeVersion
 }
 
 func commandOutput(name string, args ...string) (string, error) {
@@ -328,4 +380,23 @@ func commandOutput(name string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(output))
 	}
 	return string(output), nil
+}
+
+func validateRunnerRunID(runID string) error {
+	for _, r := range runID {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid run id %q: use only letters, digits, underscores, and hyphens", runID)
+	}
+	return nil
 }
