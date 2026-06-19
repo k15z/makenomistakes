@@ -240,6 +240,9 @@ Finding statuses:
   deduplication evidence file explaining canonical and duplicate decisions.
 - Validate tasks fail postcondition checks unless they register a non-empty
   validation evidence file for the finding being evaluated.
+- Validate tasks that record a `proven` verdict fail postcondition checks unless
+  they register at least one additional non-empty proof artifact beyond the
+  required validation notes.
 - Interrupted runs checkpoint to `stopped`; rerunning
   `mnm analyze --resume <run_id>` resumes incomplete tasks.
 - Fixture repos cover clean, vulnerable, duplicate-finding,
