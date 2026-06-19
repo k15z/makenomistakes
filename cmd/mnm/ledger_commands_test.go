@@ -35,6 +35,7 @@ func TestLedgerCommandFlow(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	findingBody := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate auth defect.")
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	if err := run([]string{
 		"finding", "create",
 		"--run-dir", runDir,
@@ -685,6 +686,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
 	findingBody := writeRunFile(t, runDir, "evidence/finding-report.md", "Candidate finding.")
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"finding", "create",
@@ -2641,6 +2643,7 @@ func TestFindingCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	emptyBody := writeRunFile(t, runDir, "evidence/finding-empty.md", "")
 	stdout.Reset()
 	stderr.Reset()
@@ -2676,8 +2679,70 @@ func TestFindingCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
 	}
 }
 
+func TestLeadCreateRejectsWrongCurrentTaskPhase(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	setCurrentTaskPhaseForTest(t, runDir, "review")
+	body := writeRunFile(t, runDir, "evidence/lead-review.md", "Review should not create leads.")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Review-created lead",
+		"--body-file", body,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected wrong task phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "review" cannot run lead create`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadCreatedEventCount(t, runDir, "task_review", "evidence/lead-review.md", 0)
+}
+
+func TestFindingCreateRejectsWrongCurrentTaskPhase(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	body := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate finding.")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "Missing authorization check",
+		"--body-file", body,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected wrong task phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "recon" cannot run finding create`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLeadCloseRejectsWrongCurrentTaskPhase(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+		"--reason", "Review should not close leads.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected wrong task phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "recon" cannot run lead close`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadClosedEventCount(t, runDir, leadID, 0)
+}
+
 func TestLeadCloseRequiresExistingLead(t *testing.T) {
 	runDir := newLedgerTestRun(t)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"lead", "close",
@@ -2696,6 +2761,7 @@ func TestLeadCloseRequiresExistingLead(t *testing.T) {
 func TestLeadCloseIsIdempotentForSameStatus(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
@@ -2733,6 +2799,7 @@ func TestLeadCloseIsIdempotentForSameStatus(t *testing.T) {
 func TestLeadCloseIsAtomicForParallelSameStatus(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	start := make(chan struct{})
 	errs := make(chan error, 20)
 	var wg sync.WaitGroup
@@ -2766,6 +2833,7 @@ func TestLeadCloseIsAtomicForParallelSameStatus(t *testing.T) {
 func TestLeadCloseRejectsDifferentTerminalStatus(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
@@ -2799,6 +2867,7 @@ func TestLeadCloseRejectsDifferentTerminalStatus(t *testing.T) {
 func TestLeadCloseRequiresReasonForIdempotentClose(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
@@ -2831,6 +2900,7 @@ func TestLeadCloseRequiresReasonForIdempotentClose(t *testing.T) {
 func TestLeadCloseRequiresReason(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
@@ -2851,6 +2921,7 @@ func TestLeadCloseRequiresReason(t *testing.T) {
 func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	findingBody := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate auth defect.")
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"finding", "create",
@@ -2904,6 +2975,7 @@ func TestVerdictRequiresReason(t *testing.T) {
 func TestVerdictRecordRejectsWrongCurrentTaskPhase(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	findingID := createFindingForTest(t, runDir, "")
+	setCurrentTaskPhaseForTest(t, runDir, "recon")
 
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
@@ -3120,6 +3192,7 @@ func TestDeduplicateDuplicateVerdictRequiresCanonicalFinding(t *testing.T) {
 	}
 	firstBody := writeRunFile(t, runDir, "evidence/finding-one.md", "First candidate.")
 	secondBody := writeRunFile(t, runDir, "evidence/finding-two.md", "Second candidate.")
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"finding", "create",
@@ -3144,6 +3217,7 @@ func TestDeduplicateDuplicateVerdictRequiresCanonicalFinding(t *testing.T) {
 	secondID := strings.TrimSpace(stdout.String())
 	appendReviewAcceptedVerdictForTest(t, runDir, firstID)
 	appendReviewAcceptedVerdictForTest(t, runDir, secondID)
+	setCurrentTaskPhaseForTest(t, runDir, "deduplicate")
 
 	stdout.Reset()
 	stderr.Reset()
@@ -3198,6 +3272,7 @@ func TestDeduplicateDuplicateVerdictRejectsNonAcceptedCanonical(t *testing.T) {
 	}
 	firstBody := writeRunFile(t, runDir, "evidence/finding-one.md", "First candidate.")
 	secondBody := writeRunFile(t, runDir, "evidence/finding-two.md", "Second candidate.")
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"finding", "create",
@@ -3221,6 +3296,7 @@ func TestDeduplicateDuplicateVerdictRejectsNonAcceptedCanonical(t *testing.T) {
 	}
 	secondID := strings.TrimSpace(stdout.String())
 	appendReviewAcceptedVerdictForTest(t, runDir, secondID)
+	setCurrentTaskPhaseForTest(t, runDir, "deduplicate")
 
 	stdout.Reset()
 	stderr.Reset()
@@ -3327,8 +3403,23 @@ func runFileSHA256ForTest(t *testing.T, runDir, rel string) string {
 	return hash
 }
 
+func setCurrentTaskPhaseForTest(t *testing.T, runDir, phase string) {
+	t.Helper()
+	task := TaskRecord{
+		RunID:       "run_test",
+		TaskID:      "task_" + phase,
+		Phase:       phase,
+		Title:       "Test " + phase,
+		Instruction: "Test " + phase + " task.",
+	}
+	if err := writeCurrentTaskForTest(runDir, task); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func createLeadForTest(t *testing.T, runDir string) string {
 	t.Helper()
+	setCurrentTaskPhaseForTest(t, runDir, "recon")
 	leadBody := writeRunFile(t, runDir, "evidence/lead-test.md", "Investigate something.")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
@@ -3344,6 +3435,7 @@ func createLeadForTest(t *testing.T, runDir string) string {
 
 func createFindingForTest(t *testing.T, runDir, leadID string) string {
 	t.Helper()
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	safeLeadID := "unlinked"
 	if leadID != "" {
 		safeLeadID = safeFileID(leadID)
