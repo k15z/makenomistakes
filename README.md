@@ -35,9 +35,10 @@ If a VM-side run fails before Finalize, `mnm runs` shows the failed stage and
 `mnm report show RUN_ID` points to the persisted runner failure evidence.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
-include cloud VMs. `mnm analyze` checks for the local VM tooling before it
-creates run state; `mnm analyze --prepare-only` only snapshots local inputs and
-does not require Lima.
+include cloud VMs. Before it creates run state, `mnm analyze` checks for the
+local VM tooling plus requested CPU, memory, and Lima disk capacity.
+`mnm analyze --prepare-only` only snapshots local inputs and does not require
+Lima.
 
 The VM runner owns all model execution. It installs `opencode` inside the VM,
 injects the `mnm` CLI as the structured ledger interface, and bootstraps a

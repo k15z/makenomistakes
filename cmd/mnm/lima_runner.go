@@ -13,10 +13,22 @@ import (
 	"strings"
 )
 
+const bytesPerGiB = 1024 * 1024 * 1024
+
 type LimaRunner struct {
-	Executor CommandExecutor
-	Stdout   io.Writer
-	Stderr   io.Writer
+	Executor         CommandExecutor
+	ResourceDetector HostResourceDetector
+	Stdout           io.Writer
+	Stderr           io.Writer
+}
+
+type HostResourceDetector func() (HostResources, error)
+
+type HostResources struct {
+	CPUs          int
+	MemoryBytes   uint64
+	DiskFreeBytes uint64
+	DiskPath      string
 }
 
 func newDefaultRunner(stdout, stderr io.Writer) AnalyzeRunner {
@@ -27,7 +39,7 @@ func newDefaultRunner(stdout, stderr io.Writer) AnalyzeRunner {
 	}
 }
 
-func (runner LimaRunner) Preflight(ctx context.Context, _ RunnerPreflightRequest) error {
+func (runner LimaRunner) Preflight(ctx context.Context, request RunnerPreflightRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -39,7 +51,143 @@ func (runner LimaRunner) Preflight(ctx context.Context, _ RunnerPreflightRequest
 			return fmt.Errorf("go is required to build the Linux runner payload; install Go or set MNM_LINUX_RUNNER_PAYLOAD: %w", err)
 		}
 	}
+	resources, err := runner.detectHostResources()
+	if err != nil {
+		return fmt.Errorf("inspect host resources: %w", err)
+	}
+	if err := validateHostResources(resources, request.Config.Runner); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (runner LimaRunner) detectHostResources() (HostResources, error) {
+	detector := runner.ResourceDetector
+	if detector == nil {
+		detector = defaultHostResourceDetector
+	}
+	return detector()
+}
+
+func defaultHostResourceDetector() (HostResources, error) {
+	memoryBytes, err := hostMemoryBytes()
+	if err != nil {
+		return HostResources{}, err
+	}
+	diskPath, err := limaDiskPath()
+	if err != nil {
+		return HostResources{}, err
+	}
+	diskFreeBytes, err := freeDiskBytes(diskPath)
+	if err != nil {
+		return HostResources{}, err
+	}
+	return HostResources{
+		CPUs:          runtime.NumCPU(),
+		MemoryBytes:   memoryBytes,
+		DiskFreeBytes: diskFreeBytes,
+		DiskPath:      diskPath,
+	}, nil
+}
+
+func validateHostResources(resources HostResources, runner RunnerConfig) error {
+	if runner.CPUs > 0 {
+		if resources.CPUs <= 0 {
+			return errors.New("host CPU count could not be detected")
+		}
+		if runner.CPUs > resources.CPUs {
+			return fmt.Errorf("runner.cpus requests %d CPUs, but host reports %d", runner.CPUs, resources.CPUs)
+		}
+	}
+	if runner.MemoryGB > 0 {
+		if resources.MemoryBytes == 0 {
+			return errors.New("host memory could not be detected")
+		}
+		required := uint64(runner.MemoryGB) * bytesPerGiB
+		if required > resources.MemoryBytes {
+			return fmt.Errorf("runner.memory_gb requests %d GiB, but host reports %s GiB total memory", runner.MemoryGB, gibString(resources.MemoryBytes))
+		}
+	}
+	if runner.DiskGB > 0 {
+		if resources.DiskFreeBytes == 0 {
+			return fmt.Errorf("free disk space could not be detected for %s", resources.DiskPath)
+		}
+		required := uint64(runner.DiskGB) * bytesPerGiB
+		if required > resources.DiskFreeBytes {
+			return fmt.Errorf("runner.disk_gb requests %d GiB, but %s has %s GiB free", runner.DiskGB, resources.DiskPath, gibString(resources.DiskFreeBytes))
+		}
+	}
+	return nil
+}
+
+func hostMemoryBytes() (uint64, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		sysctlPath := "sysctl"
+		if _, err := exec.LookPath(sysctlPath); err != nil {
+			if _, statErr := os.Stat("/usr/sbin/sysctl"); statErr == nil {
+				sysctlPath = "/usr/sbin/sysctl"
+			}
+		}
+		output, err := exec.Command(sysctlPath, "-n", "hw.memsize").CombinedOutput()
+		if err != nil {
+			return 0, fmt.Errorf("detect host memory with sysctl: %w\n%s", err, string(output))
+		}
+		value, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse sysctl hw.memsize: %w", err)
+		}
+		return value, nil
+	case "linux":
+		b, err := os.ReadFile("/proc/meminfo")
+		if err != nil {
+			return 0, fmt.Errorf("read /proc/meminfo: %w", err)
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "MemTotal:" {
+				kib, err := strconv.ParseUint(fields[1], 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("parse MemTotal: %w", err)
+				}
+				return kib * 1024, nil
+			}
+		}
+		return 0, errors.New("MemTotal not found in /proc/meminfo")
+	default:
+		return 0, fmt.Errorf("host memory detection is not supported on %s", runtime.GOOS)
+	}
+}
+
+func limaDiskPath() (string, error) {
+	if override := os.Getenv("LIMA_HOME"); override != "" {
+		return nearestExistingPath(override)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return nearestExistingPath(filepath.Join(home, ".lima"))
+}
+
+func nearestExistingPath(path string) (string, error) {
+	original := path
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", fmt.Errorf("no existing parent for %s", original)
+		}
+		path = parent
+	}
+}
+
+func gibString(bytes uint64) string {
+	return strconv.FormatFloat(float64(bytes)/bytesPerGiB, 'f', 1, 64)
 }
 
 func (runner LimaRunner) Run(ctx context.Context, request RunnerRequest) error {
