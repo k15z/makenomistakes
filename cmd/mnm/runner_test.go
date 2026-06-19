@@ -287,6 +287,9 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 			t.Fatalf("missing command %q in:\n%s", want, joined)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(runDir, ".events.lock")); !os.IsNotExist(err) {
+		t.Fatalf("stale copied ledger lock should be dropped, stat err=%v", err)
+	}
 }
 
 func TestLimaRunnerSeedsExistingRunDirectoryWhenResuming(t *testing.T) {
@@ -848,6 +851,9 @@ func (executor *recordingExecutor) Run(_ context.Context, name string, args ...s
 		dst := args[len(args)-1]
 		outDir := filepath.Join(dst, "mnm-run")
 		if err := os.MkdirAll(filepath.Join(outDir, "evidence"), dirPerm); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(outDir, ".events.lock"), []byte("stale"), filePerm); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(outDir, eventsFile), []byte(""), filePerm); err != nil {
