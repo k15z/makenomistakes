@@ -257,6 +257,10 @@ func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	return evidenceFromEvents(events), nil
+}
+
+func evidenceFromEvents(events []LedgerEvent) []EvidenceRecord {
 	var evidence []EvidenceRecord
 	for i, event := range events {
 		if event.Type != "evidence.added" || event.Object != "evidence" {
@@ -274,7 +278,7 @@ func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 			FindingID:     stringData(event.Data, "finding_id"),
 		})
 	}
-	return evidence, nil
+	return evidence
 }
 
 func ledgerTaskEvidence(runDir, taskID, relPath string) (EvidenceRecord, bool) {
@@ -286,6 +290,14 @@ func ledgerTaskEvidenceBefore(runDir, taskID, relPath string, beforeIndex int) (
 	if err != nil {
 		return EvidenceRecord{}, false
 	}
+	return taskEvidenceBefore(evidence, taskID, relPath, beforeIndex)
+}
+
+func ledgerTaskEvidenceBeforeFromEvents(events []LedgerEvent, taskID, relPath string, beforeIndex int) (EvidenceRecord, bool) {
+	return taskEvidenceBefore(evidenceFromEvents(events), taskID, relPath, beforeIndex)
+}
+
+func taskEvidenceBefore(evidence []EvidenceRecord, taskID, relPath string, beforeIndex int) (EvidenceRecord, bool) {
 	var match EvidenceRecord
 	found := false
 	for _, item := range evidence {
@@ -324,6 +336,20 @@ func ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, relPath string, 
 	if err != nil {
 		return EvidenceRecord{}, false
 	}
+	return findingTaskEvidenceBefore(evidence, taskID, relPath, beforeIndex)
+}
+
+func ledgerFindingTaskEvidenceBeforeFromEvents(events []LedgerEvent, findingID, taskID, relPath string, beforeIndex int) (EvidenceRecord, bool) {
+	var matches []EvidenceRecord
+	for _, item := range evidenceFromEvents(events) {
+		if item.FindingID == findingID {
+			matches = append(matches, item)
+		}
+	}
+	return findingTaskEvidenceBefore(matches, taskID, relPath, beforeIndex)
+}
+
+func findingTaskEvidenceBefore(evidence []EvidenceRecord, taskID, relPath string, beforeIndex int) (EvidenceRecord, bool) {
 	var match EvidenceRecord
 	found := false
 	for _, item := range evidence {
@@ -344,6 +370,15 @@ func ledgerFindingHasValidValidationEvidence(runDir, findingID, taskID string, b
 	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyValidationEvidence)
 }
 
+func ledgerFindingHasValidValidationEvidenceFromEvents(runDir string, events []LedgerEvent, findingID, taskID string, beforeIndex int) bool {
+	notesRel := validationNotesRelPath(findingID)
+	item, ok := ledgerFindingTaskEvidenceBeforeFromEvents(events, findingID, taskID, notesRel, beforeIndex)
+	if !ok {
+		return false
+	}
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyValidationEvidence)
+}
+
 func ledgerFindingHasValidReviewEvidence(runDir, findingID, taskID string, beforeIndex int) bool {
 	notesRel := reviewNotesRelPath(findingID)
 	item, ok := ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, notesRel, beforeIndex)
@@ -353,9 +388,27 @@ func ledgerFindingHasValidReviewEvidence(runDir, findingID, taskID string, befor
 	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyEvidenceFile)
 }
 
+func ledgerFindingHasValidReviewEvidenceFromEvents(runDir string, events []LedgerEvent, findingID, taskID string, beforeIndex int) bool {
+	notesRel := reviewNotesRelPath(findingID)
+	item, ok := ledgerFindingTaskEvidenceBeforeFromEvents(events, findingID, taskID, notesRel, beforeIndex)
+	if !ok {
+		return false
+	}
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyEvidenceFile)
+}
+
 func ledgerFindingHasValidDeduplicateEvidence(runDir, taskID string, beforeIndex int) bool {
 	notesRel := deduplicateNotesRelPath()
 	item, ok := ledgerTaskEvidenceBefore(runDir, taskID, notesRel, beforeIndex)
+	if !ok {
+		return false
+	}
+	return validateRegisteredEvidenceFile(runDir, notesRel, item.ContentSHA256, validateNonEmptyEvidenceFile)
+}
+
+func ledgerFindingHasValidDeduplicateEvidenceFromEvents(runDir string, events []LedgerEvent, taskID string, beforeIndex int) bool {
+	notesRel := deduplicateNotesRelPath()
+	item, ok := ledgerTaskEvidenceBeforeFromEvents(events, taskID, notesRel, beforeIndex)
 	if !ok {
 		return false
 	}
@@ -432,6 +485,10 @@ func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	return verdictsFromEvents(events), nil
+}
+
+func verdictsFromEvents(events []LedgerEvent) []VerdictRecord {
 	var verdicts []VerdictRecord
 	for i, event := range events {
 		if event.Type != "verdict.recorded" || event.Object != "verdict" {
@@ -448,7 +505,7 @@ func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {
 			CanonicalFindingID: stringData(event.Data, "canonical_finding_id"),
 		})
 	}
-	return verdicts, nil
+	return verdicts
 }
 
 func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool, error) {
@@ -468,16 +525,24 @@ func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool,
 }
 
 func ledgerVerdictComplete(runDir string, verdict VerdictRecord) bool {
-	if !ledgerTaskCompletedAfter(runDir, verdict.TaskID, verdict.eventIndex) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return false
+	}
+	return ledgerVerdictCompleteFromEvents(runDir, events, verdict)
+}
+
+func ledgerVerdictCompleteFromEvents(runDir string, events []LedgerEvent, verdict VerdictRecord) bool {
+	if !ledgerTaskCompletedAfterFromEvents(events, verdict.TaskID, verdict.eventIndex) {
 		return false
 	}
 	switch verdict.Phase {
 	case "review":
-		return ledgerFindingHasValidReviewEvidence(runDir, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
+		return ledgerFindingHasValidReviewEvidenceFromEvents(runDir, events, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
 	case "deduplicate":
-		return ledgerFindingHasValidDeduplicateEvidence(runDir, verdict.TaskID, verdict.eventIndex)
+		return ledgerFindingHasValidDeduplicateEvidenceFromEvents(runDir, events, verdict.TaskID, verdict.eventIndex)
 	case "validate":
-		return ledgerFindingHasValidValidationEvidence(runDir, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
+		return ledgerFindingHasValidValidationEvidenceFromEvents(runDir, events, verdict.FindingID, verdict.TaskID, verdict.eventIndex)
 	default:
 		return true
 	}
@@ -488,6 +553,10 @@ func ledgerTaskCompletedAfter(runDir, taskID string, afterIndex int) bool {
 	if err != nil {
 		return false
 	}
+	return ledgerTaskCompletedAfterFromEvents(events, taskID, afterIndex)
+}
+
+func ledgerTaskCompletedAfterFromEvents(events []LedgerEvent, taskID string, afterIndex int) bool {
 	status := ""
 	for i, event := range events {
 		if i <= afterIndex {
