@@ -219,6 +219,8 @@ Finding statuses:
   the run directory after symlink resolution.
 - VM-side `mnm verdict record` is idempotent for repeated identical decisions
   and rejects conflicting verdict rewrites for the same finding and phase.
+- VM-side `mnm lead create` is idempotent for repeated identical task/body
+  registrations and rejects conflicting metadata for the same task/body path.
 - VM-side `mnm evidence add` is idempotent for repeated identical task/path
   registrations and rejects conflicting metadata for the same task/path.
 - VM-side `mnm task complete` is idempotent for repeated identical terminal

@@ -160,7 +160,7 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		leadID := newLedgerID("lead")
-		if err := appendLedgerEvent(runDir, LedgerEvent{
+		event, err := prepareLedgerEvent(runDir, LedgerEvent{
 			RunID:    task.RunID,
 			Type:     "lead.created",
 			Object:   "lead",
@@ -172,7 +172,27 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 				"priority":  *priority,
 				"body_path": bodyPath,
 			},
-		}); err != nil {
+		})
+		if err != nil {
+			return err
+		}
+		unlock, err := lockRunDir(runDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		existing, exists, err := ledgerTaskLeadBodyPathUnlocked(runDir, task.TaskID, bodyPath)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if existing.Title == titleText && existing.Category == categoryText && existing.Priority == *priority {
+				fmt.Fprintln(stdout, existing.ID)
+				return nil
+			}
+			return fmt.Errorf("task %s already created lead from body path %s with different metadata", task.TaskID, bodyPath)
+		}
+		if err := appendLedgerEventUnlocked(runDir, event); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, leadID)
@@ -273,6 +293,35 @@ func leadStatusFromEvents(events []LedgerEvent, leadID string) (string, bool, er
 		}
 	}
 	return status, exists, nil
+}
+
+func ledgerTaskLeadBodyPath(runDir, taskID, bodyPath string) (LeadRecord, bool, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return LeadRecord{}, false, err
+	}
+	return taskLeadBodyPathFromEvents(events, taskID, bodyPath)
+}
+
+func ledgerTaskLeadBodyPathUnlocked(runDir, taskID, bodyPath string) (LeadRecord, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return LeadRecord{}, false, err
+	}
+	return taskLeadBodyPathFromEvents(events, taskID, bodyPath)
+}
+
+func taskLeadBodyPathFromEvents(events []LedgerEvent, taskID, bodyPath string) (LeadRecord, bool, error) {
+	leads, err := leadsFromEvents(events)
+	if err != nil {
+		return LeadRecord{}, false, err
+	}
+	for _, lead := range leads {
+		if lead.TaskID == taskID && lead.BodyPath == bodyPath {
+			return lead, true, nil
+		}
+	}
+	return LeadRecord{}, false, nil
 }
 
 func findingCommand(args []string, stdout, stderr io.Writer) error {
