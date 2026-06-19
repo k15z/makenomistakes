@@ -57,15 +57,30 @@ func TestNodeArchivePlatform(t *testing.T) {
 
 func TestEnsureNodeToolchainUsesExistingNodeAndNPM(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"node", "npm"} {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	node := filepath.Join(dir, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\nprintf 'v"+nodeToolchainVersion+"\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	npm := filepath.Join(dir, "npm")
+	if err := os.WriteFile(npm, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
 
 	if err := ensureNodeToolchain(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPinnedNodeOnPathRejectsDifferentVersion(t *testing.T) {
+	dir := t.TempDir()
+	node := filepath.Join(dir, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\nprintf 'v0.0.0\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	if pinnedNodeOnPath() {
+		t.Fatal("expected mismatched node version to be rejected")
 	}
 }
