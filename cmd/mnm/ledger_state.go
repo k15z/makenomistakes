@@ -15,6 +15,34 @@ type LeadRecord struct {
 	Status   string
 }
 
+type FindingRecord struct {
+	ID         string
+	Title      string
+	LeadID     string
+	Category   string
+	Severity   string
+	Confidence string
+	BodyPath   string
+}
+
+type EvidenceRecord struct {
+	ID        string
+	Kind      string
+	Title     string
+	Path      string
+	LeadID    string
+	FindingID string
+}
+
+type VerdictRecord struct {
+	ID        string
+	TaskID    string
+	FindingID string
+	Phase     string
+	Value     string
+	Reason    string
+}
+
 func ledgerLeads(runDir string) ([]LeadRecord, error) {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
@@ -84,11 +112,153 @@ func ledgerLeadClosed(runDir, leadID string) bool {
 	return false
 }
 
+func ledgerFindings(runDir string) ([]FindingRecord, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var findings []FindingRecord
+	for _, event := range events {
+		if event.Type != "finding.created" || event.Object != "finding" {
+			continue
+		}
+		findings = append(findings, FindingRecord{
+			ID:         event.ObjectID,
+			Title:      stringData(event.Data, "title"),
+			LeadID:     stringData(event.Data, "lead_id"),
+			Category:   stringData(event.Data, "category"),
+			Severity:   stringData(event.Data, "severity"),
+			Confidence: stringData(event.Data, "confidence"),
+			BodyPath:   stringData(event.Data, "body_path"),
+		})
+	}
+	return findings, nil
+}
+
+func unreviewedLedgerFindings(runDir string) ([]FindingRecord, error) {
+	findings, err := ledgerFindings(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var pending []FindingRecord
+	for _, finding := range findings {
+		if !ledgerFindingHasVerdict(runDir, finding.ID, "review") {
+			pending = append(pending, finding)
+		}
+	}
+	return pending, nil
+}
+
+func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var evidence []EvidenceRecord
+	for _, event := range events {
+		if event.Type != "evidence.added" || event.Object != "evidence" {
+			continue
+		}
+		evidence = append(evidence, EvidenceRecord{
+			ID:        event.ObjectID,
+			Kind:      stringData(event.Data, "kind"),
+			Title:     stringData(event.Data, "title"),
+			Path:      stringData(event.Data, "path"),
+			LeadID:    stringData(event.Data, "lead_id"),
+			FindingID: stringData(event.Data, "finding_id"),
+		})
+	}
+	return evidence, nil
+}
+
+func ledgerEvidenceForFinding(runDir, findingID string) ([]EvidenceRecord, error) {
+	if findingID == "" {
+		return nil, nil
+	}
+	evidence, err := ledgerEvidence(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var matches []EvidenceRecord
+	for _, item := range evidence {
+		if item.FindingID == findingID {
+			matches = append(matches, item)
+		}
+	}
+	return matches, nil
+}
+
+func ledgerEvidenceForLead(runDir, leadID string) ([]EvidenceRecord, error) {
+	if leadID == "" {
+		return nil, nil
+	}
+	evidence, err := ledgerEvidence(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var matches []EvidenceRecord
+	for _, item := range evidence {
+		if item.LeadID == leadID {
+			matches = append(matches, item)
+		}
+	}
+	return matches, nil
+}
+
+func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var verdicts []VerdictRecord
+	for _, event := range events {
+		if event.Type != "verdict.recorded" || event.Object != "verdict" {
+			continue
+		}
+		verdicts = append(verdicts, VerdictRecord{
+			ID:        event.ObjectID,
+			TaskID:    event.TaskID,
+			FindingID: stringData(event.Data, "finding_id"),
+			Phase:     stringData(event.Data, "phase"),
+			Value:     stringData(event.Data, "value"),
+			Reason:    stringData(event.Data, "reason"),
+		})
+	}
+	return verdicts, nil
+}
+
+func ledgerFindingHasVerdict(runDir, findingID, phase string) bool {
+	verdicts, err := ledgerVerdicts(runDir)
+	if err != nil {
+		return false
+	}
+	for _, verdict := range verdicts {
+		if verdict.FindingID == findingID && verdict.Phase == phase && ledgerTaskCompleted(runDir, verdict.TaskID) {
+			return true
+		}
+	}
+	return false
+}
+
 func leadBodyPath(runDir string, lead LeadRecord) (string, error) {
 	if lead.BodyPath == "" {
 		return "", fmt.Errorf("lead %s is missing body_path", lead.ID)
 	}
 	return filepath.Join(runDir, filepath.FromSlash(lead.BodyPath)), nil
+}
+
+func findingBodyPath(runDir string, finding FindingRecord) (string, error) {
+	if finding.BodyPath == "" {
+		return "", fmt.Errorf("finding %s is missing body_path", finding.ID)
+	}
+	return filepath.Join(runDir, filepath.FromSlash(finding.BodyPath)), nil
+}
+
+func evidencePath(runDir string, evidence EvidenceRecord) (string, error) {
+	if evidence.Path == "" {
+		return "", fmt.Errorf("evidence %s is missing path", evidence.ID)
+	}
+	return filepath.Join(runDir, filepath.FromSlash(evidence.Path)), nil
 }
 
 func stringData(data map[string]any, key string) string {

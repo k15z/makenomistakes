@@ -35,6 +35,7 @@ type ModelConfig struct {
 	Default     string `toml:"default"`
 	Recon       string `toml:"recon"`
 	Investigate string `toml:"investigate"`
+	Review      string `toml:"review"`
 }
 
 type RunnerConfig struct {

@@ -1,0 +1,130 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestReviewPromptIncludesRequiredLedgerCommands(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "evidence/lead-auth.md", "Check whether admin routes miss authorization.")
+	writeRunFile(t, runDir, "evidence/finding-auth.md", "Admin routes do not check user role before mutation.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "lead.created",
+		Object:   "lead",
+		ObjectID: "lead_auth",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"title":     "Authorization boundary",
+			"category":  "security",
+			"priority":  "high",
+			"body_path": "evidence/lead-auth.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_finding",
+		TaskID:   "task_investigate_lead_auth",
+		Data: map[string]any{
+			"kind":       "markdown",
+			"title":      "Investigation notes",
+			"path":       "evidence/finding-auth.md",
+			"finding_id": "finding_auth",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	finding := FindingRecord{
+		ID:         "finding_auth",
+		Title:      "Missing authorization check",
+		LeadID:     "lead_auth",
+		Category:   "security",
+		Severity:   "high",
+		Confidence: "medium",
+		BodyPath:   "evidence/finding-auth.md",
+	}
+
+	prompt, err := reviewPrompt(runDir, "/workspace", Config{
+		Instructions: InstructionConfig{Scope: "Security and correctness only."},
+	}, finding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# makenomistakes Review",
+		"Finding ID: finding_auth",
+		"Security and correctness only.",
+		"Admin routes do not check user role",
+		"mnm evidence add --kind markdown",
+		"mnm verdict record --finding finding_auth --phase review --value accepted",
+		"mnm verdict record --finding finding_auth --phase review --value rejected",
+		"mnm task complete --status completed",
+		filepath.ToSlash(filepath.Join(runDir, "evidence", "review-finding_auth-notes.md")),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestRunReviewPhaseRecordsVerdict(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate auth defect.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_review",
+		Type:     "finding.created",
+		Object:   "finding",
+		ObjectID: "finding_auth",
+		TaskID:   "task_investigate_lead_auth",
+		Data: map[string]any{
+			"title":      "Missing authorization check",
+			"category":   "authz",
+			"severity":   "high",
+			"confidence": "medium",
+			"body_path":  "evidence/finding-auth.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_review_$MNM_FINDING_ID","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
+{"id":"event_done_$MNM_FINDING_ID","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+		Runner: RunnerConfig{ParallelTasks: 1},
+	}
+	if err := runReviewPhase(runDir, "run_review", t.TempDir(), cfg, opencodePath); err != nil {
+		t.Fatal(err)
+	}
+	if !ledgerFindingHasVerdict(runDir, "finding_auth", "review") {
+		t.Fatal("expected review verdict")
+	}
+	pending, err := unreviewedLedgerFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending findings, got %#v", pending)
+	}
+}

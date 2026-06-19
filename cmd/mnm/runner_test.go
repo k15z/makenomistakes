@@ -55,9 +55,9 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 			t.Fatalf("missing recon event type %q in %#v", want, types)
 		}
 	}
-	for _, want := range []string{"finding.created", "lead.closed"} {
+	for _, want := range []string{"finding.created", "lead.closed", "verdict.recorded"} {
 		if !contains(types, want) {
-			t.Fatalf("missing investigate event type %q in %#v", want, types)
+			t.Fatalf("missing audit event type %q in %#v", want, types)
 		}
 	}
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
@@ -268,6 +268,15 @@ func prependFakeOpenCode(t *testing.T, version string) {
   : "${workspace:?workspace is required}"
   printf '%s\n' "$MNM_TASK_ID" > "$workspace/mutated-by-opencode"
   mkdir -p "$MNM_RUN_DIR/evidence"
+  if printf '%s' "$prompt" | grep -q 'makenomistakes Review'; then
+    : "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+    cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_fake_review_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:07Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"Accepted by fake review."}}
+{"id":"event_fake_review_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:08Z","data":{"status":"completed","summary":"Reviewed $MNM_FINDING_ID"}}
+EOF
+    printf '{"type":"done"}\n'
+    exit 0
+  fi
   if printf '%s' "$prompt" | grep -q 'makenomistakes Investigate'; then
     : "${MNM_LEAD_ID:?MNM_LEAD_ID is required}"
     cat > "$MNM_RUN_DIR/evidence/finding-$MNM_LEAD_ID.md" <<'EOF'

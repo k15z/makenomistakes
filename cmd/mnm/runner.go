@@ -85,6 +85,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := runInvestigatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	if err := runReviewPhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+		return err
+	}
 
 	manifestPath := filepath.Join(*runDir, "evidence", "runner-manifest.json")
 	if err := writeRunnerManifest(manifestPath, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
@@ -200,14 +203,15 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 }
 
 type opencodeTask struct {
-	TaskID   string
-	Phase    string
-	LeadID   string
-	Title    string
-	Model    string
-	Prompt   string
-	LogPath  string
-	TaskFile string
+	TaskID    string
+	Phase     string
+	LeadID    string
+	FindingID string
+	Title     string
+	Model     string
+	Prompt    string
+	LogPath   string
+	TaskFile  string
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
@@ -233,6 +237,9 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	)
 	if task.LeadID != "" {
 		env = append(env, "MNM_LEAD_ID="+task.LeadID)
+	}
+	if task.FindingID != "" {
+		env = append(env, "MNM_FINDING_ID="+task.FindingID)
 	}
 	if task.TaskFile != "" {
 		env = append(env, taskFileEnv+"="+task.TaskFile)
@@ -271,9 +278,13 @@ func phaseModel(cfg Config, phase string) string {
 		if strings.TrimSpace(cfg.Models.Investigate) != "" {
 			return strings.TrimSpace(cfg.Models.Investigate)
 		}
-		if defaultModel == "" {
-			return reconModel
+	case "review":
+		if strings.TrimSpace(cfg.Models.Review) != "" {
+			return strings.TrimSpace(cfg.Models.Review)
 		}
+	}
+	if defaultModel == "" {
+		return reconModel
 	}
 	return defaultModel
 }

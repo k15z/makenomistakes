@@ -141,6 +141,7 @@ api_key_env = "OPENROUTER_API_KEY"
 default = "openrouter/z-ai/glm-5.2"
 recon = "openrouter/z-ai/glm-5.2"
 investigate = "openrouter/z-ai/glm-5.2"
+review = "openrouter/z-ai/glm-5.2"
 
 [runner]
 cpus = 4
