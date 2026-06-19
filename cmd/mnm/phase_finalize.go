@@ -200,7 +200,7 @@ JSON report requirements:
 - For each finding object, include id, title, category, severity, confidence, source_lead_id, status, verdicts, evidence_paths, summary, and affected_paths when known.
 - Use empty arrays instead of null for absent lists.
 - The JSON must parse with standard JSON parsers.
-- "id" must be the real ledger ID of a finding, and each "evidence_paths" entry must point to an existing file inside the run directory.
+- "id" must be the real ledger ID of a finding, and each "evidence_paths" entry must point to evidence that was registered for that finding through mnm evidence add.
 - Place each finding in the bucket proven by the ledger verdicts. A finding with validation failed belongs in "failed", not "proven"; a review-rejected finding belongs in "rejected"; a deduplicate duplicate belongs in "duplicate".
 `, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg)), nil
 }

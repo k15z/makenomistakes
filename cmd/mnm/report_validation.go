@@ -100,9 +100,10 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 }
 
 type reportLedgerState struct {
-	Findings map[string]FindingRecord
-	Leads    map[string]bool
-	Verdicts map[string]map[string]VerdictRecord
+	Findings        map[string]FindingRecord
+	Leads           map[string]bool
+	Verdicts        map[string]map[string]VerdictRecord
+	FindingEvidence map[string]map[string]bool
 }
 
 func reportKnownState(runDir string) (reportLedgerState, error) {
@@ -118,10 +119,15 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 	if err != nil {
 		return reportLedgerState{}, err
 	}
+	evidence, err := ledgerEvidence(runDir)
+	if err != nil {
+		return reportLedgerState{}, err
+	}
 	state := reportLedgerState{
-		Findings: map[string]FindingRecord{},
-		Leads:    map[string]bool{},
-		Verdicts: map[string]map[string]VerdictRecord{},
+		Findings:        map[string]FindingRecord{},
+		Leads:           map[string]bool{},
+		Verdicts:        map[string]map[string]VerdictRecord{},
+		FindingEvidence: map[string]map[string]bool{},
 	}
 	for _, lead := range leads {
 		state.Leads[lead.ID] = true
@@ -140,6 +146,15 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 			state.Verdicts[verdict.FindingID] = map[string]VerdictRecord{}
 		}
 		state.Verdicts[verdict.FindingID][verdict.Phase] = verdict
+	}
+	for _, item := range evidence {
+		if item.FindingID == "" || item.Path == "" {
+			continue
+		}
+		if state.FindingEvidence[item.FindingID] == nil {
+			state.FindingEvidence[item.FindingID] = map[string]bool{}
+		}
+		state.FindingEvidence[item.FindingID][item.Path] = true
 	}
 	return state, nil
 }
@@ -216,6 +231,9 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		evidenceRel, err := normalizeReportPath(runDir, evidencePath)
 		if err != nil {
 			return fmt.Errorf("%s.evidence_paths contains invalid path %q: %w", prefix, evidencePath, err)
+		}
+		if !state.FindingEvidence[id][evidenceRel] {
+			return fmt.Errorf("%s.evidence_paths contains %q, which is not registered ledger evidence for finding %s", prefix, evidencePath, id)
 		}
 		info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(evidenceRel)))
 		if err != nil {

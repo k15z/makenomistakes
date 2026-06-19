@@ -227,6 +227,8 @@ Finding statuses:
   reviewed findings, with proven findings first.
 - Final report validation rejects structured report items whose bucket does not
   match their review, deduplication, and validation verdicts in the ledger.
+- Final report validation rejects evidence paths that were not registered as
+  ledger evidence for the reported finding.
 
 ## PR Sequence
 

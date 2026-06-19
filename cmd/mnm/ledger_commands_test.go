@@ -385,9 +385,11 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
-	if err := os.MkdirAll(filepath.Join(runDir, "evidence", "proof-dir"), dirPerm); err != nil {
+	proofDir := filepath.Join(runDir, "evidence", "proof-dir")
+	if err := os.MkdirAll(proofDir, dirPerm); err != nil {
 		t.Fatal(err)
 	}
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofDir)
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
@@ -400,7 +402,7 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
 			"verdicts":       []string{"validation proven"},
-			"evidence_paths": []string{"evidence/proof-dir"},
+			"evidence_paths": []string{proofRel},
 			"summary":        "Directory paths are not durable evidence files.",
 			"affected_paths": []string{"server/auth.go"},
 		},
@@ -443,6 +445,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 	findingID := strings.TrimSpace(stdout.String())
 	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
@@ -458,7 +461,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
 			"verdicts":       []string{"review accepted", "validation proven"},
-			"evidence_paths": []string{proofPath},
+			"evidence_paths": []string{proofRel},
 			"summary":        "Traceable finding.",
 			"affected_paths": []string{"server/auth.go"},
 		},
@@ -484,6 +487,7 @@ func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 	leadID := createLeadForTest(t, runDir)
 	findingID := createFindingForTest(t, runDir, leadID)
 	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "failed", "")
@@ -499,7 +503,7 @@ func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 			"source_lead_id": leadID,
 			"status":         "validation_proven",
 			"verdicts":       []string{"review accepted", "validation failed"},
-			"evidence_paths": []string{proofPath},
+			"evidence_paths": []string{proofRel},
 			"summary":        "This should not be proven.",
 			"affected_paths": []string{"server/auth.go"},
 		},
@@ -520,6 +524,51 @@ func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 	}
 	if ledgerReportFinalized(runDir) {
 		t.Fatal("misbucketed report item should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsUnregisteredFindingEvidence(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofRel := "evidence/unregistered-proof.log"
+	writeRunFile(t, runDir, proofRel, "proof")
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "The proof file exists but was never registered.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unregistered evidence error")
+	}
+	if !strings.Contains(err.Error(), "not registered ledger evidence") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with unregistered evidence should not be finalized")
 	}
 }
 
@@ -1245,6 +1294,29 @@ func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonic
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func addEvidenceForFindingForTest(t *testing.T, runDir, findingID, path string) string {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", path,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	evidence, err := ledgerEvidenceForFinding(runDir, findingID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) == 0 {
+		t.Fatalf("expected evidence for finding %s", findingID)
+	}
+	return evidence[len(evidence)-1].Path
 }
 
 func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
