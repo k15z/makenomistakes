@@ -27,6 +27,7 @@ type FindingRecord struct {
 
 type EvidenceRecord struct {
 	ID        string
+	TaskID    string
 	Kind      string
 	Title     string
 	Path      string
@@ -228,6 +229,7 @@ func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 		}
 		evidence = append(evidence, EvidenceRecord{
 			ID:        event.ObjectID,
+			TaskID:    event.TaskID,
 			Kind:      stringData(event.Data, "kind"),
 			Title:     stringData(event.Data, "title"),
 			Path:      stringData(event.Data, "path"),
@@ -253,6 +255,27 @@ func ledgerEvidenceForFinding(runDir, findingID string) ([]EvidenceRecord, error
 		}
 	}
 	return matches, nil
+}
+
+func ledgerFindingHasTaskEvidencePath(runDir, findingID, taskID, relPath string) bool {
+	evidence, err := ledgerEvidenceForFinding(runDir, findingID)
+	if err != nil {
+		return false
+	}
+	for _, item := range evidence {
+		if item.TaskID == taskID && item.Path == relPath {
+			return true
+		}
+	}
+	return false
+}
+
+func ledgerFindingHasValidValidationEvidence(runDir, findingID, taskID string) bool {
+	notesRel := validationNotesRelPath(findingID)
+	if !ledgerFindingHasTaskEvidencePath(runDir, findingID, taskID, notesRel) {
+		return false
+	}
+	return validateNonEmptyValidationEvidence(runDir, notesRel) == nil
 }
 
 func ledgerEvidenceForLead(runDir, leadID string) ([]EvidenceRecord, error) {
@@ -303,12 +326,22 @@ func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool,
 	var match VerdictRecord
 	found := false
 	for _, verdict := range verdicts {
-		if verdict.FindingID == findingID && verdict.Phase == phase && ledgerTaskCompleted(runDir, verdict.TaskID) {
+		if verdict.FindingID == findingID && verdict.Phase == phase && ledgerVerdictComplete(runDir, verdict) {
 			match = verdict
 			found = true
 		}
 	}
 	return match, found, nil
+}
+
+func ledgerVerdictComplete(runDir string, verdict VerdictRecord) bool {
+	if !ledgerTaskCompleted(runDir, verdict.TaskID) {
+		return false
+	}
+	if verdict.Phase == "validate" {
+		return ledgerFindingHasValidValidationEvidence(runDir, verdict.FindingID, verdict.TaskID)
+	}
+	return true
 }
 
 func ledgerFindingHasVerdict(runDir, findingID, phase string) bool {

@@ -143,7 +143,7 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 		if verdict.FindingID == "" || verdict.Phase == "" {
 			continue
 		}
-		if !ledgerTaskCompleted(runDir, verdict.TaskID) {
+		if !ledgerVerdictComplete(runDir, verdict) {
 			continue
 		}
 		if state.Verdicts[verdict.FindingID] == nil {

@@ -1414,6 +1414,25 @@ func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonic
 	if err := run(args, &stdout, &stderr); err != nil {
 		t.Fatalf("verdict record failed: %v\nstderr: %s", err, stderr.String())
 	}
+	if phase == "validate" {
+		notesRel := validationNotesRelPath(findingID)
+		writeRunFile(t, runDir, notesRel, "Validation evidence for test.")
+		if err := appendLedgerEvent(runDir, LedgerEvent{
+			RunID:    "run_test",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_validate_" + safeFileID(findingID),
+			TaskID:   taskID,
+			Data: map[string]any{
+				"kind":       "markdown",
+				"title":      "Validation notes",
+				"path":       notesRel,
+				"finding_id": findingID,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_test",
 		Type:     "task.completed",
