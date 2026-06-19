@@ -255,14 +255,21 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 
 func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) error {
 	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	var logOffset int64
 	if attempt > 1 {
 		flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		if info, err := os.Stat(task.LogPath); err == nil {
+			logOffset = info.Size()
+		}
+	}
+	ledgerOffset, err := fileSize(filepath.Join(runDir, eventsFile))
+	if err != nil {
+		return err
 	}
 	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
 	if err != nil {
 		return err
 	}
-	defer logFile.Close()
 	command := exec.Command(opencodePath,
 		"run",
 		"--format", "json",
@@ -289,8 +296,60 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	}
 	command.Env = env
 	command.Stdout = io.MultiWriter(os.Stdout, logFile)
-	command.Stderr = io.MultiWriter(os.Stderr, logFile)
-	return command.Run()
+	command.Stderr = os.Stderr
+	runErr := command.Run()
+	if closeErr := logFile.Close(); closeErr != nil && runErr == nil {
+		return closeErr
+	}
+	if runErr != nil {
+		return openCodeAttemptError{
+			err:            runErr,
+			logText:        readLogSuffix(task.LogPath, logOffset),
+			ledgerModified: fileModifiedSince(filepath.Join(runDir, eventsFile), ledgerOffset),
+		}
+	}
+	return nil
+}
+
+type openCodeAttemptError struct {
+	err            error
+	logText        string
+	ledgerModified bool
+}
+
+func (e openCodeAttemptError) Error() string {
+	return e.err.Error()
+}
+
+func (e openCodeAttemptError) Unwrap() error {
+	return e.err
+}
+
+func readLogSuffix(logPath string, offset int64) string {
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		return ""
+	}
+	if offset < 0 || offset > int64(len(b)) {
+		return ""
+	}
+	return string(b[offset:])
+}
+
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+func fileModifiedSince(path string, previousSize int64) bool {
+	currentSize, err := fileSize(path)
+	return err != nil || currentSize != previousSize
 }
 
 func retryableOpenCodeError(logPath string, err error) bool {
@@ -298,7 +357,13 @@ func retryableOpenCodeError(logPath string, err error) bool {
 		return false
 	}
 	text := strings.ToLower(err.Error())
-	if b, readErr := os.ReadFile(logPath); readErr == nil {
+	var attemptErr openCodeAttemptError
+	if errors.As(err, &attemptErr) {
+		if attemptErr.ledgerModified {
+			return false
+		}
+		text += "\n" + strings.ToLower(attemptErr.logText)
+	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
 		text += "\n" + strings.ToLower(string(b))
 	}
 	for _, marker := range []string{
