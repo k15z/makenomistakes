@@ -92,7 +92,6 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 			"kind":       "markdown",
 			"title":      "Proof notes",
 			"path":       "evidence/proof.md",
-			"lead_id":    "lead_one",
 			"finding_id": "finding_one",
 		},
 	}); err != nil {

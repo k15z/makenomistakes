@@ -161,6 +161,25 @@ func TestTaskCurrentPrintsCurrentTask(t *testing.T) {
 	}
 }
 
+func TestTaskCompleteRequiresSummary(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"task", "complete",
+		"--run-dir", runDir,
+		"--status", "completed",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing summary error")
+	}
+	if !strings.Contains(err.Error(), "--summary must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerTaskCompleted(runDir, "task_recon") {
+		t.Fatal("task should not complete without a summary")
+	}
+}
+
 func TestReportFinalizeRejectsMalformedJSONWithoutLedgerEvent(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
@@ -405,7 +424,22 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 	if err := os.MkdirAll(proofDir, dirPerm); err != nil {
 		t.Fatal(err)
 	}
-	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofDir)
+	proofRel := filepath.ToSlash(filepath.Join("evidence", "proof-dir"))
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_proof_dir",
+		TaskID:   "task_validate",
+		Data: map[string]any{
+			"kind":       "directory",
+			"title":      "Directory proof",
+			"path":       proofRel,
+			"finding_id": findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
@@ -434,7 +468,7 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected directory evidence path error")
 	}
-	if !strings.Contains(err.Error(), "contains directory") {
+	if !strings.Contains(err.Error(), "path must be a regular file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ledgerReportFinalized(runDir) {
@@ -983,6 +1017,202 @@ func TestEvidenceRejectsPathOutsideRunDir(t *testing.T) {
 	}
 }
 
+func TestEvidenceRejectsSymlinkEscape(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	if err := os.WriteFile(outside, []byte("nope"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(runDir, "evidence", "outside-link.log")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Outside link",
+		"--path", linkPath,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected symlink escape error")
+	}
+	if !strings.Contains(err.Error(), "inside run directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEvidenceRejectsEmptyFile(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	empty := writeRunFile(t, runDir, "evidence/empty.log", "")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Empty proof",
+		"--path", empty,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected empty evidence error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/empty.log must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	blank := writeRunFile(t, runDir, "evidence/blank.log", " \n\t ")
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Blank proof",
+		"--path", blank,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected blank evidence error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/blank.log must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEvidenceRejectsLeadAndFindingOwnerTogether(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--lead", leadID,
+		"--finding", findingID,
+		"--kind", "log",
+		"--title", "Ambiguous proof",
+		"--path", proof,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected ambiguous evidence owner error")
+	}
+	if !strings.Contains(err.Error(), "at most one of --lead or --finding") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLeadCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	body := writeRunFile(t, runDir, "evidence/lead-auth.md", "Investigate auth.")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth",
+		"--category", "   ",
+		"--body-file", body,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected blank category error")
+	}
+	if !strings.Contains(err.Error(), "--category must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	emptyBody := writeRunFile(t, runDir, "evidence/lead-empty.md", "")
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth",
+		"--category", "authz",
+		"--body-file", emptyBody,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected empty lead body error")
+	}
+	if !strings.Contains(err.Error(), "lead body file evidence/lead-empty.md must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	blankBody := writeRunFile(t, runDir, "evidence/lead-blank.md", " \n\t ")
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth",
+		"--category", "authz",
+		"--body-file", blankBody,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected blank lead body error")
+	}
+	if !strings.Contains(err.Error(), "lead body file evidence/lead-blank.md must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFindingCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	body := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate finding.")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "Missing authorization check",
+		"--category", "   ",
+		"--body-file", body,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected blank category error")
+	}
+	if !strings.Contains(err.Error(), "--category must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	emptyBody := writeRunFile(t, runDir, "evidence/finding-empty.md", "")
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "Missing authorization check",
+		"--category", "authz",
+		"--body-file", emptyBody,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected empty finding body error")
+	}
+	if !strings.Contains(err.Error(), "finding body file evidence/finding-empty.md must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	blankBody := writeRunFile(t, runDir, "evidence/finding-blank.md", " \n\t ")
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{
+		"finding", "create",
+		"--run-dir", runDir,
+		"--title", "Missing authorization check",
+		"--category", "authz",
+		"--body-file", blankBody,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected blank finding body error")
+	}
+	if !strings.Contains(err.Error(), "finding body file evidence/finding-blank.md must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLeadCloseRequiresExistingLead(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	var stdout, stderr bytes.Buffer
@@ -1103,6 +1333,58 @@ func TestLeadCloseRejectsDifferentTerminalStatus(t *testing.T) {
 	assertLeadClosedEventCount(t, runDir, leadID, 1)
 }
 
+func TestLeadCloseRequiresReasonForIdempotentClose(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+		"--reason", "First close.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first lead close failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing reason error")
+	}
+	if !strings.Contains(err.Error(), "--reason must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadClosedEventCount(t, runDir, leadID, 1)
+}
+
+func TestLeadCloseRequiresReason(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing reason error")
+	}
+	if !strings.Contains(err.Error(), "--reason must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadClosedEventCount(t, runDir, leadID, 0)
+}
+
 func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	findingBody := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate auth defect.")
@@ -1132,6 +1414,26 @@ func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
 		t.Fatal("expected invalid verdict value error")
 	}
 	if !strings.Contains(err.Error(), "invalid review verdict value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerdictRequiresReason(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "accepted",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing reason error")
+	}
+	if !strings.Contains(err.Error(), "--reason must not be empty") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1297,6 +1599,7 @@ func TestVerdictRejectsMismatchedTaskPhase(t *testing.T) {
 		"--finding", "finding_one",
 		"--phase", "review",
 		"--value", "accepted",
+		"--reason", "Accepted.",
 	}, &stdout, &stderr)
 	if err == nil {
 		t.Fatal("expected mismatched task phase error")
