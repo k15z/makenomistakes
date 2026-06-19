@@ -56,7 +56,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 	if runID != task.RunID {
 		return fmt.Errorf("report JSON run_id = %q, want %q", runID, task.RunID)
 	}
-	if err := validateReportPaths(runDir, root, markdownRel, jsonRel); err != nil {
+	if err := validateReportPaths(root, markdownRel, jsonRel); err != nil {
 		return err
 	}
 
@@ -211,7 +211,7 @@ func reportWorkspaceFiles(runDir string) (map[string]bool, error) {
 	return files, nil
 }
 
-func validateReportPaths(runDir string, root map[string]json.RawMessage, markdownRel, jsonRel string) error {
+func validateReportPaths(root map[string]json.RawMessage, markdownRel, jsonRel string) error {
 	paths, err := requiredObjectField(root, "report_paths")
 	if err != nil {
 		return err
@@ -220,23 +220,15 @@ func validateReportPaths(runDir string, root map[string]json.RawMessage, markdow
 	if err != nil {
 		return err
 	}
-	gotMarkdownRel, err := normalizeReportPath(runDir, markdownPath)
-	if err != nil {
-		return fmt.Errorf("report_paths.markdown: %w", err)
-	}
-	if gotMarkdownRel != markdownRel {
-		return fmt.Errorf("report_paths.markdown = %q, want %q", gotMarkdownRel, markdownRel)
+	if markdownPath != markdownRel {
+		return fmt.Errorf("report_paths.markdown = %q, want %q", markdownPath, markdownRel)
 	}
 	jsonPath, err := requiredStringField(paths, "json")
 	if err != nil {
 		return err
 	}
-	gotJSONRel, err := normalizeReportPath(runDir, jsonPath)
-	if err != nil {
-		return fmt.Errorf("report_paths.json: %w", err)
-	}
-	if gotJSONRel != jsonRel {
-		return fmt.Errorf("report_paths.json = %q, want %q", gotJSONRel, jsonRel)
+	if jsonPath != jsonRel {
+		return fmt.Errorf("report_paths.json = %q, want %q", jsonPath, jsonRel)
 	}
 	return nil
 }

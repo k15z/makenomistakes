@@ -163,6 +163,21 @@ func TestLimaTaskInstanceNameAvoidsLongNameCollisions(t *testing.T) {
 	}
 }
 
+func TestLimaTaskInstanceNameHashesNormalizedCollisions(t *testing.T) {
+	runID := "run_collision"
+	first := limaTaskInstanceName(runID, "task_a_b", 1)
+	second := limaTaskInstanceName(runID, "task-a-b", 1)
+
+	if first == second {
+		t.Fatalf("normalized task instance names collided:\n%s", first)
+	}
+	for _, name := range []string{first, second} {
+		if len(name) > maxLimaTaskInstanceNameLen {
+			t.Fatalf("instance name %q has length %d, want <= %d", name, len(name), maxLimaTaskInstanceNameLen)
+		}
+	}
+}
+
 func TestLimaTaskInstanceNameShortensLongNames(t *testing.T) {
 	name := limaTaskInstanceName("run_004311f6-f32f-4c30-b608-012bde0a6e11", "task_recon", 1)
 	if len(name) > maxLimaTaskInstanceNameLen {

@@ -138,10 +138,7 @@ func copyLimaAttemptLog(outputDir, logRelPath, hostLogPath string) (string, erro
 		return logText, nil
 	}
 	if _, err := os.Stat(attemptLogPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return logText, nil
-		}
-		return logText, err
+		return logText, fmt.Errorf("copy task transcript from bundle: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(hostLogPath), dirPerm); err != nil {
 		return logText, err
@@ -323,19 +320,20 @@ func limaTaskInstanceName(runID, taskID string, attempt int) string {
 	if attempt > 0 {
 		name += "-a" + strconv.Itoa(attempt)
 	}
-	return shortenLimaTaskInstanceName(name)
+	digest := sha256.Sum256([]byte(runID + "\x00" + taskID + "\x00" + strconv.Itoa(attempt)))
+	hash := fmt.Sprintf("%x", digest[:])[:8]
+	return shortenLimaTaskInstanceName(name, hash)
 }
 
-func shortenLimaTaskInstanceName(name string) string {
-	if len(name) <= maxLimaTaskInstanceNameLen {
-		return name
+func shortenLimaTaskInstanceName(name, hash string) string {
+	suffix := "-" + hash
+	if len(name)+len(suffix) <= maxLimaTaskInstanceNameLen {
+		return name + suffix
 	}
-	sum := sha256.Sum256([]byte(name))
-	hash := fmt.Sprintf("%x", sum[:])[:8]
-	keep := maxLimaTaskInstanceNameLen - len(hash) - 1
+	keep := maxLimaTaskInstanceNameLen - len(suffix)
 	prefix := strings.TrimRight(name[:keep], "-")
 	if prefix == "" {
 		prefix = "mnm-task"
 	}
-	return prefix + "-" + hash
+	return prefix + suffix
 }
