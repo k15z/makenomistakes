@@ -68,4 +68,8 @@ func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
 	if got := phaseModel(cfg, "investigate"); got != "openrouter/default" {
 		t.Fatalf("investigate fallback = %q", got)
 	}
+	cfg.Models.Default = ""
+	if got := phaseModel(cfg, "investigate"); got != "openrouter/recon" {
+		t.Fatalf("investigate recon fallback = %q", got)
+	}
 }
