@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -48,6 +49,7 @@ type ResolvedConfig struct {
 	WorkspaceRoot string
 	APIKeyEnv     string
 	Model         string
+	Timeout       time.Duration
 }
 
 func loadConfig(path string) (Config, error) {
@@ -130,5 +132,6 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 		WorkspaceRoot: workspaceRoot,
 		APIKeyEnv:     apiKeyEnv,
 		Model:         model,
+		Timeout:       time.Duration(cfg.Runner.TimeoutMinutes) * time.Minute,
 	}, nil
 }

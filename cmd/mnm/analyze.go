@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	prepareOnly := flags.Bool("prepare-only", false, "prepare the run without starting the VM runner")
+	keepVM := flags.Bool("keep-vm", false, "keep the Lima VM after the runner exits")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -30,7 +33,26 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	options := AnalyzeOptions{
+		WorkspaceDir: workspaceDir,
+		PrepareOnly:  *prepareOnly,
+		KeepVM:       *keepVM,
+		Stdout:       stdout,
+		Stderr:       stderr,
+	}
+	return analyzeWorkspace(context.Background(), options, newDefaultRunner(stdout, stderr))
+}
 
+type AnalyzeOptions struct {
+	WorkspaceDir string
+	PrepareOnly  bool
+	KeepVM       bool
+	Stdout       io.Writer
+	Stderr       io.Writer
+}
+
+func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner AnalyzeRunner) error {
+	workspaceDir := options.WorkspaceDir
 	cfg, err := loadConfig(filepath.Join(workspaceDir, "mnm.toml"))
 	if err != nil {
 		return err
@@ -92,10 +114,35 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(stdout, "prepared run %s\n", runID)
-	fmt.Fprintf(stdout, "workspace: %s\n", resolved.WorkspaceRoot)
-	fmt.Fprintf(stdout, "snapshot: %s\n", run.SnapshotPath)
-	fmt.Fprintf(stdout, "run dir: %s\n", runDir)
+	fmt.Fprintf(options.Stdout, "prepared run %s\n", runID)
+	fmt.Fprintf(options.Stdout, "workspace: %s\n", resolved.WorkspaceRoot)
+	fmt.Fprintf(options.Stdout, "snapshot: %s\n", run.SnapshotPath)
+	fmt.Fprintf(options.Stdout, "run dir: %s\n", runDir)
+	if options.PrepareOnly {
+		return nil
+	}
+
+	if err := store.UpdateRunStatus(runID, RunStatusVMStarting); err != nil {
+		return err
+	}
+	fmt.Fprintf(options.Stdout, "starting runner VM\n")
+	runCtx, cancel := context.WithTimeout(ctx, resolved.Timeout)
+	defer cancel()
+	if err := store.UpdateRunStatus(runID, RunStatusRunning); err != nil {
+		return err
+	}
+	if err := runner.Run(runCtx, RunnerRequest{
+		Run:    run,
+		Config: cfg,
+		KeepVM: options.KeepVM,
+	}); err != nil {
+		_ = store.UpdateRunStatus(runID, RunStatusFailed)
+		return err
+	}
+	if err := store.UpdateRunStatus(runID, RunStatusCompleted); err != nil {
+		return err
+	}
+	fmt.Fprintf(options.Stdout, "runner completed\n")
 	return nil
 }
 

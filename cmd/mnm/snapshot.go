@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -118,6 +119,99 @@ func createWorkspaceSnapshot(options SnapshotOptions) error {
 		return closeErr
 	})
 	return errors.Join(walkErr, tarWriter.Close(), encoder.Close(), output.Close())
+}
+
+func extractWorkspaceSnapshot(snapshotPath, dst string) error {
+	input, err := os.Open(snapshotPath)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	decoder, err := zstd.NewReader(input)
+	if err != nil {
+		return err
+	}
+	defer decoder.Close()
+	reader := tar.NewReader(decoder)
+
+	cleanDst, err := filepath.Abs(dst)
+	if err != nil {
+		return err
+	}
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		target, err := safeSnapshotTarget(cleanDst, header.Name)
+		if err != nil {
+			return err
+		}
+
+		mode := fs.FileMode(header.Mode)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, mode); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), dirPerm); err != nil {
+				return err
+			}
+			output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(output, reader)
+			closeErr := output.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		case tar.TypeSymlink:
+			if !safeSymlinkTarget(cleanDst, target, header.Linkname) {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(target), dirPerm); err != nil {
+				return err
+			}
+			_ = os.Remove(target)
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				return err
+			}
+		default:
+			continue
+		}
+	}
+	return nil
+}
+
+func safeSnapshotTarget(dst, name string) (string, error) {
+	if name == "" || filepath.IsAbs(name) {
+		return "", fmt.Errorf("unsafe snapshot entry path %q", name)
+	}
+	cleanName := filepath.Clean(filepath.FromSlash(name))
+	if cleanName == "." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) || cleanName == ".." {
+		return "", fmt.Errorf("unsafe snapshot entry path %q", name)
+	}
+	target := filepath.Join(dst, cleanName)
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(dst, absTarget)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("unsafe snapshot entry path %q", name)
+	}
+	return absTarget, nil
 }
 
 func defaultSnapshotExcludes() []string {

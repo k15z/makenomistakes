@@ -23,6 +23,10 @@ events.
   - `mnm init`: create `mnm.toml` and `.mnmignore`.
   - `mnm analyze`: read config, create/resume a run, launch VM, execute the
     pipeline, and collect results.
+  - `mnm analyze --prepare-only`: create config snapshot, workspace snapshot,
+    and run state without launching a VM.
+  - `mnm analyze --keep-vm`: stop but do not delete the Lima VM after the runner
+    exits, for local debugging.
   - `mnm runner`: hidden VM-side runner entrypoint.
   - `mnm task`, `mnm lead`, `mnm finding`, `mnm evidence`, `mnm verdict`, and
     `mnm report`: VM-side ledger commands used by `opencode`.
