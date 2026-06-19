@@ -157,7 +157,19 @@ func (runner LimaRunner) copyOutputs(ctx context.Context, instanceName, runDir s
 	if err := runner.Executor.Run(ctx, "limactl", "copy", "--backend=scp", "-r", instanceName+":/tmp/mnm-run", tempDir); err != nil {
 		return err
 	}
-	return copyDirContents(filepath.Join(tempDir, "mnm-run"), runDir)
+	copiedRunDir := filepath.Join(tempDir, "mnm-run")
+	if err := removeStaleLedgerLock(copiedRunDir); err != nil {
+		return err
+	}
+	return copyDirContents(copiedRunDir, runDir)
+}
+
+func removeStaleLedgerLock(runDir string) error {
+	err := os.Remove(filepath.Join(runDir, ".events.lock"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func buildLinuxRunnerPayload(runDir string) (string, func(), error) {
