@@ -242,7 +242,7 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer unlock()
-		currentStatus, exists, err := ledgerLeadStatusUnlocked(runDir, *id)
+		currentStatus, exists, err := ledgerLeadStatusOverlayUnlocked(runDir, *id)
 		if err != nil {
 			return err
 		}
@@ -276,6 +276,14 @@ func ledgerLeadStatus(runDir, leadID string) (string, bool, error) {
 
 func ledgerLeadStatusUnlocked(runDir, leadID string) (string, bool, error) {
 	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return leadStatusFromEvents(events, leadID)
+}
+
+func ledgerLeadStatusOverlayUnlocked(runDir, leadID string) (string, bool, error) {
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
 	if err != nil {
 		return "", false, err
 	}

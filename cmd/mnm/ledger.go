@@ -18,6 +18,7 @@ const (
 	currentTaskFile = "current-task.json"
 	eventsFile      = "events.jsonl"
 	taskFileEnv     = "MNM_TASK_FILE"
+	ledgerDirEnv    = "MNM_LEDGER_DIR"
 )
 
 type LedgerEvent struct {
@@ -218,6 +219,90 @@ func appendLedgerEventsUnlocked(runDir string, events []LedgerEvent) error {
 }
 
 func readLedgerEvents(runDir string) ([]LedgerEvent, error) {
+	outputDir, snapshotDir, sameDir, err := ledgerOverlayDirs(runDir)
+	if err != nil {
+		return nil, err
+	}
+	if snapshotDir == "" || sameDir {
+		return readLedgerEventsFile(outputDir)
+	}
+	baseEvents, err := readLedgerSnapshotEvents(snapshotDir)
+	if err != nil {
+		return nil, fmt.Errorf("read ledger snapshot %s: %w", snapshotDir, err)
+	}
+	outputEvents, err := readLedgerEventsFile(outputDir)
+	if err != nil {
+		return nil, err
+	}
+	return append(baseEvents, outputEvents...), nil
+}
+
+func readLedgerEventsOverlayUnlocked(runDir string) ([]LedgerEvent, error) {
+	outputDir, snapshotDir, sameDir, err := ledgerOverlayDirs(runDir)
+	if err != nil {
+		return nil, err
+	}
+	if snapshotDir == "" || sameDir {
+		return readLedgerEventsUnlocked(outputDir)
+	}
+	baseEvents, err := readLedgerSnapshotEvents(snapshotDir)
+	if err != nil {
+		return nil, fmt.Errorf("read ledger snapshot %s: %w", snapshotDir, err)
+	}
+	outputEvents, err := readLedgerEventsUnlocked(outputDir)
+	if err != nil {
+		return nil, err
+	}
+	return append(baseEvents, outputEvents...), nil
+}
+
+func ledgerOverlayDirs(runDir string) (outputDir, snapshotDir string, sameDir bool, err error) {
+	absRunDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return "", "", false, err
+	}
+	ledgerDir := strings.TrimSpace(os.Getenv(ledgerDirEnv))
+	if ledgerDir == "" {
+		return absRunDir, "", true, nil
+	}
+	if err := os.MkdirAll(absRunDir, dirPerm); err != nil {
+		return "", "", false, err
+	}
+	absLedgerDir, err := filepath.Abs(ledgerDir)
+	if err != nil {
+		return "", "", false, err
+	}
+	sameDir, err = sameDirectory(absRunDir, absLedgerDir)
+	if err != nil {
+		return "", "", false, err
+	}
+	return absRunDir, absLedgerDir, sameDir, nil
+}
+
+func sameDirectory(left, right string) (bool, error) {
+	realLeft, err := filepath.EvalSymlinks(left)
+	if err != nil {
+		return false, fmt.Errorf("resolve ledger output directory %s: %w", left, err)
+	}
+	realRight, err := filepath.EvalSymlinks(right)
+	if err != nil {
+		return false, fmt.Errorf("resolve ledger snapshot directory %s: %w", right, err)
+	}
+	return filepath.Clean(realLeft) == filepath.Clean(realRight), nil
+}
+
+func readLedgerSnapshotEvents(runDir string) ([]LedgerEvent, error) {
+	info, err := os.Stat(runDir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("ledger snapshot path is not a directory: %s", runDir)
+	}
+	return readLedgerEventsUnlocked(runDir)
+}
+
+func readLedgerEventsFile(runDir string) ([]LedgerEvent, error) {
 	if err := os.MkdirAll(runDir, dirPerm); err != nil {
 		return nil, err
 	}
