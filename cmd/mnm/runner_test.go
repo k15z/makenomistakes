@@ -464,7 +464,86 @@ func TestLimaRunnerPreflightAcceptsProvidedPayloadWithoutGo(t *testing.T) {
 	t.Setenv("PATH", dir)
 	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", filepath.Join(dir, "mnm-linux"))
 
-	if err := (LimaRunner{}).Preflight(context.Background(), RunnerPreflightRequest{}); err != nil {
+	runner := LimaRunner{ResourceDetector: func() (HostResources, error) {
+		return HostResources{}, nil
+	}}
+	if err := runner.Preflight(context.Background(), RunnerPreflightRequest{}); err != nil {
+		t.Fatalf("preflight failed: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightRejectsCPURequestAboveHost(t *testing.T) {
+	runner := limaRunnerWithHostResources(t, HostResources{
+		CPUs:          4,
+		MemoryBytes:   16 * bytesPerGiB,
+		DiskFreeBytes: 100 * bytesPerGiB,
+		DiskPath:      "/tmp",
+	})
+
+	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
+		Config: Config{Runner: RunnerConfig{CPUs: 8}},
+	})
+	if err == nil {
+		t.Fatal("expected CPU resource error")
+	}
+	if !strings.Contains(err.Error(), "runner.cpus requests 8 CPUs, but host reports 4") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightRejectsMemoryRequestAboveHost(t *testing.T) {
+	runner := limaRunnerWithHostResources(t, HostResources{
+		CPUs:          8,
+		MemoryBytes:   8 * bytesPerGiB,
+		DiskFreeBytes: 100 * bytesPerGiB,
+		DiskPath:      "/tmp",
+	})
+
+	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
+		Config: Config{Runner: RunnerConfig{MemoryGB: 16}},
+	})
+	if err == nil {
+		t.Fatal("expected memory resource error")
+	}
+	if !strings.Contains(err.Error(), "runner.memory_gb requests 16 GiB") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightRejectsDiskRequestAboveLimaFreeSpace(t *testing.T) {
+	runner := limaRunnerWithHostResources(t, HostResources{
+		CPUs:          8,
+		MemoryBytes:   16 * bytesPerGiB,
+		DiskFreeBytes: 40 * bytesPerGiB,
+		DiskPath:      "/tmp/lima",
+	})
+
+	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
+		Config: Config{Runner: RunnerConfig{DiskGB: 80}},
+	})
+	if err == nil {
+		t.Fatal("expected disk resource error")
+	}
+	if !strings.Contains(err.Error(), "runner.disk_gb requests 80 GiB") || !strings.Contains(err.Error(), "/tmp/lima") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightAcceptsSufficientHostResources(t *testing.T) {
+	runner := limaRunnerWithHostResources(t, HostResources{
+		CPUs:          8,
+		MemoryBytes:   16 * bytesPerGiB,
+		DiskFreeBytes: 100 * bytesPerGiB,
+		DiskPath:      "/tmp/lima",
+	})
+
+	if err := runner.Preflight(context.Background(), RunnerPreflightRequest{
+		Config: Config{Runner: RunnerConfig{
+			CPUs:     4,
+			MemoryGB: 8,
+			DiskGB:   80,
+		}},
+	}); err != nil {
 		t.Fatalf("preflight failed: %v", err)
 	}
 }
@@ -949,6 +1028,19 @@ func writeExecutable(t *testing.T, path string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func limaRunnerWithHostResources(t *testing.T, resources HostResources) LimaRunner {
+	t.Helper()
+	dir := t.TempDir()
+	writeExecutable(t, filepath.Join(dir, "limactl"))
+	t.Setenv("PATH", dir)
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", filepath.Join(dir, "mnm-linux"))
+	return LimaRunner{
+		ResourceDetector: func() (HostResources, error) {
+			return resources, nil
+		},
 	}
 }
 
