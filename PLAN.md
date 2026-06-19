@@ -220,6 +220,10 @@ Finding statuses:
 - VM-side `mnm lead create`, `mnm lead close`, and `mnm finding create` reject
   attempts from current task phases that are not allowed to perform that
   lifecycle action.
+- VM-side `mnm evidence add` rejects owner/phase mismatches: only Recon and
+  Deduplicate can register unowned evidence, only Investigate can attach
+  evidence to leads, and only Investigate, Review, and Validate can attach
+  evidence to findings.
 - VM-side `mnm verdict record` rejects attempts to record a Review,
   Deduplicate, or Validate verdict from any other current task phase.
 - VM-side `mnm report finalize` rejects attempts from any current task phase

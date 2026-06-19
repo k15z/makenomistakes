@@ -2231,6 +2231,74 @@ func TestEvidenceRejectsLeadAndFindingOwnerTogether(t *testing.T) {
 	}
 }
 
+func TestEvidenceAddRejectsLeadOwnerOutsideInvestigate(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	proof := writeRunFile(t, runDir, "evidence/lead-proof.log", "proof")
+	setCurrentTaskPhaseForTest(t, runDir, "review")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--lead", leadID,
+		"--kind", "log",
+		"--title", "Lead proof",
+		"--path", proof,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected lead evidence phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "review" cannot run evidence add --lead`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEvidenceAddRejectsFindingOwnerOutsideFindingPhases(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proof := writeRunFile(t, runDir, "evidence/finding-proof.log", "proof")
+	setCurrentTaskPhaseForTest(t, runDir, "deduplicate")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--kind", "log",
+		"--title", "Finding proof",
+		"--path", proof,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected finding evidence phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "deduplicate" cannot run evidence add --finding`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEvidenceAddRejectsUnownedEvidenceOutsideReconOrDeduplicate(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	proof := writeRunFile(t, runDir, "evidence/unowned-proof.log", "proof")
+	setCurrentTaskPhaseForTest(t, runDir, "validate")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Unowned proof",
+		"--path", proof,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unowned evidence phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "validate" cannot run evidence add`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEvidenceAddIsIdempotentForSameMetadata(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
@@ -3644,6 +3712,7 @@ func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonic
 
 func addEvidenceForFindingForTest(t *testing.T, runDir, findingID, path string) string {
 	t.Helper()
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"evidence", "add",

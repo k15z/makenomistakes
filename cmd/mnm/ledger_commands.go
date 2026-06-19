@@ -431,6 +431,9 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := requireEvidenceOwnerPhase(task, *leadID, *findingID); err != nil {
+		return err
+	}
 	if *leadID != "" {
 		if err := requireLedgerObject(runDir, "lead", *leadID); err != nil {
 			return err
@@ -759,6 +762,17 @@ func requireCurrentTaskPhase(task TaskRecord, command string, allowed ...string)
 		return nil
 	}
 	return fmt.Errorf("current task phase %q cannot run %s; expected one of: %s", task.Phase, command, strings.Join(allowed, ", "))
+}
+
+func requireEvidenceOwnerPhase(task TaskRecord, leadID, findingID string) error {
+	switch {
+	case leadID != "":
+		return requireCurrentTaskPhase(task, "evidence add --lead", "investigate")
+	case findingID != "":
+		return requireCurrentTaskPhase(task, "evidence add --finding", "investigate", "review", "validate")
+	default:
+		return requireCurrentTaskPhase(task, "evidence add", "recon", "deduplicate")
+	}
 }
 
 func ledgerTaskEvidencePathUnlocked(runDir, taskID, relPath string) (EvidenceRecord, bool, error) {
