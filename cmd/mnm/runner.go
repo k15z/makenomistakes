@@ -201,6 +201,7 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	opencodePathFlag := flags.String("opencode-path", "", "opencode executable path")
 	logPath := flags.String("log-path", "", "opencode transcript path")
 	timeoutMinutes := flags.Int("timeout-minutes", effectiveOpenCodeTaskTimeoutMinutes(Config{}), "opencode task timeout in minutes")
+	skipBundleVerify := flags.Bool("skip-bundle-verify", false, "skip task bundle verification after opencode exits")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -258,12 +259,25 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if *snapshot != "" {
-		tempWorkspace, err := os.MkdirTemp("", "mnm-task-workspace-*")
-		if err != nil {
-			return err
+		snapshotWorkspace := ""
+		if workspaceDir != "" {
+			empty, err := prepareSnapshotWorkspace(workspaceDir)
+			if err != nil {
+				return err
+			}
+			if empty {
+				snapshotWorkspace = workspaceDir
+			}
 		}
-		defer os.RemoveAll(tempWorkspace)
-		workspaceDir = tempWorkspace
+		if snapshotWorkspace == "" {
+			tempWorkspace, err := os.MkdirTemp("", "mnm-task-workspace-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tempWorkspace)
+			snapshotWorkspace = tempWorkspace
+		}
+		workspaceDir = snapshotWorkspace
 		if err := extractWorkspaceSnapshot(*snapshot, workspaceDir); err != nil {
 			return err
 		}
@@ -317,11 +331,13 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, cleanupVerifyRunDir, err := prepareTaskBundleVerificationRunDir(*ledgerDir, task, *runDir)
-	if err != nil {
-		return err
+	if !*skipBundleVerify {
+		_, cleanupVerifyRunDir, err := prepareTaskBundleVerificationRunDir(*ledgerDir, task, *runDir)
+		if err != nil {
+			return err
+		}
+		cleanupVerifyRunDir()
 	}
-	cleanupVerifyRunDir()
 	fmt.Fprintf(stdout, "runner task completed for %s\n", task.TaskID)
 	return nil
 }
@@ -395,6 +411,27 @@ func prepareRunnerTaskLedgerSnapshot(ledgerDir string) (string, func(), error) {
 		return "", cleanup, err
 	}
 	return privateDir, cleanup, nil
+}
+
+func prepareSnapshotWorkspace(workspace string) (bool, error) {
+	info, err := os.Stat(workspace)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(workspace, dirPerm); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("workspace path is not a directory: %s", workspace)
+	}
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
 }
 
 func normalizeStopAfterPhase(value string) (string, error) {
@@ -935,27 +972,42 @@ func copyRunContextForTaskBundle(runDir, outputDir string) error {
 }
 
 func taskBundlePrompt(prompt, runDir, outputDir string) string {
+	return taskBundlePromptForDirs(rewriteTaskBundlePromptPaths(prompt, runDir, outputDir, runDir), outputDir, runDir)
+}
+
+func taskBundlePromptForDirs(prompt, outputDir, ledgerDir string) string {
 	return fmt.Sprintf(`Task output directory: %[1]s
 Ledger snapshot directory: %[2]s
 
 Write new durable artifacts under the task output directory. The injected mnm CLI reads prior ledger state from the ledger snapshot and appends this task's events only to the task output directory.
 
-%[3]s`, outputDir, runDir, rewriteTaskBundlePromptPaths(prompt, runDir, outputDir))
+%[3]s`, outputDir, ledgerDir, prompt)
 }
 
-func rewriteTaskBundlePromptPaths(prompt, runDir, outputDir string) string {
-	const ledgerPlaceholder = "__MNM_LEDGER_EVENTS_PATH__"
-	ledgerPaths := []string{
-		filepath.Join(runDir, eventsFile),
-		filepath.ToSlash(filepath.Join(runDir, eventsFile)),
+func rewriteTaskBundlePromptPaths(prompt, runDir, outputDir, ledgerDir string) string {
+	ledgerReplacements := []struct {
+		path        string
+		placeholder string
+		replacement string
+	}{
+		{
+			path:        filepath.Join(runDir, eventsFile),
+			placeholder: "__MNM_LEDGER_EVENTS_PATH__",
+			replacement: filepath.Join(ledgerDir, eventsFile),
+		},
+		{
+			path:        filepath.ToSlash(filepath.Join(runDir, eventsFile)),
+			placeholder: "__MNM_LEDGER_EVENTS_SLASH_PATH__",
+			replacement: filepath.ToSlash(filepath.Join(ledgerDir, eventsFile)),
+		},
 	}
 	rewritten := prompt
-	for _, ledgerPath := range ledgerPaths {
-		rewritten = strings.ReplaceAll(rewritten, ledgerPath, ledgerPlaceholder)
+	for _, item := range ledgerReplacements {
+		rewritten = strings.ReplaceAll(rewritten, item.path, item.placeholder)
 	}
 	rewritten = strings.ReplaceAll(rewritten, runDir, outputDir)
-	for _, ledgerPath := range ledgerPaths {
-		rewritten = strings.ReplaceAll(rewritten, ledgerPlaceholder, ledgerPath)
+	for _, item := range ledgerReplacements {
+		rewritten = strings.ReplaceAll(rewritten, item.placeholder, item.replacement)
 	}
 	return rewritten
 }

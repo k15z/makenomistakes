@@ -827,6 +827,85 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunnerTaskCommandRestoresSnapshotIntoEmptySuppliedWorkspace(t *testing.T) {
+	source := t.TempDir()
+	writeWorkspaceFile(t, source, "repo/app.go", "package main\n")
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: source,
+		WorkspaceDir:  source,
+		OutputPath:    snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_workspace",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(outputDir, currentTaskFile)
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("inspect restored workspace"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", fmt.Sprintf(`#!/bin/sh
+set -eu
+workspace=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--dir" ]; then
+    shift
+    workspace="$1"
+  fi
+  shift
+done
+if [ "$workspace" != %q ]; then
+  echo "workspace = $workspace" >&2
+  exit 1
+fi
+if [ ! -f "$workspace/repo/app.go" ]; then
+  echo "snapshot was not restored into supplied workspace" >&2
+  exit 1
+fi
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/recon-notes.md" <<'EOF'
+# Recon notes
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_runner_task_workspace_notes","run_id":"run_task_workspace","type":"evidence.added","object":"evidence","object_id":"evidence_runner_task_workspace_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon notes","path":"evidence/recon-notes.md","content_sha256":"5a609288c679e4d45d41ebea33b1183e64e6a66d9e10453dc8b95b20ad1d207f"}}
+{"id":"event_runner_task_workspace_done","run_id":"run_task_workspace","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`, workspace))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", t.TempDir(),
+		"--workspace", workspace,
+		"--snapshot", snapshot,
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", opencodePath,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runner task failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "runner task completed for task_recon") {
+		t.Fatalf("stdout missing completion:\n%s", stdout.String())
+	}
+}
+
 func TestLimaRunnerCommandSequence(t *testing.T) {
 	runDir := t.TempDir()
 	payload := filepath.Join(runDir, "mnm-linux-test")
