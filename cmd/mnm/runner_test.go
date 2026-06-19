@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
@@ -374,6 +375,56 @@ printf '{"type":"done","attempt":%s}\n' "$count"
 	}
 }
 
+func TestRunOpenCodeTaskCleansProcessGroupChildren(t *testing.T) {
+	if !supportsCommandProcessGroupCleanup() {
+		t.Skip("process group cleanup is not supported on this platform")
+	}
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(runDir, "child-heartbeat")
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+marker="$MNM_RUN_DIR/child-heartbeat"
+(
+  printf 'alive\n' >> "$marker"
+  while true; do
+    printf 'alive\n' >> "$marker"
+    sleep 0.05
+  done
+) &
+while [ ! -s "$marker" ]; do
+  sleep 0.01
+done
+printf '{"type":"done"}\n'
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_process_cleanup",
+		TaskID:  "task_process_cleanup",
+		Phase:   "validate",
+		Title:   "mnm process cleanup test",
+		Model:   "openrouter/test",
+		Prompt:  "spawn a child process",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-process-cleanup.jsonl"),
+	})
+	if err != nil {
+		t.Fatalf("expected opencode task to succeed, got: %v", err)
+	}
+
+	before := fileSizeOrZero(t, markerPath)
+	if before == 0 {
+		t.Fatal("expected background child to write a heartbeat before cleanup")
+	}
+	time.Sleep(350 * time.Millisecond)
+	after := fileSizeOrZero(t, markerPath)
+	if after != before {
+		t.Fatalf("background child kept running after opencode task returned: size before=%d after=%d", before, after)
+	}
+}
+
 func TestRunOpenCodeTaskDoesNotRetryMissingPostconditionAfterLedgerWrite(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
@@ -597,6 +648,18 @@ func writeRetryFakeOpenCode(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func fileSizeOrZero(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
 }
 
 func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {

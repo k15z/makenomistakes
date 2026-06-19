@@ -293,6 +293,7 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 		"--dangerously-skip-permissions",
 		task.Prompt,
 	)
+	isolateCommandProcessGroup(command)
 	env := append(os.Environ(),
 		"MNM_RUN_DIR="+runDir,
 		"MNM_TASK_ID="+task.TaskID,
@@ -309,9 +310,17 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 		env = append(env, taskFileEnv+"="+task.TaskFile)
 	}
 	command.Env = env
-	command.Stdout = io.MultiWriter(os.Stdout, logFile)
+	command.Stdout = logFile
 	command.Stderr = os.Stderr
 	runErr := command.Run()
+	if cleanupErr := cleanupCommandProcessGroup(command); cleanupErr != nil {
+		cleanupErr = fmt.Errorf("clean up opencode task process group: %w", cleanupErr)
+		if runErr != nil {
+			runErr = errors.Join(runErr, cleanupErr)
+		} else {
+			runErr = cleanupErr
+		}
+	}
 	if closeErr := logFile.Close(); closeErr != nil && runErr == nil {
 		return openCodeAttemptResult{}, closeErr
 	}
