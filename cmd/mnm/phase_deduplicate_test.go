@@ -161,6 +161,24 @@ func addReviewedFindingForTest(t *testing.T, runDir, id, bodyRel, body string) F
 	}); err != nil {
 		t.Fatal(err)
 	}
+	notesRel := reviewNotesRelPath(id)
+	writeRunFile(t, runDir, notesRel, "Review evidence for test.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_dedup",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_review_" + id,
+		TaskID:   "task_review_" + id,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     id,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_dedup",
 		Type:     "verdict.recorded",

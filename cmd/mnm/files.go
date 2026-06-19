@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -58,4 +62,25 @@ func copyFileMode(src, dst string, mode fs.FileMode) error {
 		return copyErr
 	}
 	return closeErr
+}
+
+func validateNonEmptyEvidenceFile(runDir, relPath string) error {
+	path := filepath.Join(runDir, filepath.FromSlash(relPath))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read evidence file %s: %w", relPath, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Errorf("evidence file %s must not be empty", relPath)
+	}
+	return nil
+}
+
+func evidenceFileSHA256(runDir, relPath string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(runDir, filepath.FromSlash(relPath)))
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }

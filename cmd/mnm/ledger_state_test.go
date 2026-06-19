@@ -154,6 +154,66 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if ledgerFindingHasVerdict(runDir, "finding_one", "review") {
+		t.Fatal("review verdict without review evidence should not be complete")
+	}
+	findings, err = unreviewedLedgerFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].ID != "finding_one" {
+		t.Fatalf("review verdict without evidence should remain unreviewed, got %#v", findings)
+	}
+
+	reviewNotesRel := reviewNotesRelPath("finding_one")
+	writeRunFile(t, runDir, reviewNotesRel, "Review proof.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_review_one",
+		TaskID:   "task_review_finding_one",
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           reviewNotesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, reviewNotesRel),
+			"finding_id":     "finding_one",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerFindingHasVerdict(runDir, "finding_one", "review") {
+		t.Fatal("review evidence after a stale verdict should not complete it")
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_review_fresh_one",
+		TaskID:   "task_review_finding_one",
+		Data: map[string]any{
+			"finding_id": "finding_one",
+			"phase":      "review",
+			"value":      "accepted",
+			"reason":     "Specific and supported after notes.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_review_finding_one",
+		TaskID:   "task_review_finding_one",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Reviewed finding with notes.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if !ledgerFindingHasVerdict(runDir, "finding_one", "review") {
 		t.Fatal("expected finding_one to have a completed review verdict")
 	}
@@ -272,10 +332,43 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 		ObjectID: "evidence_validate_one",
 		TaskID:   "task_validate_finding_one",
 		Data: map[string]any{
-			"kind":       "markdown",
-			"title":      "Validation notes",
-			"path":       notesRel,
-			"finding_id": "finding_one",
+			"kind":           "markdown",
+			"title":          "Validation notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     "finding_one",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerFindingHasVerdict(runDir, "finding_one", "validate") {
+		t.Fatal("validation evidence after a stale verdict should not complete it")
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_validate_fresh_one",
+		TaskID:   "task_validate_finding_one",
+		Data: map[string]any{
+			"finding_id":           "finding_one",
+			"phase":                "validate",
+			"value":                "proven",
+			"reason":               "Reproduced after notes.",
+			"canonical_finding_id": "",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_validate_finding_one",
+		TaskID:   "task_validate_finding_one",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Validated finding with notes.",
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -308,5 +401,94 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 	}
 	if !ledgerReportFinalized(runDir) {
 		t.Fatal("expected report to be finalized")
+	}
+}
+
+func TestLedgerFindingVerdictUsesLatestEvidenceBeforeVerdict(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+
+	taskID := "task_review_" + safeFileID(findingID)
+	notesRel := reviewNotesRelPath(findingID)
+	writeRunFile(t, runDir, notesRel, " \n")
+	appendReviewEvidenceForTest(t, runDir, taskID, findingID, notesRel, "evidence_review_blank")
+	writeRunFile(t, runDir, notesRel, "Corrected review notes.")
+	appendReviewEvidenceForTest(t, runDir, taskID, findingID, notesRel, "evidence_review_corrected")
+	appendReviewVerdictForTest(t, runDir, taskID, findingID)
+
+	if !ledgerFindingHasVerdict(runDir, findingID, "review") {
+		t.Fatal("expected the latest matching pre-verdict review evidence to complete the verdict")
+	}
+}
+
+func TestLedgerFindingVerdictIgnoresOlderValidEvidenceWhenLatestIsInvalid(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+
+	taskID := "task_review_" + safeFileID(findingID)
+	notesRel := reviewNotesRelPath(findingID)
+	writeRunFile(t, runDir, notesRel, "Original review notes.")
+	appendReviewEvidenceForTest(t, runDir, taskID, findingID, notesRel, "evidence_review_original")
+	writeRunFile(t, runDir, notesRel, " \n")
+	appendReviewEvidenceForTest(t, runDir, taskID, findingID, notesRel, "evidence_review_blank")
+	appendReviewVerdictForTest(t, runDir, taskID, findingID)
+	writeRunFile(t, runDir, notesRel, "Original review notes.")
+
+	if ledgerFindingHasVerdict(runDir, findingID, "review") {
+		t.Fatal("expected the latest matching pre-verdict review evidence to control completeness")
+	}
+}
+
+func appendReviewEvidenceForTest(t *testing.T, runDir, taskID, findingID, notesRel, evidenceID string) {
+	t.Helper()
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: evidenceID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Review notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+			"finding_id":     findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendReviewVerdictForTest(t *testing.T, runDir, taskID, findingID string) {
+	t.Helper()
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "verdict.recorded",
+		Object:   "verdict",
+		ObjectID: "verdict_review_" + safeFileID(findingID),
+		TaskID:   taskID,
+		Data: map[string]any{
+			"finding_id": findingID,
+			"phase":      "review",
+			"value":      "accepted",
+			"reason":     "Specific and supported.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Reviewed finding.",
+		},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

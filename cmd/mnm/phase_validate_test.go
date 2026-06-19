@@ -52,7 +52,7 @@ cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-notes.md" <<'EOF'
 Proof observed by fake opencode.
 EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_validate_evidence_$MNM_FINDING_ID","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_validate_evidence_$MNM_FINDING_ID","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"e17c0f25a13f204cc60aeca367b6ba453e176189f24810b938164b9b46aaac6d","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
 {"id":"event_validate_$MNM_FINDING_ID","run_id":"run_validate","type":"verdict.recorded","object":"verdict","object_id":"verdict_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"proven by fake opencode","canonical_finding_id":""}}
 {"id":"event_done_$MNM_FINDING_ID","run_id":"run_validate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF

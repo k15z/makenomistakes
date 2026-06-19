@@ -100,9 +100,15 @@ set -eu
 : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
 : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
 : "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/review-$MNM_FINDING_ID-notes.md" <<'EOF'
+# Review notes
+
+Finding accepted by fake opencode.
+EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_review_$MNM_FINDING_ID","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
-{"id":"event_done_$MNM_FINDING_ID","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+{"id":"event_review_evidence_$MNM_FINDING_ID","run_id":"run_review","type":"evidence.added","object":"evidence","object_id":"evidence_review_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Review notes","path":"evidence/review-$MNM_FINDING_ID-notes.md","content_sha256":"ddac59eafaa08bc99530d71bd9784951b3b1fee0973d0d75fde6a294b3b60e53","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_review_$MNM_FINDING_ID","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
+{"id":"event_done_$MNM_FINDING_ID","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
 `
@@ -126,5 +132,140 @@ printf '{"type":"done"}\n'
 	}
 	if len(pending) != 0 {
 		t.Fatalf("expected no pending findings, got %#v", pending)
+	}
+}
+
+func TestRunReviewPhaseRequiresReviewEvidence(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewCandidateFindingForTest(t, runDir)
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_review_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
+{"id":"event_done_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+		Runner: RunnerConfig{ParallelTasks: 1},
+	}
+	err := runReviewPhase(runDir, "run_review", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected review evidence error")
+	}
+	if !strings.Contains(err.Error(), "did not register review evidence evidence/review-finding_auth-notes.md for finding finding_auth") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReviewPhaseRequiresReviewEvidenceFile(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewCandidateFindingForTest(t, runDir)
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_review_evidence_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"evidence.added","object":"evidence","object_id":"evidence_review_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Review notes","path":"evidence/review-$MNM_FINDING_ID-notes.md","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_review_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
+{"id":"event_done_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+		Runner: RunnerConfig{ParallelTasks: 1},
+	}
+	err := runReviewPhase(runDir, "run_review", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing review evidence file error")
+	}
+	if !strings.Contains(err.Error(), "read evidence file evidence/review-finding_auth-notes.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReviewPhaseRejectsBlankReviewEvidence(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewCandidateFindingForTest(t, runDir)
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+printf ' \n\t\n' > "$MNM_RUN_DIR/evidence/review-$MNM_FINDING_ID-notes.md"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_review_evidence_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"evidence.added","object":"evidence","object_id":"evidence_review_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Review notes","path":"evidence/review-$MNM_FINDING_ID-notes.md","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_review_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
+{"id":"event_done_${MNM_FINDING_ID}_$$","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+		Runner: RunnerConfig{ParallelTasks: 1},
+	}
+	err := runReviewPhase(runDir, "run_review", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected blank review evidence error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/review-finding_auth-notes.md must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func addReviewCandidateFindingForTest(t *testing.T, runDir string) {
+	t.Helper()
+	writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate auth defect.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_review",
+		Type:     "finding.created",
+		Object:   "finding",
+		ObjectID: "finding_auth",
+		TaskID:   "task_investigate_lead_auth",
+		Data: map[string]any{
+			"title":      "Missing authorization check",
+			"category":   "authz",
+			"severity":   "high",
+			"confidence": "medium",
+			"body_path":  "evidence/finding-auth.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
