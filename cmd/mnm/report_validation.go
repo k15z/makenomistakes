@@ -212,6 +212,11 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if bucket != expectedBucket {
 		return fmt.Errorf("%s.id %q is in bucket %q, want %q from ledger verdicts", prefix, id, bucket, expectedBucket)
 	}
+	if bucket == "duplicate" {
+		if err := validateDuplicateCanonicalFinding(item, prefix, id, state); err != nil {
+			return err
+		}
+	}
 	for _, field := range []string{"status", "summary"} {
 		if _, err := requiredNonEmptyStringField(item, field); err != nil {
 			return fmt.Errorf("%s.%w", prefix, err)
@@ -270,6 +275,24 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		if err := registeredEvidenceFileError(runDir, evidenceRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 			return fmt.Errorf("%s.evidence_paths contains unusable evidence %q: %w", prefix, evidencePath, err)
 		}
+	}
+	return nil
+}
+
+func validateDuplicateCanonicalFinding(item map[string]json.RawMessage, prefix, findingID string, state reportLedgerState) error {
+	canonicalFindingID, err := requiredNonEmptyStringField(item, "canonical_finding_id")
+	if err != nil {
+		return fmt.Errorf("%s.%w", prefix, err)
+	}
+	if _, ok := state.Findings[canonicalFindingID]; !ok {
+		return fmt.Errorf("%s.canonical_finding_id %q does not reference a known finding", prefix, canonicalFindingID)
+	}
+	dedup, ok := state.Verdicts[findingID]["deduplicate"]
+	if !ok || dedup.Value != "duplicate" {
+		return fmt.Errorf("%s.id %q is not backed by a duplicate deduplication verdict", prefix, findingID)
+	}
+	if dedup.CanonicalFindingID != canonicalFindingID {
+		return fmt.Errorf("%s.canonical_finding_id = %q, want ledger value %q", prefix, canonicalFindingID, dedup.CanonicalFindingID)
 	}
 	return nil
 }

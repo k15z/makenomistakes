@@ -1013,6 +1013,147 @@ func TestReportFinalizeRejectsStatusThatDoesNotMatchBucket(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeAcceptsDuplicateWithCanonicalFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	canonicalID := createFindingForTest(t, runDir, leadID)
+	duplicateID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, canonicalID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, canonicalID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, duplicateID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, duplicateID, "deduplicate", "duplicate", canonicalID)
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"unvalidated": {
+			{
+				"id":             canonicalID,
+				"title":          "Missing authorization check",
+				"category":       "authz",
+				"severity":       "high",
+				"confidence":     "medium",
+				"source_lead_id": leadID,
+				"status":         "validation_pending",
+				"verdicts":       []string{"review accepted", "deduplicate canonical"},
+				"evidence_paths": []string{},
+				"summary":        "Canonical finding has not been validated yet.",
+				"affected_paths": []string{"server/auth.go"},
+			},
+		},
+		"duplicate": {
+			{
+				"id":                   duplicateID,
+				"title":                "Missing authorization check",
+				"category":             "authz",
+				"severity":             "high",
+				"confidence":           "medium",
+				"source_lead_id":       leadID,
+				"status":               "duplicate",
+				"verdicts":             []string{"review accepted", "deduplicate duplicate"},
+				"evidence_paths":       []string{},
+				"summary":              "Duplicate of the canonical authorization finding.",
+				"affected_paths":       []string{"server/auth.go"},
+				"canonical_finding_id": canonicalID,
+			},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("report finalize failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !ledgerReportFinalized(runDir) {
+		t.Fatal("expected report with duplicate canonical link to be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsDuplicateMissingCanonicalFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	canonicalID := createFindingForTest(t, runDir, leadID)
+	duplicateID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, canonicalID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, canonicalID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, duplicateID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, duplicateID, "deduplicate", "duplicate", canonicalID)
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", duplicateReportBuckets(leadID, canonicalID, duplicateID, map[string]any{})))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing canonical finding error")
+	}
+	if !strings.Contains(err.Error(), `duplicate[0].missing "canonical_finding_id" string`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with missing duplicate canonical link should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsDuplicateCanonicalMismatch(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	canonicalID := createFindingForTest(t, runDir, leadID)
+	otherID := createFindingForTest(t, runDir, leadID)
+	duplicateID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, canonicalID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, canonicalID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, otherID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, otherID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, duplicateID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, duplicateID, "deduplicate", "duplicate", canonicalID)
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", duplicateReportBuckets(leadID, canonicalID, duplicateID, map[string]any{
+		"canonical_finding_id": otherID,
+		"extra_unvalidated": []map[string]any{
+			{
+				"id":             otherID,
+				"title":          "Missing authorization check",
+				"category":       "authz",
+				"severity":       "high",
+				"confidence":     "medium",
+				"source_lead_id": leadID,
+				"status":         "validation_pending",
+				"verdicts":       []string{"review accepted", "deduplicate canonical"},
+				"evidence_paths": []string{},
+				"summary":        "Another canonical finding.",
+				"affected_paths": []string{"server/auth.go"},
+			},
+		},
+	})))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected canonical mismatch error")
+	}
+	if !strings.Contains(err.Error(), `canonical_finding_id = "`+otherID+`", want ledger value "`+canonicalID+`"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with mismatched duplicate canonical link should not be finalized")
+	}
+}
+
 func TestReportFinalizeRequiresEveryFinding(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
@@ -2466,6 +2607,47 @@ func appendReviewAcceptedVerdictForTest(t *testing.T, runDir, findingID string) 
 		},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func duplicateReportBuckets(leadID, canonicalID, duplicateID string, options map[string]any) map[string][]map[string]any {
+	unvalidated := []map[string]any{
+		{
+			"id":             canonicalID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_pending",
+			"verdicts":       []string{"review accepted", "deduplicate canonical"},
+			"evidence_paths": []string{},
+			"summary":        "Canonical finding has not been validated yet.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}
+	if extra, ok := options["extra_unvalidated"].([]map[string]any); ok {
+		unvalidated = append(unvalidated, extra...)
+	}
+	duplicate := map[string]any{
+		"id":             duplicateID,
+		"title":          "Missing authorization check",
+		"category":       "authz",
+		"severity":       "high",
+		"confidence":     "medium",
+		"source_lead_id": leadID,
+		"status":         "duplicate",
+		"verdicts":       []string{"review accepted", "deduplicate duplicate"},
+		"evidence_paths": []string{},
+		"summary":        "Duplicate of the canonical authorization finding.",
+		"affected_paths": []string{"server/auth.go"},
+	}
+	if canonicalFindingID, ok := options["canonical_finding_id"]; ok {
+		duplicate["canonical_finding_id"] = canonicalFindingID
+	}
+	return map[string][]map[string]any{
+		"unvalidated": unvalidated,
+		"duplicate":   {duplicate},
 	}
 }
 

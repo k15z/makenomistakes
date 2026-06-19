@@ -253,6 +253,8 @@ Finding statuses:
 - Final report validation rejects report items whose ledger-backed title,
   category, severity, confidence, source lead, or cited evidence contents do not
   match the validated ledger state.
+- Final report validation rejects duplicate finding items that do not name the
+  canonical finding recorded in the deduplication verdict.
 - Final report validation rejects status fields that do not match the report
   bucket implied by ledger verdicts.
 - Final report validation rejects reports that omit any ledger finding.
