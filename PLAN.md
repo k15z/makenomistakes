@@ -127,6 +127,7 @@ default = "openrouter/z-ai/glm-5.2"
 recon = "openrouter/z-ai/glm-5.2"
 investigate = "openrouter/z-ai/glm-5.2"
 review = "openrouter/z-ai/glm-5.2"
+deduplicate = "openrouter/z-ai/glm-5.2"
 
 [runner]
 cpus = 4
@@ -237,9 +238,12 @@ and pass GitHub Actions before later work builds on it.
 9. Review phase:
    - Run one skeptical OpenCode task per candidate finding and record accepted
      or rejected review verdicts.
-10. Deduplicate, Validate, and Finalize:
+10. Deduplicate phase:
+   - Cluster review-accepted findings and record canonical or duplicate
+     verdicts with structured canonical finding references.
+11. Validate and Finalize:
    - Add one phase per PR, with fixture coverage and report-quality checks.
-11. End-to-end acceptance:
+12. End-to-end acceptance:
    - Run `mnm analyze` against one or more real open-source repos in a scratch
      workspace and commit only reusable fixtures/docs, never secrets or scratch
      outputs.

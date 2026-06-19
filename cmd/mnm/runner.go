@@ -88,6 +88,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := runReviewPhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	if err := runDeduplicatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+		return err
+	}
 
 	manifestPath := filepath.Join(*runDir, "evidence", "runner-manifest.json")
 	if err := writeRunnerManifest(manifestPath, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
@@ -281,6 +284,10 @@ func phaseModel(cfg Config, phase string) string {
 	case "review":
 		if strings.TrimSpace(cfg.Models.Review) != "" {
 			return strings.TrimSpace(cfg.Models.Review)
+		}
+	case "deduplicate":
+		if strings.TrimSpace(cfg.Models.Deduplicate) != "" {
+			return strings.TrimSpace(cfg.Models.Deduplicate)
 		}
 	}
 	if defaultModel == "" {

@@ -281,6 +281,7 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	phase := flags.String("phase", "", "review|deduplicate|validate")
 	value := flags.String("value", "", "verdict value")
 	reason := flags.String("reason", "", "reason")
+	canonicalFindingID := flags.String("canonical-finding", "", "canonical finding id for deduplicate duplicate verdicts")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -293,6 +294,15 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	if !validVerdictValue(*phase, *value) {
 		return fmt.Errorf("invalid %s verdict value %q; expected one of: %s", *phase, *value, verdictValues(*phase))
 	}
+	if *canonicalFindingID != "" && (*phase != "deduplicate" || *value != "duplicate") {
+		return errors.New("--canonical-finding is only valid for deduplicate duplicate verdicts")
+	}
+	if *phase == "deduplicate" && *value == "duplicate" && *canonicalFindingID == "" {
+		return errors.New("deduplicate duplicate verdicts require --canonical-finding")
+	}
+	if *canonicalFindingID == *findingID {
+		return errors.New("--canonical-finding must be different from --finding")
+	}
 	runDir, task, err := currentTaskForCommand(*runDirFlag)
 	if err != nil {
 		return err
@@ -303,6 +313,19 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 	if err := requireLedgerObject(runDir, "finding", *findingID); err != nil {
 		return err
 	}
+	if *phase == "deduplicate" {
+		if err := requireReviewAcceptedFinding(runDir, *findingID); err != nil {
+			return err
+		}
+	}
+	if *canonicalFindingID != "" {
+		if err := requireLedgerObject(runDir, "finding", *canonicalFindingID); err != nil {
+			return err
+		}
+		if err := requireReviewAcceptedFinding(runDir, *canonicalFindingID); err != nil {
+			return err
+		}
+	}
 	verdictID := newLedgerID("verdict")
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
@@ -311,15 +334,27 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 		ObjectID: verdictID,
 		TaskID:   task.TaskID,
 		Data: map[string]any{
-			"finding_id": *findingID,
-			"phase":      *phase,
-			"value":      *value,
-			"reason":     *reason,
+			"finding_id":           *findingID,
+			"phase":                *phase,
+			"value":                *value,
+			"reason":               *reason,
+			"canonical_finding_id": *canonicalFindingID,
 		},
 	}); err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, verdictID)
+	return nil
+}
+
+func requireReviewAcceptedFinding(runDir, findingID string) error {
+	verdict, ok, err := ledgerFindingVerdict(runDir, findingID, "review")
+	if err != nil {
+		return err
+	}
+	if !ok || verdict.Value != "accepted" {
+		return fmt.Errorf("finding %s must have a completed accepted review verdict", findingID)
+	}
 	return nil
 }
 
