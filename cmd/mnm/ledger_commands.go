@@ -651,6 +651,9 @@ func reportFinalizeCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := requireCurrentTaskPhase(task, "report finalize", "finalize"); err != nil {
+		return err
+	}
 	markdownRel, err := requirePathInsideRunDir(runDir, *markdownPath)
 	if err != nil {
 		return err
