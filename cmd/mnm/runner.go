@@ -110,6 +110,11 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	failure.OpenCodePath = opencodePath
 	failure.OpenCodeVersion = strings.TrimSpace(opencodeVersionOutput)
 
+	failure.Stage = "runner_manifest"
+	if err := writeAndRegisterRunnerManifest(*runDir, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
+		return err
+	}
+
 	failure.Stage = "runner_started_event"
 	if err := appendLedgerEvent(*runDir, LedgerEvent{
 		RunID:    *runID,
@@ -163,14 +168,6 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 		return err
 	}
 
-	failure.Stage = "runner_manifest"
-	manifestPath := filepath.Join(*runDir, "evidence", "runner-manifest.json")
-	if err := writeRunnerManifest(manifestPath, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
-		return err
-	}
-	if _, err := registerRunnerEvidence(*runDir, *runID, "json", "Runner lifecycle manifest", "evidence/runner-manifest.json", false); err != nil {
-		return err
-	}
 	failure.Stage = "runner_completed_event"
 	if err := appendLedgerEvent(*runDir, LedgerEvent{
 		RunID:    *runID,
@@ -913,10 +910,56 @@ Lead quality bar:
 `, workspace, runDir, cfg.Runner.MaxLeads, scope)
 }
 
-func writeRunnerManifest(path, runID, workspace, opencodePath, opencodeVersionOutput string) error {
-	entries, err := workspaceFileList(workspace)
+func writeAndRegisterRunnerManifest(runDir, runID, workspace, opencodePath, opencodeVersionOutput string) error {
+	relPath := "evidence/runner-manifest.json"
+	path := filepath.Join(runDir, filepath.FromSlash(relPath))
+	data, err := runnerManifestJSON(runID, workspace, opencodePath, opencodeVersionOutput)
 	if err != nil {
 		return err
+	}
+	if existing, ok := ledgerTaskEvidence(runDir, "", relPath); ok {
+		if err := registeredEvidenceFileError(runDir, relPath, existing.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+			return fmt.Errorf("registered runner manifest is unusable: %w", err)
+		}
+		current, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read registered runner manifest: %w", err)
+		}
+		if !bytes.Equal(current, data) {
+			return fmt.Errorf("registered runner manifest %s has different content", relPath)
+		}
+		_, err = registerRunnerEvidence(runDir, runID, "json", "Runner lifecycle manifest", relPath, false)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".runner-manifest-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	_, err = registerRunnerEvidence(runDir, runID, "json", "Runner lifecycle manifest", relPath, false)
+	return err
+}
+
+func runnerManifestJSON(runID, workspace, opencodePath, opencodeVersionOutput string) ([]byte, error) {
+	entries, err := workspaceFileList(workspace)
+	if err != nil {
+		return nil, err
 	}
 	manifest := map[string]any{
 		"run_id":           runID,
@@ -925,7 +968,22 @@ func writeRunnerManifest(path, runID, workspace, opencodePath, opencodeVersionOu
 		"opencode_path":    opencodePath,
 		"opencode_version": strings.TrimSpace(opencodeVersionOutput),
 	}
-	return writeJSON(path, manifest)
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func writeRunnerManifest(path, runID, workspace, opencodePath, opencodeVersionOutput string) error {
+	data, err := runnerManifestJSON(runID, workspace, opencodePath, opencodeVersionOutput)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, filePerm)
 }
 
 func workspaceFileList(root string) ([]string, error) {

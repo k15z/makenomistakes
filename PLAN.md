@@ -54,6 +54,8 @@ events.
 - VM runner responsibilities:
   - Bootstrap pinned `opencode`.
   - Unpack the workspace snapshot into `/workspace`.
+  - Write `evidence/runner-manifest.json` with the captured workspace file list
+    before Recon begins.
   - Orchestrate every phase by invoking `opencode run --format json`.
   - Provide each `opencode` instance with phase prompt, scope, prior ledger state,
     and required `mnm` output commands.
@@ -292,6 +294,8 @@ Finding statuses:
   registered run-relative ledger path.
 - Final report validation rejects affected paths that are empty, absolute,
   unclean, use backslashes, or traverse outside the workspace.
+- Final report validation rejects affected paths that are absent from the
+  runner workspace manifest when that manifest is available.
 - Final report validation rejects proven findings that do not cite at least one
   registered evidence path.
 - Final report validation rejects proven findings that do not cite at least one

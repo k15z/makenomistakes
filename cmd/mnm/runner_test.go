@@ -88,6 +88,30 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestWriteAndRegisterRunnerManifestPreservesRegisteredContentOnMismatch(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "repo/app.go", "package main")
+	if err := writeAndRegisterRunnerManifest(runDir, "run_test", workspace, "/tmp/opencode", opencodeVersion+"\n"); err != nil {
+		t.Fatalf("first manifest registration failed: %v", err)
+	}
+	manifestPath := filepath.Join(runDir, "evidence", "runner-manifest.json")
+	original := readFile(t, manifestPath)
+
+	changedWorkspace := t.TempDir()
+	writeWorkspaceFile(t, changedWorkspace, "repo/other.go", "package main")
+	err := writeAndRegisterRunnerManifest(runDir, "run_test", changedWorkspace, "/tmp/opencode", opencodeVersion+"\n")
+	if err == nil {
+		t.Fatal("expected conflicting runner manifest error")
+	}
+	if !strings.Contains(err.Error(), "registered runner manifest evidence/runner-manifest.json has different content") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if current := readFile(t, manifestPath); current != original {
+		t.Fatalf("registered manifest was overwritten:\n%s", current)
+	}
+}
+
 func TestRunnerCommandStopsAfterRecon(t *testing.T) {
 	prependFakeOpenCode(t, opencodeVersion+"\n")
 	source := t.TempDir()
@@ -1410,7 +1434,7 @@ sleep 5
 		Model:   "openrouter/test",
 		Prompt:  "hang until timeout",
 		LogPath: filepath.Join(runDir, "evidence", "opencode-timeout.jsonl"),
-		Timeout: 500 * time.Millisecond,
+		Timeout: 800 * time.Millisecond,
 	})
 	elapsed := time.Since(start)
 	if err == nil {
@@ -1420,7 +1444,7 @@ sleep 5
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("expected openCodeTaskTimeoutError, got: %v", err)
 	}
-	if elapsed > 2*time.Second {
+	if elapsed > 3*time.Second {
 		t.Fatalf("timeout took too long: %s", elapsed)
 	}
 

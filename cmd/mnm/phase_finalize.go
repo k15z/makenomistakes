@@ -191,6 +191,7 @@ JSON report requirements:
 - Every finding in "proven" must include at least one evidence_paths entry for a validation proof artifact registered by that finding's Validate task before the proven verdict.
 - "status" must match exact ledger progress: no review uses candidate, accepted review before deduplication uses reviewed, canonical deduplication before validation uses validation_pending, proven uses validation_proven, inconclusive uses validation_inconclusive, failed uses validation_failed, rejected uses review_rejected, and duplicate uses duplicate.
 - Place each finding in the bucket proven by the ledger verdicts. A finding with validation failed belongs in "failed", not "proven"; a review-rejected finding belongs in "rejected"; a deduplicate duplicate belongs in "duplicate".
+- If %[2]s/evidence/runner-manifest.json is present, every affected_paths entry must exist in its workspace_files list.
 - Every ledger finding must appear in exactly one report bucket.
 `, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg)), nil
 }
