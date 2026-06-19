@@ -15,6 +15,8 @@ const (
 	RunStatusPrepared     = "prepared"
 	RunStatusVMStarting   = "vm_starting"
 	RunStatusRunning      = "running"
+	RunStatusStopping     = "stopping"
+	RunStatusStopped      = "stopped"
 	RunStatusCompleted    = "completed"
 	RunStatusFailed       = "failed"
 	RunStatusTimedOut     = "timed_out"
@@ -26,6 +28,8 @@ var validRunStatuses = map[string]struct{}{
 	RunStatusPrepared:     {},
 	RunStatusVMStarting:   {},
 	RunStatusRunning:      {},
+	RunStatusStopping:     {},
+	RunStatusStopped:      {},
 	RunStatusCompleted:    {},
 	RunStatusFailed:       {},
 	RunStatusTimedOut:     {},

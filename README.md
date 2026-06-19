@@ -22,6 +22,8 @@ mnm analyze
 `mnm init` will create a project-level configuration file. `mnm analyze` will
 snapshot the configured workspace, launch a disposable local VM, run the audit
 pipeline, and generate local reports.
+Interrupting `mnm analyze` asks the runner to stop and records the run as
+`stopped`; configured runner deadlines are recorded as `timed_out`.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
 include cloud VMs.

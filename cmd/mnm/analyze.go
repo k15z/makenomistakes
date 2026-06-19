@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,7 +42,13 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 		Stdout:       stdout,
 		Stderr:       stderr,
 	}
-	return analyzeWorkspace(context.Background(), options, newDefaultRunner(stdout, stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return analyzeWorkspace(ctx, options, newDefaultRunner(stdout, stderr))
 }
 
 type AnalyzeOptions struct {
@@ -131,17 +139,45 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 	if err := store.UpdateRunStatus(runID, RunStatusRunning); err != nil {
 		return err
 	}
-	if err := runner.Run(runCtx, RunnerRequest{
+	runnerDone := make(chan struct{})
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		select {
+		case <-runCtx.Done():
+			select {
+			case <-runnerDone:
+				return
+			default:
+			}
+			switch {
+			case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+				_ = store.UpdateRunStatus(runID, RunStatusTimedOut)
+			case errors.Is(runCtx.Err(), context.Canceled):
+				_ = store.UpdateRunStatus(runID, RunStatusStopping)
+			}
+		case <-runnerDone:
+		}
+	}()
+	err = runner.Run(runCtx, RunnerRequest{
 		Run:         run,
 		Config:      cfg,
 		ModelAPIKey: os.Getenv(resolved.APIKeyEnv),
 		KeepVM:      options.KeepVM,
-	}); err != nil {
+	})
+	close(runnerDone)
+	<-monitorDone
+	if err != nil {
 		status := RunStatusFailed
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded):
 			status = RunStatusTimedOut
+		case errors.Is(err, context.Canceled) || errors.Is(runCtx.Err(), context.Canceled):
+			status = RunStatusStopped
 		}
-		_ = store.UpdateRunStatus(runID, status)
+		if updateErr := store.UpdateRunStatus(runID, status); updateErr != nil {
+			return errors.Join(err, fmt.Errorf("update run status to %s: %w", status, updateErr))
+		}
 		return err
 	}
 	if err := store.UpdateRunStatus(runID, RunStatusCompleted); err != nil {

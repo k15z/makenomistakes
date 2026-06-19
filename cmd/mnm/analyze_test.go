@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -168,6 +169,89 @@ func TestAnalyzeMarksDeadlineExceededRunsTimedOut(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMarksCanceledRunsStopped(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := analyzeWorkspace(ctx, AnalyzeOptions{
+		WorkspaceDir: dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, canceledRunner{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`select count(*) from runs where status = ?`, RunStatusStopped).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one stopped run, got %d", count)
+	}
+}
+
+func TestAnalyzeMarksCancelingRunsStoppingBeforeRunnerReturns(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &blockingCanceledRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer func() {
+		cancel()
+		runner.releaseRunner()
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- analyzeWorkspace(ctx, AnalyzeOptions{
+			WorkspaceDir: dir,
+			Stdout:       &stdout,
+			Stderr:       &stderr,
+		}, runner)
+	}()
+
+	select {
+	case <-runner.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not start")
+	}
+
+	cancel()
+	waitForRunStatus(t, dir, RunStatusStopping)
+	runner.releaseRunner()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("analyzeWorkspace did not return")
+	}
+	assertRunStatus(t, dir, RunStatusStopped)
+}
+
 type recordingRunner struct {
 	called bool
 }
@@ -188,4 +272,70 @@ type deadlineRunner struct{}
 func (deadlineRunner) Run(ctx context.Context, _ RunnerRequest) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type canceledRunner struct{}
+
+func (canceledRunner) Run(ctx context.Context, _ RunnerRequest) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type blockingCanceledRunner struct {
+	started     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (runner *blockingCanceledRunner) Run(ctx context.Context, _ RunnerRequest) error {
+	close(runner.started)
+	<-ctx.Done()
+	<-runner.release
+	return ctx.Err()
+}
+
+func (runner *blockingCanceledRunner) releaseRunner() {
+	runner.releaseOnce.Do(func() {
+		close(runner.release)
+	})
+}
+
+func waitForRunStatus(t *testing.T, dir string, status string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		count, err := runStatusCount(dir, status)
+		if err == nil && count == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run status %q", status)
+}
+
+func assertRunStatus(t *testing.T, dir string, status string) {
+	t.Helper()
+
+	count, err := runStatusCount(dir, status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one run with status %q, got %d", status, count)
+	}
+}
+
+func runStatusCount(dir string, status string) (int, error) {
+	db, err := sql.Open("sqlite", filepath.Join(dir, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	var count int
+	if err := db.QueryRow(`select count(*) from runs where status = ?`, status).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
