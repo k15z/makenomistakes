@@ -229,6 +229,8 @@ Finding statuses:
   match their review, deduplication, and validation verdicts in the ledger.
 - Final report validation rejects evidence paths that were not registered as
   ledger evidence for the reported finding.
+- Final report validation rejects proven findings that do not cite at least one
+  registered evidence path.
 
 ## PR Sequence
 
