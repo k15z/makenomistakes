@@ -221,6 +221,8 @@ Finding statuses:
   and rejects conflicting verdict rewrites for the same finding and phase.
 - VM-side `mnm evidence add` is idempotent for repeated identical task/path
   registrations and rejects conflicting metadata for the same task/path.
+- VM-side `mnm task complete` is idempotent for repeated identical terminal
+  status and rejects conflicting task completion status rewrites.
 - Ledger reads reject malformed event envelopes, unknown event types, event
   type/object mismatches, missing required event data fields, and invalid event
   data enum values before downstream phases consume state.

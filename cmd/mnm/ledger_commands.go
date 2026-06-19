@@ -57,7 +57,7 @@ func taskCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return appendLedgerEvent(runDir, LedgerEvent{
+		event, err := prepareLedgerEvent(runDir, LedgerEvent{
 			RunID:    task.RunID,
 			Type:     "task.completed",
 			Object:   "task",
@@ -68,9 +68,57 @@ func taskCommand(args []string, stdout, stderr io.Writer) error {
 				"summary": summaryText,
 			},
 		})
+		if err != nil {
+			return err
+		}
+		unlock, err := lockRunDir(runDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		currentStatus, exists, err := ledgerTaskCompletionStatusUnlocked(runDir, task.TaskID)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if currentStatus == *status {
+				return nil
+			}
+			return fmt.Errorf("task %s is already completed with status %q", task.TaskID, currentStatus)
+		}
+		return appendLedgerEventUnlocked(runDir, event)
 	default:
 		return fmt.Errorf("unknown task subcommand %q", args[0])
 	}
+}
+
+func ledgerTaskCompletionStatus(runDir, taskID string) (string, bool, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return taskCompletionStatusFromEvents(events, taskID)
+}
+
+func ledgerTaskCompletionStatusUnlocked(runDir, taskID string) (string, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return "", false, err
+	}
+	return taskCompletionStatusFromEvents(events, taskID)
+}
+
+func taskCompletionStatusFromEvents(events []LedgerEvent, taskID string) (string, bool, error) {
+	status := ""
+	found := false
+	for _, event := range events {
+		if event.Type != "task.completed" || event.Object != "task" || event.ObjectID != taskID {
+			continue
+		}
+		status = stringData(event.Data, "status")
+		found = true
+	}
+	return status, found, nil
 }
 
 func leadCommand(args []string, stdout, stderr io.Writer) error {
