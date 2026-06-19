@@ -33,6 +33,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if *runID == "" || *runDir == "" || *snapshot == "" || *configPath == "" {
 		return errors.New("runner requires --run-id, --run-dir, --snapshot, and --config")
 	}
+	if err := validateRunnerRunID(*runID); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
 		return err
 	}
@@ -126,4 +129,23 @@ func workspaceFileList(root string) ([]string, error) {
 		return nil
 	})
 	return entries, err
+}
+
+func validateRunnerRunID(runID string) error {
+	for _, r := range runID {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid run id %q: use only letters, digits, underscores, and hyphens", runID)
+	}
+	return nil
 }

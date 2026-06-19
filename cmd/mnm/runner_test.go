@@ -55,6 +55,24 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerCommandRejectsUnsafeRunID(t *testing.T) {
+	runDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner",
+		"--run-id", "run/../../victim",
+		"--run-dir", runDir,
+		"--snapshot", filepath.Join(runDir, "snapshot.tar.zst"),
+		"--config", filepath.Join(runDir, "mnm.toml"),
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unsafe run id error")
+	}
+	if !strings.Contains(err.Error(), "invalid run id") {
+		t.Fatalf("expected invalid run id error, got %v", err)
+	}
+}
+
 func TestLimaRunnerCommandSequence(t *testing.T) {
 	runDir := t.TempDir()
 	payload := filepath.Join(runDir, "mnm-linux-test")
