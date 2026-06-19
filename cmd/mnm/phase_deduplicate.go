@@ -84,6 +84,21 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		Prompt:   prompt,
 		LogPath:  logPath,
 		TaskFile: taskPath,
+		Verify: func() error {
+			var missing []string
+			for _, finding := range findings {
+				if !ledgerFindingHasVerdict(runDir, finding.ID, "deduplicate") {
+					missing = append(missing, finding.ID)
+				}
+			}
+			if len(missing) > 0 {
+				return fmt.Errorf("deduplicate opencode task did not record verdicts for findings: %s", strings.Join(missing, ", "))
+			}
+			if !ledgerTaskCompleted(runDir, task.TaskID) {
+				return errors.New("deduplicate opencode task did not complete task_deduplicate")
+			}
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -102,18 +117,6 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		return err
 	}
 
-	var missing []string
-	for _, finding := range findings {
-		if !ledgerFindingHasVerdict(runDir, finding.ID, "deduplicate") {
-			missing = append(missing, finding.ID)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("deduplicate opencode task did not record verdicts for findings: %s", strings.Join(missing, ", "))
-	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return errors.New("deduplicate opencode task did not complete task_deduplicate")
-	}
 	return nil
 }
 

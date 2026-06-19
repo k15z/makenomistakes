@@ -191,6 +191,12 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Model:   phaseModel(cfg, "recon"),
 		Prompt:  prompt,
 		LogPath: logPath,
+		Verify: func() error {
+			if !ledgerTaskCompleted(runDir, task.TaskID) {
+				return errors.New("recon opencode task did not complete through mnm task complete")
+			}
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -208,9 +214,6 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	}); err != nil {
 		return err
 	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return errors.New("recon opencode task did not complete through mnm task complete")
-	}
 	return nil
 }
 
@@ -225,6 +228,7 @@ type opencodeTask struct {
 	Prompt    string
 	LogPath   string
 	TaskFile  string
+	Verify    func() error
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
@@ -233,6 +237,11 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
 		attempts = attempt
 		err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		if err == nil && task.Verify != nil {
+			if verifyErr := task.Verify(); verifyErr != nil {
+				err = retryableOpenCodePostconditionError{err: verifyErr}
+			}
+		}
 		if err == nil {
 			return nil
 		}
@@ -290,9 +299,25 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	return command.Run()
 }
 
+type retryableOpenCodePostconditionError struct {
+	err error
+}
+
+func (e retryableOpenCodePostconditionError) Error() string {
+	return e.err.Error()
+}
+
+func (e retryableOpenCodePostconditionError) Unwrap() error {
+	return e.err
+}
+
 func retryableOpenCodeError(logPath string, err error) bool {
 	if err == nil {
 		return false
+	}
+	var postconditionErr retryableOpenCodePostconditionError
+	if errors.As(err, &postconditionErr) {
+		return true
 	}
 	text := strings.ToLower(err.Error())
 	if b, readErr := os.ReadFile(logPath); readErr == nil {

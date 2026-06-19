@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,6 +185,74 @@ printf '{"type":"done"}\n'
 	for _, event := range events {
 		if event.Type == "task.retrying" && event.ObjectID == "task_retry" {
 			retries++
+		}
+	}
+	if retries != 1 {
+		t.Fatalf("retry event count = %d, want 1", retries)
+	}
+}
+
+func TestRunOpenCodeTaskRetriesMissingPostcondition(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+printf '{"type":"done","attempt":%s}\n' "$count"
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_postcondition_retry",
+		TaskID:  "task_postcondition_retry",
+		Phase:   "validate",
+		Title:   "mnm postcondition retry test",
+		Model:   "openrouter/test",
+		Prompt:  "retry until the verdict exists",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-postcondition-retry.jsonl"),
+		Verify: func() error {
+			count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+			if count != "2" {
+				return errors.New("validate opencode task did not record validation verdict for finding finding_retry")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected postcondition retry to recover, got: %v", err)
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "2" {
+		t.Fatalf("attempt count = %s, want 2", count)
+	}
+	log := readFile(t, filepath.Join(runDir, "evidence", "opencode-postcondition-retry.jsonl"))
+	if !strings.Contains(log, `"attempt":1`) || !strings.Contains(log, `"attempt":2`) {
+		t.Fatalf("retry log did not preserve both attempts:\n%s", log)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retries := 0
+	for _, event := range events {
+		if event.Type == "task.retrying" && event.ObjectID == "task_postcondition_retry" {
+			retries++
+			reason, _ := event.Data["reason"].(string)
+			if !strings.Contains(reason, "validation verdict") {
+				t.Fatalf("retry reason = %q, want validation verdict context", reason)
+			}
 		}
 	}
 	if retries != 1 {

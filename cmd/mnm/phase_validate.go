@@ -90,6 +90,15 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		Prompt:    prompt,
 		LogPath:   logPath,
 		TaskFile:  taskPath,
+		Verify: func() error {
+			if !ledgerFindingHasVerdict(runDir, finding.ID, "validate") {
+				return fmt.Errorf("validate opencode task did not record validation verdict for finding %s", finding.ID)
+			}
+			if !ledgerTaskCompleted(runDir, task.TaskID) {
+				return fmt.Errorf("validate opencode task did not complete task %s", task.TaskID)
+			}
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -107,12 +116,6 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		},
 	}); err != nil {
 		return err
-	}
-	if !ledgerFindingHasVerdict(runDir, finding.ID, "validate") {
-		return fmt.Errorf("validate opencode task did not record validation verdict for finding %s", finding.ID)
-	}
-	if !ledgerTaskCompleted(runDir, task.TaskID) {
-		return fmt.Errorf("validate opencode task did not complete task %s", task.TaskID)
 	}
 	return nil
 }
