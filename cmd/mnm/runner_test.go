@@ -1473,9 +1473,15 @@ EOF
     exit 0
   fi
   if printf '%s' "$prompt" | grep -q 'makenomistakes Deduplicate'; then
+    cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
+# Deduplication notes
+
+Fake deduplication notes for tests.
+EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
-{"id":"event_fake_deduplicate","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:09Z","data":{"finding_id":"finding_fake_lead_fake_auth","phase":"deduplicate","value":"canonical","reason":"Unique in fake runner.","canonical_finding_id":""}}
-{"id":"event_fake_deduplicate_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:10Z","data":{"status":"completed","summary":"Deduplicated fake finding"}}
+{"id":"event_fake_deduplicate_evidence","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_deduplicate_notes","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:09Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"12cd072b30c1feba2bfc924e75e5dee362f4ff239c0cb4b1d6f5d676e3075cda"}}
+{"id":"event_fake_deduplicate","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:10Z","data":{"finding_id":"finding_fake_lead_fake_auth","phase":"deduplicate","value":"canonical","reason":"Unique in fake runner.","canonical_finding_id":""}}
+{"id":"event_fake_deduplicate_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:11Z","data":{"status":"completed","summary":"Deduplicated fake finding"}}
 EOF
     printf '{"type":"done"}\n'
     exit 0

@@ -26,6 +26,8 @@ func TestDeduplicatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"## finding_one",
 		"Deduplicate status: Pending deduplicate verdict",
 		"First candidate body.",
+		"mnm evidence add --kind markdown --title \"Deduplication notes\"",
+		filepath.ToSlash(filepath.Join(runDir, "evidence", "deduplicate-notes.md")),
 		"mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical",
 		"mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID",
 		"mnm task complete --status completed",
@@ -70,10 +72,16 @@ func TestRunDeduplicatePhaseRecordsVerdicts(t *testing.T) {
 set -eu
 : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
 : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
+# Deduplication notes
+
+Finding two duplicates finding one.
+EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
-{"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_one"}}
-{"id":"event_done_dedup","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+{"id":"event_dedup_evidence","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"4315de7bd86fbd899b39ee7a407da54e55722cf1fc5af0c3d3de426d40c791d6"}}
+{"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_one"}}
+{"id":"event_done_dedup","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
 `
@@ -103,6 +111,169 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunDeduplicatePhaseRequiresDeduplicationEvidence(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_dedup_one_$$","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_done_dedup_$$","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+	}
+	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected deduplication evidence error")
+	}
+	if !strings.Contains(err.Error(), "did not register deduplication evidence evidence/deduplicate-notes.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pending, pendingErr := undeduplicatedLedgerFindings(runDir)
+	if pendingErr != nil {
+		t.Fatal(pendingErr)
+	}
+	if len(pending) != 1 || pending[0].ID != "finding_one" {
+		t.Fatalf("expected finding_one to remain pending after missing evidence, got %#v", pending)
+	}
+	if ledgerFindingHasVerdict(runDir, "finding_one", "deduplicate") {
+		t.Fatal("dedup verdict without deduplication evidence should not be complete")
+	}
+	err = runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected rerun to reject incomplete deduplication evidence again")
+	}
+}
+
+func TestRunDeduplicatePhaseRequiresDeduplicationEvidenceFile(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_dedup_evidence_$$","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md"}}
+{"id":"event_dedup_one_$$","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_done_dedup_$$","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+	}
+	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing deduplication evidence file error")
+	}
+	if !strings.Contains(err.Error(), "read evidence file evidence/deduplicate-notes.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDeduplicatePhaseRequiresRegisteredDeduplicationEvidenceHash(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
+# Deduplication notes
+
+Clustered by fake opencode.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_dedup_evidence_$$","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md"}}
+{"id":"event_dedup_one_$$","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_done_dedup_$$","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), Config{Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing deduplication evidence hash error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/deduplicate-notes.md is missing registered content hash") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDeduplicatePhaseRejectsRerunThatInvalidatesExistingVerdict(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")
+	addReviewedFindingForTest(t, runDir, "finding_two", "evidence/finding-two.md", "Second candidate body.")
+	addCompletedDeduplicateVerdictForTest(t, runDir, "finding_one", "canonical", "")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
+# Deduplication notes
+
+New notes for finding two.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_dedup_evidence_$$","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"716810a70416fa43be4a0700e9ea1eca5195707090391c11fe8087efb5ffca9a"}}
+{"id":"event_dedup_two_$$","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
+{"id":"event_done_dedup_$$","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), Config{Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected rerun invalidation error")
+	}
+	if !strings.Contains(err.Error(), "left findings pending deduplication: finding_one") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunDeduplicatePhaseRejectsDuplicateToNonCanonical(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")
@@ -113,10 +284,16 @@ func TestRunDeduplicatePhaseRejectsDuplicateToNonCanonical(t *testing.T) {
 set -eu
 : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
 : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
+# Deduplication notes
+
+Duplicate graph is invalid.
+EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_two"}}
-{"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_one"}}
-{"id":"event_done_dedup","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+{"id":"event_dedup_evidence","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"a70e55557e64a822f69d8781af3e6849c9d4901cab9d9f0f43fdb3ffb7429a9a"}}
+{"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_two"}}
+{"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_one"}}
+{"id":"event_done_dedup","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
 `
@@ -124,8 +301,7 @@ printf '{"type":"done"}\n'
 		t.Fatal(err)
 	}
 
-	cfg := Config{Models: ModelConfig{Default: "fake/model"}}
-	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), cfg, opencodePath)
+	err := runDeduplicatePhase(runDir, "run_dedup", t.TempDir(), Config{Models: ModelConfig{Default: "fake/model"}}, opencodePath)
 	if err == nil {
 		t.Fatal("expected non-canonical duplicate target error")
 	}
@@ -214,6 +390,23 @@ func addReviewedFindingForTest(t *testing.T, runDir, id, bodyRel, body string) F
 func addCompletedDeduplicateVerdictForTest(t *testing.T, runDir, findingID, value, canonicalID string) {
 	t.Helper()
 	taskID := "task_deduplicate_existing_" + findingID
+	notesRel := deduplicateNotesRelPath()
+	writeRunFile(t, runDir, notesRel, "Existing deduplication evidence for test.")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_dedup",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_dedup_" + findingID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Deduplication notes",
+			"path":           notesRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, notesRel),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_dedup",
 		Type:     "verdict.recorded",

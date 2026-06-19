@@ -79,6 +79,7 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-deduplicate.jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
+	notesRel := deduplicateNotesRelPath()
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
 		RunID:    runID,
 		TaskID:   task.TaskID,
@@ -89,6 +90,13 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Verify: func() error {
+			evidence, ok := ledgerTaskEvidence(runDir, task.TaskID, notesRel)
+			if !ok {
+				return fmt.Errorf("deduplicate opencode task did not register deduplication evidence %s", notesRel)
+			}
+			if err := registeredEvidenceFileError(runDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+				return err
+			}
 			var missing []string
 			for _, finding := range findings {
 				if !ledgerFindingHasVerdict(runDir, finding.ID, "deduplicate") {
@@ -101,7 +109,17 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 			if !ledgerTaskCompleted(runDir, task.TaskID) {
 				return errors.New("deduplicate opencode task did not complete task_deduplicate")
 			}
-			return validateDeduplicateGraph(runDir, findings)
+			if err := validateDeduplicateGraph(runDir, findings); err != nil {
+				return err
+			}
+			pending, err := undeduplicatedLedgerFindings(runDir)
+			if err != nil {
+				return err
+			}
+			if len(pending) > 0 {
+				return fmt.Errorf("deduplicate opencode task left findings pending deduplication: %s", strings.Join(findingIDs(pending), ", "))
+			}
+			return nil
 		},
 	}); err != nil {
 		return err
@@ -122,6 +140,10 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	}
 
 	return nil
+}
+
+func deduplicateNotesRelPath() string {
+	return filepath.ToSlash(filepath.Join("evidence", "deduplicate-notes.md"))
 }
 
 func deduplicatePrompt(runDir, workspace string, cfg Config, allFindings, pendingFindings []FindingRecord) (string, error) {
@@ -158,10 +180,12 @@ Required actions:
 2. Read the finding bodies, review notes, attached evidence, recon context, and relevant source code when needed to decide whether two findings describe the same root defect.
 3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
-6. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
-7. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
-8. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
+5. Write clustering notes, canonical selections, duplicate rationale, and any uncertainty to %[2]s/evidence/deduplicate-notes.md.
+6. Register the notes with: mnm evidence add --kind markdown --title "Deduplication notes" --path %[2]s/evidence/deduplicate-notes.md
+7. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
+8. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
+9. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
+10. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
 
 Deduplication quality bar:
 

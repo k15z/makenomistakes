@@ -223,6 +223,8 @@ Finding statuses:
   must create at least one finding.
 - Review tasks fail postcondition checks unless they register a non-empty review
   evidence file for the finding being assessed.
+- Deduplicate tasks fail postcondition checks unless they register a non-empty
+  deduplication evidence file explaining canonical and duplicate decisions.
 - Validate tasks fail postcondition checks unless they register a non-empty
   validation evidence file for the finding being evaluated.
 - Interrupted runs checkpoint to `stopped`; rerunning
