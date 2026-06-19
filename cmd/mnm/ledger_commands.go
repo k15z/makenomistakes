@@ -352,7 +352,7 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("stat evidence path %s: %w", relPath, err)
 	}
 	evidenceID := newLedgerID("evidence")
-	if err := appendLedgerEvent(runDir, LedgerEvent{
+	event, err := prepareLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,
 		Type:     "evidence.added",
 		Object:   "evidence",
@@ -366,7 +366,27 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 			"finding_id":     *findingID,
 			"content_sha256": contentSHA256,
 		},
-	}); err != nil {
+	})
+	if err != nil {
+		return err
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	existing, exists, err := ledgerTaskEvidencePathUnlocked(runDir, task.TaskID, relPath)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if existing.Kind == kindText && existing.Title == titleText && existing.LeadID == *leadID && existing.FindingID == *findingID && existing.ContentSHA256 == contentSHA256 {
+			fmt.Fprintln(stdout, existing.ID)
+			return nil
+		}
+		return fmt.Errorf("task %s already registered evidence path %s with different metadata", task.TaskID, relPath)
+	}
+	if err := appendLedgerEventUnlocked(runDir, event); err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, evidenceID)
@@ -601,6 +621,22 @@ func currentTaskForCommand(runDirFlag string) (string, TaskRecord, error) {
 		return "", TaskRecord{}, err
 	}
 	return runDir, task, nil
+}
+
+func ledgerTaskEvidencePathUnlocked(runDir, taskID, relPath string) (EvidenceRecord, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return EvidenceRecord{}, false, err
+	}
+	var match EvidenceRecord
+	found := false
+	for _, item := range evidenceFromEvents(events) {
+		if item.TaskID == taskID && item.Path == relPath {
+			match = item
+			found = true
+		}
+	}
+	return match, found, nil
 }
 
 func requiredTextFlag(name, value string) (string, error) {

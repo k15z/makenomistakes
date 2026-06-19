@@ -1594,6 +1594,198 @@ func TestEvidenceRejectsLeadAndFindingOwnerTogether(t *testing.T) {
 	}
 }
 
+func TestEvidenceAddIsIdempotentForSameMetadata(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	firstID := strings.TrimSpace(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != firstID {
+		t.Fatalf("idempotent evidence id = %q, want %q", got, firstID)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
+}
+
+func TestEvidenceAddIsAtomicForParallelSameMetadata(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"evidence", "add",
+				"--run-dir", runDir,
+				"--kind", "log",
+				"--title", "Proof",
+				"--path", proof,
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel evidence add failed: %v", err)
+		}
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
+}
+
+func TestEvidenceAddRejectsConflictingMetadataForSameTaskPath(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "markdown",
+		"--title", "Different proof",
+		"--path", proof,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting evidence metadata error")
+	}
+	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
+}
+
+func TestEvidenceAddRejectsChangedContentForSameTaskPath(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if err := os.WriteFile(proof, []byte("changed proof"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", proof,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected changed evidence content error")
+	}
+	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
+}
+
+func TestEvidenceAddUsesLatestExistingTaskPathRegistration(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := "evidence/proof.log"
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_old",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"kind":           "markdown",
+			"title":          "Old proof",
+			"path":           proofRel,
+			"lead_id":        "",
+			"finding_id":     "",
+			"content_sha256": runFileSHA256ForTest(t, runDir, proofRel),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_latest",
+		TaskID:   "task_recon",
+		Data: map[string]any{
+			"kind":           "log",
+			"title":          "Proof",
+			"path":           proofRel,
+			"lead_id":        "",
+			"finding_id":     "",
+			"content_sha256": runFileSHA256ForTest(t, runDir, proofRel),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--kind", "log",
+		"--title", "Proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "evidence_latest" {
+		t.Fatalf("idempotent evidence id = %q, want latest existing event", got)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", proofRel, 2)
+}
+
 func TestLeadCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	body := writeRunFile(t, runDir, "evidence/lead-auth.md", "Investigate auth.")
@@ -2555,6 +2747,23 @@ func assertVerdictEventCount(t *testing.T, runDir, findingID, phase string, want
 	}
 	if got != want {
 		t.Fatalf("verdict.recorded event count for %s/%s = %d, want %d", findingID, phase, got, want)
+	}
+}
+
+func assertEvidenceEventCount(t *testing.T, runDir, taskID, relPath string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type == "evidence.added" && event.TaskID == taskID && event.Data["path"] == relPath {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("evidence.added event count for %s/%s = %d, want %d", taskID, relPath, got, want)
 	}
 }
 
