@@ -624,6 +624,83 @@ func TestReportShowRejectsSymlinkReportParent(t *testing.T) {
 	}
 }
 
+func TestReportShowMentionsRunnerFailure(t *testing.T) {
+	workspace := t.TempDir()
+	runRecord := testRunRecord(workspace, "run_failed_report", RunStatusFailed, nowForTest())
+	if err := os.MkdirAll(runRecord.RunDir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(runRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendRunnerFailureForTest(t, runRecord.RunDir, runRecord.ID, "validate", "validation crashed")
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing finalized report error")
+	}
+	for _, want := range []string{
+		"has no finalized report",
+		"runner failed during validate",
+		"evidence/runner-failure.json",
+		"validation crashed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("report show error missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestReportShowIgnoresStaleRunnerFailureAfterCompletion(t *testing.T) {
+	workspace := t.TempDir()
+	runRecord := testRunRecord(workspace, "run_completed_without_report", RunStatusCompleted, nowForTest())
+	if err := os.MkdirAll(runRecord.RunDir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(runRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendRunnerFailureForTest(t, runRecord.RunDir, runRecord.ID, "validate", "validation crashed")
+	if err := appendLedgerEvent(runRecord.RunDir, LedgerEvent{
+		RunID:    runRecord.ID,
+		Type:     "runner.completed",
+		Object:   "run",
+		ObjectID: runRecord.ID,
+		Data: map[string]any{
+			"workspace": "/tmp/workspace",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing finalized report error")
+	}
+	if !strings.Contains(err.Error(), "has no finalized report") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "validation crashed") {
+		t.Fatalf("report show error includes stale runner failure: %v", err)
+	}
+}
+
 func TestTaskCurrentUsesTaskFileEnv(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	task := TaskRecord{

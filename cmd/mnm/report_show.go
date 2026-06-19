@@ -79,6 +79,11 @@ func finalizedReportPath(run RunRecord, jsonOutput bool) (string, error) {
 		return "", err
 	}
 	if !ok || !ledgerTaskCompleted(run.RunDir, "task_finalize") {
+		if failure, ok, err := latestRunnerFailure(run.RunDir); err != nil {
+			return "", err
+		} else if ok {
+			return "", fmt.Errorf("run %s has no finalized report; runner failed during %s; see %s: %s", run.ID, failure.Stage, failure.Path, failure.Error)
+		}
 		return "", fmt.Errorf("run %s has no finalized report", run.ID)
 	}
 	reportRel := report.MarkdownPath

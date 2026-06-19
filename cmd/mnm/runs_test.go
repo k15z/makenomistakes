@@ -39,6 +39,7 @@ func TestRunsCommandListsRuns(t *testing.T) {
 		"STATUS",
 		"RESUMABLE",
 		"UPDATED",
+		"FAILURE",
 		"RUN DIR",
 		"run_stopped",
 		RunStatusStopped,
@@ -57,10 +58,58 @@ func TestRunsCommandListsRuns(t *testing.T) {
 	}
 }
 
+func TestRunsCommandShowsRunnerFailure(t *testing.T) {
+	dir := t.TempDir()
+	record := createStoredRun(t, dir, "run_failed", RunStatusFailed, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC))
+	appendRunnerFailureForTest(t, record.RunDir, record.ID, "validate", "validation environment failed")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"runs", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("runs failed: %v\nstderr: %s", err, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"run_failed",
+		RunStatusFailed,
+		"failed during validate",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("runs output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunsCommandIgnoresStaleRunnerFailureAfterCompletion(t *testing.T) {
+	dir := t.TempDir()
+	record := createStoredRun(t, dir, "run_completed", RunStatusCompleted, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC))
+	appendRunnerFailureForTest(t, record.RunDir, record.ID, "validate", "validation environment failed")
+	if err := appendLedgerEvent(record.RunDir, LedgerEvent{
+		RunID:    record.ID,
+		Type:     "runner.completed",
+		Object:   "run",
+		ObjectID: record.ID,
+		Data: map[string]any{
+			"workspace": "/tmp/workspace",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"runs", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("runs failed: %v\nstderr: %s", err, stderr.String())
+	}
+	output := stdout.String()
+	if strings.Contains(output, "failed during validate") {
+		t.Fatalf("runs output includes stale failure:\n%s", output)
+	}
+}
+
 func TestRunsCommandListsRunsAsJSON(t *testing.T) {
 	dir := t.TempDir()
-	createStoredRun(t, dir, "run_stopped", RunStatusStopped, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC))
+	failed := createStoredRun(t, dir, "run_stopped", RunStatusStopped, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC))
 	createStoredRun(t, dir, "run_completed", RunStatusCompleted, time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC))
+	appendRunnerFailureForTest(t, failed.RunDir, failed.ID, "recon", "recon did not complete")
 
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{"runs", "--json", dir}, &stdout, &stderr); err != nil {
@@ -72,6 +121,11 @@ func TestRunsCommandListsRunsAsJSON(t *testing.T) {
 			Status    string `json:"status"`
 			UpdatedAt string `json:"updated_at"`
 			Resumable bool   `json:"resumable"`
+			Failure   *struct {
+				Stage string `json:"stage"`
+				Error string `json:"error"`
+				Path  string `json:"path"`
+			} `json:"runner_failure"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
@@ -83,12 +137,18 @@ func TestRunsCommandListsRunsAsJSON(t *testing.T) {
 	if parsed.Runs[0].ID != "run_stopped" || !parsed.Runs[0].Resumable {
 		t.Fatalf("first JSON run = %#v, want resumable run_stopped", parsed.Runs[0])
 	}
+	if parsed.Runs[0].Failure == nil || parsed.Runs[0].Failure.Stage != "recon" || parsed.Runs[0].Failure.Path != "evidence/runner-failure.json" {
+		t.Fatalf("first JSON failure = %#v, want recon failure", parsed.Runs[0].Failure)
+	}
 	if parsed.Runs[1].ID != "run_completed" || parsed.Runs[1].Resumable {
 		t.Fatalf("second JSON run = %#v, want non-resumable run_completed", parsed.Runs[1])
 	}
+	if parsed.Runs[1].Failure != nil {
+		t.Fatalf("second JSON failure = %#v, want nil", parsed.Runs[1].Failure)
+	}
 }
 
-func createStoredRun(t *testing.T, workspace, id, status string, timestamp time.Time) {
+func createStoredRun(t *testing.T, workspace, id, status string, timestamp time.Time) RunRecord {
 	t.Helper()
 	mnmDir := filepath.Join(workspace, ".mnm")
 	if err := os.MkdirAll(mnmDir, dirPerm); err != nil {
@@ -99,7 +159,26 @@ func createStoredRun(t *testing.T, workspace, id, status string, timestamp time.
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.CreateRun(testRunRecord(workspace, id, status, timestamp)); err != nil {
+	run := testRunRecord(workspace, id, status, timestamp)
+	if err := store.CreateRun(run); err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+func appendRunnerFailureForTest(t *testing.T, runDir, runID, stage, message string) {
+	t.Helper()
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "runner.failed",
+		Object:   "run",
+		ObjectID: runID,
+		Data: map[string]any{
+			"stage": stage,
+			"error": message,
+			"path":  "evidence/runner-failure.json",
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
