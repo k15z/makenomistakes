@@ -37,6 +37,7 @@ type ModelConfig struct {
 	Investigate string `toml:"investigate"`
 	Review      string `toml:"review"`
 	Deduplicate string `toml:"deduplicate"`
+	Validate    string `toml:"validate"`
 }
 
 type RunnerConfig struct {

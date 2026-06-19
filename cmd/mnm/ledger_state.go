@@ -181,6 +181,27 @@ func undeduplicatedLedgerFindings(runDir string) ([]FindingRecord, error) {
 	return pending, nil
 }
 
+func unvalidatedCanonicalFindings(runDir string) ([]FindingRecord, error) {
+	findings, err := reviewAcceptedLedgerFindings(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var pending []FindingRecord
+	for _, finding := range findings {
+		dedup, ok, err := ledgerFindingVerdict(runDir, finding.ID, "deduplicate")
+		if err != nil {
+			return nil, err
+		}
+		if !ok || dedup.Value != "canonical" {
+			continue
+		}
+		if !ledgerFindingHasVerdict(runDir, finding.ID, "validate") {
+			pending = append(pending, finding)
+		}
+	}
+	return pending, nil
+}
+
 func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
