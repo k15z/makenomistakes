@@ -80,6 +80,20 @@ func TestLedgerCommandFlow(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
+	reviewNotesPath := writeRunFile(t, runDir, reviewNotesRelPath(findingID), "Review accepted with specific evidence.")
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--kind", "markdown",
+		"--title", "Review notes",
+		"--path", reviewNotesPath,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("review evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
 	if err := run([]string{
 		"verdict", "record",
 		"--run-dir", runDir,
@@ -89,6 +103,17 @@ func TestLedgerCommandFlow(t *testing.T) {
 		"--reason", "Evidence is specific and in scope.",
 	}, &stdout, &stderr); err != nil {
 		t.Fatalf("verdict record failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"task", "complete",
+		"--run-dir", runDir,
+		"--status", "completed",
+		"--summary", "Done",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("task complete failed: %v\nstderr: %s", err, stderr.String())
 	}
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
@@ -118,17 +143,6 @@ func TestLedgerCommandFlow(t *testing.T) {
 		"--json", reportJSON,
 	}, &stdout, &stderr); err != nil {
 		t.Fatalf("report finalize failed: %v\nstderr: %s", err, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if err := run([]string{
-		"task", "complete",
-		"--run-dir", runDir,
-		"--status", "completed",
-		"--summary", "Done",
-	}, &stdout, &stderr); err != nil {
-		t.Fatalf("task complete failed: %v\nstderr: %s", err, stderr.String())
 	}
 
 	events, err := readLedgerEvents(runDir)
@@ -532,6 +546,97 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsFindingMetadataMismatch(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "medium",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "Traceable finding with the wrong severity.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected metadata mismatch error")
+	}
+	if !strings.Contains(err.Error(), `proven[0].severity = "medium", want ledger value "high"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with mismatched finding metadata should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsSourceLeadMismatch(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	otherLeadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": otherLeadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "Traceable finding with the wrong source lead.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected source lead mismatch error")
+	}
+	if !strings.Contains(err.Error(), `source_lead_id = "`+otherLeadID+`", want ledger value "`+leadID+`"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with mismatched source lead should not be finalized")
+	}
+}
+
 func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
@@ -622,6 +727,204 @@ func TestReportFinalizeRejectsUnregisteredFindingEvidence(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsEmptyRegisteredEvidence(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	emptyRel := "evidence/empty-proof.log"
+	writeRunFile(t, runDir, emptyRel, "")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_empty",
+		TaskID:   "task_validate_" + safeFileID(findingID),
+		Data: map[string]any{
+			"kind":       "log",
+			"title":      "Empty proof",
+			"path":       emptyRel,
+			"finding_id": findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{emptyRel},
+			"summary":        "This cites an empty evidence artifact.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected empty registered evidence error")
+	}
+	if !strings.Contains(err.Error(), "unusable evidence") || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with empty evidence should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsChangedRegisteredEvidence(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "original proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	if err := os.WriteFile(proofPath, []byte("changed proof"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "This cites evidence that changed after registration.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected changed evidence error")
+	}
+	if !strings.Contains(err.Error(), "changed after registration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with changed evidence should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsSymlinkEvidencePath(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofRel := filepath.ToSlash(filepath.Join("evidence", "proof-link.log"))
+	proofTarget := writeRunFile(t, runDir, "evidence/proof-target.log", "proof")
+	if err := os.Symlink(proofTarget, filepath.Join(runDir, filepath.FromSlash(proofRel))); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: "evidence_symlink",
+		TaskID:   "task_validate_" + safeFileID(findingID),
+		Data: map[string]any{
+			"kind":           "log",
+			"title":          "Symlink proof",
+			"path":           proofRel,
+			"content_sha256": runFileSHA256ForTest(t, runDir, proofRel),
+			"finding_id":     findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "This cites a symlinked evidence artifact.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected symlink evidence error")
+	}
+	if !strings.Contains(err.Error(), "must not contain symlinks") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with symlink evidence should not be finalized")
+	}
+}
+
+func TestValidateFinalizedReportRejectsSymlinkReportPath(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	realReport := writeRunFile(t, runDir, "real-report.md", "# Report")
+	if err := os.Symlink(realReport, filepath.Join(runDir, "report-link.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report-link.md", "report.json", nil))
+
+	err := validateFinalizedReport(runDir, TaskRecord{
+		RunID:  "run_test",
+		TaskID: "task_finalize",
+		Phase:  "finalize",
+	}, ReportRecord{
+		ID:           "report_symlink",
+		TaskID:       "task_finalize",
+		MarkdownPath: "report-link.md",
+		JSONPath:     "report.json",
+	})
+	if err == nil {
+		t.Fatal("expected symlink report validation error")
+	}
+	if !strings.Contains(err.Error(), "must not contain symlinks") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestReportFinalizeRejectsProvenFindingWithoutEvidence(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
@@ -702,7 +1005,7 @@ func TestReportFinalizeRejectsStatusThatDoesNotMatchBucket(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected mismatched status error")
 	}
-	if !strings.Contains(err.Error(), `status = "validation_failed" is not valid for bucket "proven"`) {
+	if !strings.Contains(err.Error(), `status = "validation_failed", want ledger value "validation_proven"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ledgerReportFinalized(runDir) {
