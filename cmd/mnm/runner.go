@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
+
+const opencodeVersion = "1.15.11"
 
 type AnalyzeRunner interface {
 	Run(context.Context, RunnerRequest) error
@@ -50,6 +54,10 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := extractWorkspaceSnapshot(*snapshot, workspace); err != nil {
 		return err
 	}
+	opencodePath, opencodeVersionOutput, err := ensureOpenCode()
+	if err != nil {
+		return err
+	}
 
 	if err := appendLedgerEvent(*runDir, LedgerEvent{
 		RunID:    *runID,
@@ -64,7 +72,7 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	}
 
 	manifestPath := filepath.Join(*runDir, "evidence", "runner-manifest.json")
-	if err := writeRunnerManifest(manifestPath, *runID, workspace); err != nil {
+	if err := writeRunnerManifest(manifestPath, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
 		return err
 	}
 	if err := appendLedgerEvent(*runDir, LedgerEvent{
@@ -96,15 +104,17 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func writeRunnerManifest(path, runID, workspace string) error {
+func writeRunnerManifest(path, runID, workspace, opencodePath, opencodeVersionOutput string) error {
 	entries, err := workspaceFileList(workspace)
 	if err != nil {
 		return err
 	}
 	manifest := map[string]any{
-		"run_id":          runID,
-		"workspace":       workspace,
-		"workspace_files": entries,
+		"run_id":           runID,
+		"workspace":        workspace,
+		"workspace_files":  entries,
+		"opencode_path":    opencodePath,
+		"opencode_version": strings.TrimSpace(opencodeVersionOutput),
 	}
 	return writeJSON(path, manifest)
 }
@@ -126,4 +136,41 @@ func workspaceFileList(root string) ([]string, error) {
 		return nil
 	})
 	return entries, err
+}
+
+func ensureOpenCode() (string, string, error) {
+	if path, err := exec.LookPath("opencode"); err == nil {
+		version, err := commandOutput(path, "--version")
+		return path, version, err
+	}
+
+	install := fmt.Sprintf("curl -fsSL https://opencode.ai/install | bash -s -- --version %s --no-modify-path", shellQuote(opencodeVersion))
+	command := exec.Command("bash", "-lc", install)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return "", "", fmt.Errorf("install opencode: %w", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", err
+	}
+	pathEnv := filepath.Join(home, ".opencode", "bin") + string(os.PathListSeparator) + os.Getenv("PATH")
+	os.Setenv("PATH", pathEnv)
+	path, err := exec.LookPath("opencode")
+	if err != nil {
+		return "", "", fmt.Errorf("opencode install completed but binary was not found: %w", err)
+	}
+	version, err := commandOutput(path, "--version")
+	return path, version, err
+}
+
+func commandOutput(name string, args ...string) (string, error) {
+	command := exec.Command(name, args...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(output))
+	}
+	return string(output), nil
 }

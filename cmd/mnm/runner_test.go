@@ -10,6 +10,7 @@ import (
 )
 
 func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
+	prependFakeOpenCode(t, "1.15.11\n")
 	source := t.TempDir()
 	writeWorkspaceFile(t, source, "repo/app.go", "package main")
 	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.zst")
@@ -52,6 +53,9 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, `"opencode_version": "1.15.11"`) {
+		t.Fatalf("manifest missing opencode version:\n%s", manifest)
 	}
 }
 
@@ -118,4 +122,15 @@ func (executor *recordingExecutor) Run(_ context.Context, name string, args ...s
 		}
 	}
 	return nil
+}
+
+func prependFakeOpenCode(t *testing.T, version string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode")
+	body := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '" + version + "'; exit 0; fi\nprintf 'fake opencode\\n'\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
