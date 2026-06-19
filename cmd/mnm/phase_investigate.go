@@ -10,9 +10,12 @@ import (
 )
 
 func runInvestigatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
-	processed, err := completedInvestigationLeads(runDir)
+	processed, invalidClosed, err := completedInvestigationLeads(runDir)
 	if err != nil {
 		return err
+	}
+	if len(invalidClosed) > 0 {
+		return fmt.Errorf("investigate phase has closed leads with incomplete investigation tasks: %s", strings.Join(invalidClosed, ", "))
 	}
 	limit := maxInvestigations(cfg)
 	for {
@@ -45,38 +48,63 @@ func runInvestigatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	}
 }
 
-func completedInvestigationLeads(runDir string) (map[string]bool, error) {
+func completedInvestigationLeads(runDir string) (map[string]bool, []string, error) {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	leadByTaskID := map[string]string{}
-	statusByTaskID := map[string]string{}
+	seenLead := map[string]bool{}
+	var leadOrder []string
 	for _, event := range events {
 		if event.Object != "task" || event.ObjectID == "" || !strings.HasPrefix(event.ObjectID, "task_investigate_") {
 			continue
 		}
-		switch event.Type {
-		case "task.started":
+		if event.Type == "task.started" {
 			leadID, _ := event.Data["lead_id"].(string)
 			if leadID != "" {
+				if !seenLead[leadID] {
+					seenLead[leadID] = true
+					leadOrder = append(leadOrder, leadID)
+				}
 				leadByTaskID[event.ObjectID] = leadID
 			}
-		case "task.completed":
-			status, _ := event.Data["status"].(string)
-			statusByTaskID[event.ObjectID] = status
 		}
 	}
 	processed := map[string]bool{}
-	for taskID, status := range statusByTaskID {
-		if status != "completed" {
-			continue
-		}
-		if leadID := leadByTaskID[taskID]; leadID != "" {
+	for taskID, leadID := range leadByTaskID {
+		if investigationTaskComplete(runDir, leadID, taskID) {
 			processed[leadID] = true
 		}
 	}
-	return processed, nil
+	var invalidClosed []string
+	for _, leadID := range leadOrder {
+		if processed[leadID] {
+			continue
+		}
+		status, exists, err := ledgerLeadStatus(runDir, leadID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if exists && status != "open" {
+			invalidClosed = append(invalidClosed, leadID)
+		}
+	}
+	return processed, invalidClosed, nil
+}
+
+func investigationTaskComplete(runDir, leadID, taskID string) bool {
+	if !ledgerTaskCompleted(runDir, taskID) {
+		return false
+	}
+	if !ledgerLeadHasValidInvestigationEvidence(runDir, leadID, taskID) {
+		return false
+	}
+	status, exists, err := ledgerLeadStatus(runDir, leadID)
+	if err != nil || !exists || status == "open" {
+		return false
+	}
+	return status != "promoted_to_finding" || ledgerLeadHasFinding(runDir, leadID)
 }
 
 func appendInvestigateLimitReached(runDir, runID string, limit, processed int) error {
@@ -193,6 +221,7 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-investigate-"+safeLeadID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
+	notesRel := investigationNotesRelPath(lead.ID)
 	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
 		RunID:    runID,
 		TaskID:   task.TaskID,
@@ -204,8 +233,22 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Verify: func() error {
-			if !ledgerLeadClosed(runDir, lead.ID) {
+			evidence, ok := ledgerLeadTaskEvidence(runDir, lead.ID, task.TaskID, notesRel)
+			if !ok {
+				return fmt.Errorf("investigate opencode task did not register investigation evidence %s for lead %s", notesRel, lead.ID)
+			}
+			if err := registeredEvidenceFileError(runDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+				return err
+			}
+			status, exists, err := ledgerLeadStatus(runDir, lead.ID)
+			if err != nil {
+				return err
+			}
+			if !exists || status == "open" {
 				return fmt.Errorf("investigate opencode task did not close lead %s", lead.ID)
+			}
+			if status == "promoted_to_finding" && !ledgerLeadHasFinding(runDir, lead.ID) {
+				return fmt.Errorf("investigate opencode task closed lead %s as promoted_to_finding without creating a finding", lead.ID)
 			}
 			if !ledgerTaskCompleted(runDir, task.TaskID) {
 				return fmt.Errorf("investigate opencode task did not complete task %s", task.TaskID)
@@ -231,6 +274,10 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 		return err
 	}
 	return nil
+}
+
+func investigationNotesRelPath(leadID string) string {
+	return filepath.ToSlash(filepath.Join("evidence", "investigate-"+safeFileID(leadID)+"-notes.md"))
 }
 
 func investigatePrompt(runDir, workspace string, cfg Config, lead LeadRecord) (string, error) {
@@ -274,11 +321,12 @@ Required actions:
 2. Read the recon context and inspect the workspace with local tools. Run focused tests, dependency checks, repro scripts, or small proof commands when they would materially answer the lead.
 3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. If the lead is not a real issue, write notes to %[2]s/evidence/investigate-%[10]s-notes.md, register them with: mnm evidence add --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md, then close the lead with: mnm lead close --id %[3]s --status closed_no_finding --reason "..."
-6. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md
-7. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
-8. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, or superseded.
-9. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
+5. Write investigation notes, commands, observed output, code references, and decision rationale to %[2]s/evidence/investigate-%[10]s-notes.md, then register them with: mnm evidence add --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md
+6. If the lead is not a real issue, close the lead with: mnm lead close --id %[3]s --status closed_no_finding --reason "..."
+7. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
+8. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
+9. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, or superseded.
+10. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
 
 Finding quality bar:
 
