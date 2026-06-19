@@ -202,7 +202,7 @@ JSON report requirements:
 - The JSON must parse with standard JSON parsers.
 - "id" must be the real ledger ID of a finding, and each "evidence_paths" entry must point to evidence that was registered for that finding through mnm evidence add.
 - Every finding in "proven" must include at least one evidence_paths entry.
-- "status" must match the bucket: proven uses validation_proven, inconclusive uses validation_inconclusive, failed uses validation_failed, rejected uses review_rejected, duplicate uses duplicate, and unvalidated uses candidate, reviewed, or validation_pending.
+- "status" must match exact ledger progress: no review uses candidate, accepted review before deduplication uses reviewed, canonical deduplication before validation uses validation_pending, proven uses validation_proven, inconclusive uses validation_inconclusive, failed uses validation_failed, rejected uses review_rejected, and duplicate uses duplicate.
 - Place each finding in the bucket proven by the ledger verdicts. A finding with validation failed belongs in "failed", not "proven"; a review-rejected finding belongs in "rejected"; a deduplicate duplicate belongs in "duplicate".
 - Every ledger finding must appear in exactly one report bucket.
 `, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg)), nil

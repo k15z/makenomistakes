@@ -287,28 +287,79 @@ func TestReportKnownStateIgnoresValidateVerdictWithoutValidationEvidence(t *test
 	}
 }
 
-func TestReportStatusAllowedForBucket(t *testing.T) {
+func TestReportStatusForFinding(t *testing.T) {
 	tests := []struct {
-		bucket string
-		status string
-		want   bool
+		name     string
+		verdicts map[string]VerdictRecord
+		want     string
 	}{
-		{bucket: "proven", status: "validation_proven", want: true},
-		{bucket: "proven", status: "validation_failed", want: false},
-		{bucket: "inconclusive", status: "validation_inconclusive", want: true},
-		{bucket: "failed", status: "validation_failed", want: true},
-		{bucket: "rejected", status: "review_rejected", want: true},
-		{bucket: "duplicate", status: "duplicate", want: true},
-		{bucket: "unvalidated", status: "candidate", want: true},
-		{bucket: "unvalidated", status: "reviewed", want: true},
-		{bucket: "unvalidated", status: "validation_pending", want: true},
-		{bucket: "unvalidated", status: "validation_proven", want: false},
+		{
+			name: "candidate",
+			want: "candidate",
+		},
+		{
+			name: "reviewed",
+			verdicts: map[string]VerdictRecord{
+				"review": {Phase: "review", Value: "accepted"},
+			},
+			want: "reviewed",
+		},
+		{
+			name: "validation pending",
+			verdicts: map[string]VerdictRecord{
+				"review":      {Phase: "review", Value: "accepted"},
+				"deduplicate": {Phase: "deduplicate", Value: "canonical"},
+			},
+			want: "validation_pending",
+		},
+		{
+			name: "review rejected",
+			verdicts: map[string]VerdictRecord{
+				"review": {Phase: "review", Value: "rejected"},
+			},
+			want: "review_rejected",
+		},
+		{
+			name: "duplicate",
+			verdicts: map[string]VerdictRecord{
+				"review":      {Phase: "review", Value: "accepted"},
+				"deduplicate": {Phase: "deduplicate", Value: "duplicate"},
+			},
+			want: "duplicate",
+		},
+		{
+			name: "proven",
+			verdicts: map[string]VerdictRecord{
+				"review":      {Phase: "review", Value: "accepted"},
+				"deduplicate": {Phase: "deduplicate", Value: "canonical"},
+				"validate":    {Phase: "validate", Value: "proven"},
+			},
+			want: "validation_proven",
+		},
+		{
+			name: "failed",
+			verdicts: map[string]VerdictRecord{
+				"review":      {Phase: "review", Value: "accepted"},
+				"deduplicate": {Phase: "deduplicate", Value: "canonical"},
+				"validate":    {Phase: "validate", Value: "failed"},
+			},
+			want: "validation_failed",
+		},
+		{
+			name: "inconclusive",
+			verdicts: map[string]VerdictRecord{
+				"review":      {Phase: "review", Value: "accepted"},
+				"deduplicate": {Phase: "deduplicate", Value: "canonical"},
+				"validate":    {Phase: "validate", Value: "inconclusive"},
+			},
+			want: "validation_inconclusive",
+		},
 	}
 
 	for _, test := range tests {
-		t.Run(test.bucket+"/"+test.status, func(t *testing.T) {
-			if got := reportStatusAllowedForBucket(test.bucket, test.status); got != test.want {
-				t.Fatalf("allowed = %t, want %t", got, test.want)
+		t.Run(test.name, func(t *testing.T) {
+			if got := reportStatusForFinding(test.verdicts); got != test.want {
+				t.Fatalf("status = %q, want %q", got, test.want)
 			}
 		})
 	}

@@ -108,7 +108,7 @@ type reportLedgerState struct {
 	Findings        map[string]FindingRecord
 	Leads           map[string]bool
 	Verdicts        map[string]map[string]VerdictRecord
-	FindingEvidence map[string]map[string]bool
+	FindingEvidence map[string]map[string]EvidenceRecord
 }
 
 func reportKnownState(runDir string) (reportLedgerState, error) {
@@ -132,7 +132,7 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 		Findings:        map[string]FindingRecord{},
 		Leads:           map[string]bool{},
 		Verdicts:        map[string]map[string]VerdictRecord{},
-		FindingEvidence: map[string]map[string]bool{},
+		FindingEvidence: map[string]map[string]EvidenceRecord{},
 	}
 	for _, lead := range leads {
 		state.Leads[lead.ID] = true
@@ -157,9 +157,9 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 			continue
 		}
 		if state.FindingEvidence[item.FindingID] == nil {
-			state.FindingEvidence[item.FindingID] = map[string]bool{}
+			state.FindingEvidence[item.FindingID] = map[string]EvidenceRecord{}
 		}
-		state.FindingEvidence[item.FindingID][item.Path] = true
+		state.FindingEvidence[item.FindingID][item.Path] = item
 	}
 	return state, nil
 }
@@ -203,6 +203,7 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if _, ok := state.Findings[id]; !ok {
 		return fmt.Errorf("%s.id %q does not reference a known finding", prefix, id)
 	}
+	finding := state.Findings[id]
 	if previous, exists := seenReportIDs[id]; exists {
 		return fmt.Errorf("%s.id %q duplicates report item in %s", prefix, id, previous)
 	}
@@ -211,24 +212,42 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if bucket != expectedBucket {
 		return fmt.Errorf("%s.id %q is in bucket %q, want %q from ledger verdicts", prefix, id, bucket, expectedBucket)
 	}
-	for _, field := range []string{"title", "category", "severity", "confidence", "status", "summary"} {
-		if _, err := requiredStringField(item, field); err != nil {
+	for _, field := range []string{"status", "summary"} {
+		if _, err := requiredNonEmptyStringField(item, field); err != nil {
 			return fmt.Errorf("%s.%w", prefix, err)
 		}
 	}
+	for _, field := range []struct {
+		name string
+		want string
+	}{
+		{name: "title", want: finding.Title},
+		{name: "category", want: finding.Category},
+		{name: "severity", want: finding.Severity},
+		{name: "confidence", want: finding.Confidence},
+	} {
+		got, err := requiredNonEmptyStringField(item, field.name)
+		if err != nil {
+			return fmt.Errorf("%s.%w", prefix, err)
+		}
+		if got != field.want {
+			return fmt.Errorf("%s.%s = %q, want ledger value %q", prefix, field.name, got, field.want)
+		}
+	}
 	status, _ := requiredStringField(item, "status")
-	if !reportStatusAllowedForBucket(bucket, status) {
-		return fmt.Errorf("%s.status = %q is not valid for bucket %q; expected one of: %s", prefix, status, bucket, reportStatusValues(bucket))
+	expectedStatus := reportStatusForFinding(state.Verdicts[id])
+	if status != expectedStatus {
+		return fmt.Errorf("%s.status = %q, want ledger value %q", prefix, status, expectedStatus)
 	}
 	sourceLeadID, err := requiredStringField(item, "source_lead_id")
 	if err != nil {
 		return fmt.Errorf("%s.%w", prefix, err)
 	}
+	if sourceLeadID != finding.LeadID {
+		return fmt.Errorf("%s.source_lead_id = %q, want ledger value %q", prefix, sourceLeadID, finding.LeadID)
+	}
 	if sourceLeadID != "" && !state.Leads[sourceLeadID] {
 		return fmt.Errorf("%s.source_lead_id %q does not reference a known lead", prefix, sourceLeadID)
-	}
-	if expectedLeadID := state.Findings[id].LeadID; sourceLeadID != expectedLeadID {
-		return fmt.Errorf("%s.source_lead_id = %q, want %q for finding %s", prefix, sourceLeadID, expectedLeadID, id)
 	}
 	for _, field := range []string{"verdicts", "evidence_paths", "affected_paths"} {
 		if _, err := requiredStringArrayField(item, field); err != nil {
@@ -244,15 +263,12 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		if err != nil {
 			return fmt.Errorf("%s.evidence_paths contains invalid path %q: %w", prefix, evidencePath, err)
 		}
-		if !state.FindingEvidence[id][evidenceRel] {
+		evidence, ok := state.FindingEvidence[id][evidenceRel]
+		if !ok {
 			return fmt.Errorf("%s.evidence_paths contains %q, which is not registered ledger evidence for finding %s", prefix, evidencePath, id)
 		}
-		info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(evidenceRel)))
-		if err != nil {
-			return fmt.Errorf("%s.evidence_paths contains unreadable path %q: %w", prefix, evidencePath, err)
-		}
-		if info.IsDir() {
-			return fmt.Errorf("%s.evidence_paths contains directory %q; want file", prefix, evidencePath)
+		if err := registeredEvidenceFileError(runDir, evidenceRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+			return fmt.Errorf("%s.evidence_paths contains unusable evidence %q: %w", prefix, evidencePath, err)
 		}
 	}
 	return nil
@@ -271,46 +287,6 @@ func validateReportCoversAllFindings(state reportLedgerState, seenReportIDs map[
 		return fmt.Errorf("report JSON missing finding %s from bucket %q", id, reportBucketForFinding(state.Verdicts[id]))
 	}
 	return nil
-}
-
-func reportStatusAllowedForBucket(bucket, status string) bool {
-	for _, allowed := range reportStatusesForBucket(bucket) {
-		if status == allowed {
-			return true
-		}
-	}
-	return false
-}
-
-func reportStatusValues(bucket string) string {
-	values := reportStatusesForBucket(bucket)
-	if len(values) == 0 {
-		return ""
-	}
-	out := values[0]
-	for _, value := range values[1:] {
-		out += ", " + value
-	}
-	return out
-}
-
-func reportStatusesForBucket(bucket string) []string {
-	switch bucket {
-	case "proven":
-		return []string{"validation_proven"}
-	case "inconclusive":
-		return []string{"validation_inconclusive"}
-	case "failed":
-		return []string{"validation_failed"}
-	case "rejected":
-		return []string{"review_rejected"}
-	case "duplicate":
-		return []string{"duplicate"}
-	case "unvalidated":
-		return []string{"candidate", "reviewed", "validation_pending"}
-	default:
-		return nil
-	}
 }
 
 func reportBucketForFinding(verdicts map[string]VerdictRecord) string {
@@ -350,6 +326,46 @@ func reportBucketForFinding(verdicts map[string]VerdictRecord) string {
 		return "failed"
 	default:
 		return "unvalidated"
+	}
+}
+
+func reportStatusForFinding(verdicts map[string]VerdictRecord) string {
+	review, ok := verdicts["review"]
+	if !ok {
+		return "candidate"
+	}
+	if review.Value == "rejected" {
+		return "review_rejected"
+	}
+	if review.Value != "accepted" {
+		return "candidate"
+	}
+
+	deduplicate, ok := verdicts["deduplicate"]
+	if !ok {
+		return "reviewed"
+	}
+	switch deduplicate.Value {
+	case "duplicate":
+		return "duplicate"
+	case "canonical":
+	default:
+		return "reviewed"
+	}
+
+	validate, ok := verdicts["validate"]
+	if !ok {
+		return "validation_pending"
+	}
+	switch validate.Value {
+	case "proven":
+		return "validation_proven"
+	case "inconclusive":
+		return "validation_inconclusive"
+	case "failed":
+		return "validation_failed"
+	default:
+		return "validation_pending"
 	}
 }
 
@@ -396,6 +412,17 @@ func requiredStringField(root map[string]json.RawMessage, field string) (string,
 		return "", fmt.Errorf("field %q must be a string", field)
 	}
 	return *out, nil
+}
+
+func requiredNonEmptyStringField(root map[string]json.RawMessage, field string) (string, error) {
+	out, err := requiredStringField(root, field)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out) == "" {
+		return "", fmt.Errorf("field %q must not be empty", field)
+	}
+	return out, nil
 }
 
 func requiredIntField(root map[string]json.RawMessage, field string) (int, error) {
@@ -459,6 +486,9 @@ func normalizeReportPath(runDir, path string) (string, error) {
 	}
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("path must be a regular file: %s", path)
+	}
+	if err := rejectSymlinkPath(runDir, absPath); err != nil {
+		return "", err
 	}
 	return filepath.ToSlash(rel), nil
 }
