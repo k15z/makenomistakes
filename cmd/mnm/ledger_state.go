@@ -51,6 +51,12 @@ type ReportRecord struct {
 	JSONPath     string
 }
 
+type RunnerFailureRecord struct {
+	Stage string
+	Error string
+	Path  string
+}
+
 func ledgerLeads(runDir string) ([]LeadRecord, error) {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
@@ -333,6 +339,33 @@ func ledgerReports(runDir string) ([]ReportRecord, error) {
 func ledgerReportFinalized(runDir string) bool {
 	reports, err := ledgerReports(runDir)
 	return err == nil && len(reports) > 0
+}
+
+func latestRunnerFailure(runDir string) (RunnerFailureRecord, bool, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return RunnerFailureRecord{}, false, err
+	}
+	var failure RunnerFailureRecord
+	found := false
+	for _, event := range events {
+		if event.Object != "run" {
+			continue
+		}
+		switch event.Type {
+		case "runner.failed":
+			failure = RunnerFailureRecord{
+				Stage: stringData(event.Data, "stage"),
+				Error: stringData(event.Data, "error"),
+				Path:  stringData(event.Data, "path"),
+			}
+			found = true
+		case "runner.completed":
+			failure = RunnerFailureRecord{}
+			found = false
+		}
+	}
+	return failure, found, nil
 }
 
 func leadBodyPath(runDir string, lead LeadRecord) (string, error) {
