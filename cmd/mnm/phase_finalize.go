@@ -1,13 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 )
 
 func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
-	if ledgerReportFinalized(runDir) {
+	if ledgerReportFinalized(runDir) && ledgerTaskCompleted(runDir, "task_finalize") {
 		return nil
 	}
 	task := TaskRecord{
@@ -97,6 +98,38 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	}
 	if !ledgerTaskCompleted(runDir, task.TaskID) {
 		return fmt.Errorf("finalize opencode task did not complete task %s", task.TaskID)
+	}
+	if err := validateFinalReport(runDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFinalReport(runDir string) error {
+	reports, err := ledgerReports(runDir)
+	if err != nil {
+		return err
+	}
+	if len(reports) == 0 {
+		return fmt.Errorf("no finalized report registered")
+	}
+	report := reports[len(reports)-1]
+	if report.MarkdownPath == "" {
+		return fmt.Errorf("finalized report is missing markdown path")
+	}
+	if report.JSONPath == "" {
+		return fmt.Errorf("finalized report is missing JSON path")
+	}
+	if _, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(report.MarkdownPath))); err != nil {
+		return fmt.Errorf("read finalized Markdown report: %w", err)
+	}
+	jsonPath := filepath.Join(runDir, filepath.FromSlash(report.JSONPath))
+	jsonBytes, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return fmt.Errorf("read finalized JSON report: %w", err)
+	}
+	if !json.Valid(jsonBytes) {
+		return fmt.Errorf("finalized report JSON is not valid JSON: %s", report.JSONPath)
 	}
 	return nil
 }
