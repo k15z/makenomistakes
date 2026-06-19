@@ -215,8 +215,9 @@ Finding statuses:
   if any phase executes `opencode` on the host.
 - VM-side `mnm` rejects malformed leads, findings, verdicts, invalid status
   transitions, missing references, and evidence paths outside the run directory.
-- Ledger reads reject malformed event envelopes, unknown event types, and event
-  type/object mismatches before downstream phases consume state.
+- Ledger reads reject malformed event envelopes, unknown event types, event
+  type/object mismatches, missing required event data fields, and invalid event
+  data enum values before downstream phases consume state.
 - Recon tasks fail postcondition checks unless they register non-empty codebase
   map and risk register evidence, create at least one lead, and stay within
   `runner.max_leads`.

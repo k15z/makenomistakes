@@ -231,7 +231,154 @@ func validateLedgerEvent(event LedgerEvent) error {
 	if event.Object != expectedObject {
 		return fmt.Errorf("event type %q must use object %q, got %q", event.Type, expectedObject, event.Object)
 	}
+	if err := validateLedgerEventData(event); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateLedgerEventData(event LedgerEvent) error {
+	switch event.Type {
+	case "runner.started", "runner.completed":
+		return requireEventString(event, "workspace")
+	case "runner.failed":
+		return requireEventStrings(event, "stage", "error", "path")
+	case "task.started":
+		return requireEventString(event, "phase")
+	case "task.completed":
+		return requireEventOneOf(event, "status", "completed", "failed")
+	case "task.retrying":
+		if err := requireEventStrings(event, "phase", "reason"); err != nil {
+			return err
+		}
+		if err := requireEventNumber(event, "attempt"); err != nil {
+			return err
+		}
+		return requireEventNumber(event, "max_attempts")
+	case "evidence.added":
+		return requireEventStrings(event, "kind", "title", "path")
+	case "lead.created":
+		if err := requireEventStrings(event, "title", "category", "body_path"); err != nil {
+			return err
+		}
+		return requireEventOneOf(event, "priority", "high", "medium", "low")
+	case "lead.closed":
+		if err := requireEventOneOf(event, "status", "closed_no_finding", "promoted_to_finding", "superseded"); err != nil {
+			return err
+		}
+		_, err := requireEventStringValue(event, "reason")
+		return err
+	case "finding.created":
+		if err := requireEventStrings(event, "title", "category", "body_path"); err != nil {
+			return err
+		}
+		if err := requireEventOneOf(event, "severity", "critical", "high", "medium", "low", "info"); err != nil {
+			return err
+		}
+		return requireEventOneOf(event, "confidence", "high", "medium", "low")
+	case "verdict.recorded":
+		findingID, err := requireEventNonEmptyStringValue(event, "finding_id")
+		if err != nil {
+			return err
+		}
+		phase, err := requireEventStringValue(event, "phase")
+		if err != nil {
+			return err
+		}
+		value, err := requireEventStringValue(event, "value")
+		if err != nil {
+			return err
+		}
+		if !validVerdictValue(phase, value) {
+			return fmt.Errorf("%s data.value %q is invalid for phase %q", event.Type, value, phase)
+		}
+		if _, err := requireEventStringValue(event, "reason"); err != nil {
+			return err
+		}
+		if phase == "deduplicate" && value == "duplicate" {
+			canonical, err := requireEventNonEmptyStringValue(event, "canonical_finding_id")
+			if err != nil {
+				return err
+			}
+			if canonical == findingID {
+				return fmt.Errorf("%s data.canonical_finding_id must differ from data.finding_id", event.Type)
+			}
+		}
+		return nil
+	case "report.finalized":
+		return requireEventStrings(event, "markdown_path", "json_path")
+	case "investigate.limit_reached":
+		if err := requireEventNumber(event, "limit"); err != nil {
+			return err
+		}
+		if err := requireEventNumber(event, "processed"); err != nil {
+			return err
+		}
+		return requireEventNumber(event, "open_leads")
+	default:
+		return nil
+	}
+}
+
+func requireEventStrings(event LedgerEvent, keys ...string) error {
+	for _, key := range keys {
+		if err := requireEventString(event, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireEventString(event LedgerEvent, key string) error {
+	_, err := requireEventNonEmptyStringValue(event, key)
+	return err
+}
+
+func requireEventNonEmptyStringValue(event LedgerEvent, key string) (string, error) {
+	value, err := requireEventStringValue(event, key)
+	if err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", fmt.Errorf("%s data.%s must not be empty", event.Type, key)
+	}
+	return value, nil
+}
+
+func requireEventStringValue(event LedgerEvent, key string) (string, error) {
+	value, ok := event.Data[key]
+	if !ok {
+		return "", fmt.Errorf("%s data.%s is required", event.Type, key)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s data.%s must be a string", event.Type, key)
+	}
+	return text, nil
+}
+
+func requireEventOneOf(event LedgerEvent, key string, allowed ...string) error {
+	value, err := requireEventStringValue(event, key)
+	if err != nil {
+		return err
+	}
+	if !oneOf(value, allowed...) {
+		return fmt.Errorf("%s data.%s = %q, expected one of: %s", event.Type, key, value, strings.Join(allowed, ", "))
+	}
+	return nil
+}
+
+func requireEventNumber(event LedgerEvent, key string) error {
+	value, ok := event.Data[key]
+	if !ok {
+		return fmt.Errorf("%s data.%s is required", event.Type, key)
+	}
+	switch value.(type) {
+	case int, int32, int64, float32, float64:
+		return nil
+	default:
+		return fmt.Errorf("%s data.%s must be a number", event.Type, key)
+	}
 }
 
 func ledgerEventObject(eventType string) (string, bool) {
