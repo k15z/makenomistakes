@@ -35,11 +35,12 @@ type EvidenceRecord struct {
 }
 
 type VerdictRecord struct {
-	ID        string
-	FindingID string
-	Phase     string
-	Value     string
-	Reason    string
+	ID                 string
+	FindingID          string
+	Phase              string
+	Value              string
+	Reason             string
+	CanonicalFindingID string
 }
 
 func ledgerLeads(runDir string) ([]LeadRecord, error) {
@@ -148,6 +149,38 @@ func unreviewedLedgerFindings(runDir string) ([]FindingRecord, error) {
 	return pending, nil
 }
 
+func reviewAcceptedLedgerFindings(runDir string) ([]FindingRecord, error) {
+	findings, err := ledgerFindings(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var accepted []FindingRecord
+	for _, finding := range findings {
+		verdict, ok, err := ledgerFindingVerdict(runDir, finding.ID, "review")
+		if err != nil {
+			return nil, err
+		}
+		if ok && verdict.Value == "accepted" {
+			accepted = append(accepted, finding)
+		}
+	}
+	return accepted, nil
+}
+
+func undeduplicatedLedgerFindings(runDir string) ([]FindingRecord, error) {
+	findings, err := reviewAcceptedLedgerFindings(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var pending []FindingRecord
+	for _, finding := range findings {
+		if !ledgerFindingHasVerdict(runDir, finding.ID, "deduplicate") {
+			pending = append(pending, finding)
+		}
+	}
+	return pending, nil
+}
+
 func ledgerEvidence(runDir string) ([]EvidenceRecord, error) {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
@@ -215,27 +248,36 @@ func ledgerVerdicts(runDir string) ([]VerdictRecord, error) {
 			continue
 		}
 		verdicts = append(verdicts, VerdictRecord{
-			ID:        event.ObjectID,
-			FindingID: stringData(event.Data, "finding_id"),
-			Phase:     stringData(event.Data, "phase"),
-			Value:     stringData(event.Data, "value"),
-			Reason:    stringData(event.Data, "reason"),
+			ID:                 event.ObjectID,
+			FindingID:          stringData(event.Data, "finding_id"),
+			Phase:              stringData(event.Data, "phase"),
+			Value:              stringData(event.Data, "value"),
+			Reason:             stringData(event.Data, "reason"),
+			CanonicalFindingID: stringData(event.Data, "canonical_finding_id"),
 		})
 	}
 	return verdicts, nil
 }
 
-func ledgerFindingHasVerdict(runDir, findingID, phase string) bool {
+func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool, error) {
 	verdicts, err := ledgerVerdicts(runDir)
 	if err != nil {
-		return false
+		return VerdictRecord{}, false, err
 	}
+	var match VerdictRecord
+	found := false
 	for _, verdict := range verdicts {
 		if verdict.FindingID == findingID && verdict.Phase == phase {
-			return true
+			match = verdict
+			found = true
 		}
 	}
-	return false
+	return match, found, nil
+}
+
+func ledgerFindingHasVerdict(runDir, findingID, phase string) bool {
+	_, ok, err := ledgerFindingVerdict(runDir, findingID, phase)
+	return err == nil && ok
 }
 
 func leadBodyPath(runDir string, lead LeadRecord) (string, error) {

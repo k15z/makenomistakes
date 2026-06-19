@@ -7,7 +7,8 @@ evidence whenever possible.
 
 This repository is currently in the local prototype stage. The CLI, run state,
 workspace snapshotting, Lima runner lifecycle, VM-side OpenCode bootstrap, Recon,
-Investigate, and Review phases are being built as a stack of reviewable PRs.
+Investigate, Review, and Deduplicate phases are being built as a stack of
+reviewable PRs.
 
 ## MVP Direction
 
@@ -60,8 +61,8 @@ Recon creates bounded leads. Investigate runs OpenCode tasks for open leads,
 allows follow-up leads, and records `investigate.limit_reached` if the configured
 investigation cap is exhausted before all open leads are consumed. Review runs
 one skeptical OpenCode task per candidate finding and records an `accepted` or
-`rejected` review verdict before later phases deduplicate and validate surviving
-findings.
+`rejected` review verdict. Deduplicate compares review-accepted findings and
+records each one as `canonical` or `duplicate` before later validation work.
 
 ## Reports
 
