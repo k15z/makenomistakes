@@ -49,6 +49,8 @@ events.
   - Reject malformed outputs through `mnm` schema validation.
   - Run validation commands, Docker/Compose, dev servers, tests, and proof of
     concept scripts inside the VM only.
+  - Isolate each `opencode` task attempt in its own process group and terminate
+    leftover child processes before the next task starts.
   - Write events and evidence files to mounted `.mnm/runs/<run_id>/`.
   - Shut down the VM after completion or checkpointed stop.
 

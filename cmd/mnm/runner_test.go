@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
@@ -291,6 +292,55 @@ printf '{"type":"done","attempt":%s}\n' "$count"
 	}
 }
 
+func TestRunOpenCodeTaskCleansProcessGroupChildren(t *testing.T) {
+	if !supportsCommandProcessGroupCleanup() {
+		t.Skip("process group cleanup is not supported on this platform")
+	}
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(runDir, "child-heartbeat")
+	opencodePath := writeFakeOpenCode(t, `#!/bin/sh
+set -eu
+if [ "${1:-}" = "run" ]; then
+  marker="$MNM_RUN_DIR/child-heartbeat"
+  (
+    i=0
+    while [ "$i" -lt 80 ]; do
+      printf 'alive\n' >> "$marker"
+      i=$((i + 1))
+      sleep 0.05
+    done
+  ) &
+  printf '{"type":"done"}\n'
+  exit 0
+fi
+printf 'fake opencode\n'
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_process_cleanup",
+		TaskID:  "task_process_cleanup",
+		Phase:   "validate",
+		Title:   "mnm process cleanup test",
+		Model:   "openrouter/test",
+		Prompt:  "spawn a child process",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-process-cleanup.jsonl"),
+	})
+	if err != nil {
+		t.Fatalf("expected opencode task to succeed, got: %v", err)
+	}
+
+	before := fileSizeOrZero(t, markerPath)
+	time.Sleep(350 * time.Millisecond)
+	after := fileSizeOrZero(t, markerPath)
+	if after != before {
+		t.Fatalf("background child kept running after opencode task returned: size before=%d after=%d", before, after)
+	}
+}
+
 func TestRunOpenCodeTaskDoesNotRetryNonTransientFailure(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
@@ -339,6 +389,18 @@ exit 1
 			t.Fatalf("unexpected retry event: %#v", event)
 		}
 	}
+}
+
+func fileSizeOrZero(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
 }
 
 func writeFakeOpenCode(t *testing.T, body string) string {

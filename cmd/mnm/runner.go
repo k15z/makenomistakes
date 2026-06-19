@@ -278,6 +278,7 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 		"--dangerously-skip-permissions",
 		task.Prompt,
 	)
+	isolateCommandProcessGroup(command)
 	env := append(os.Environ(),
 		"MNM_RUN_DIR="+runDir,
 		"MNM_TASK_ID="+task.TaskID,
@@ -296,7 +297,16 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	command.Env = env
 	command.Stdout = io.MultiWriter(os.Stdout, logFile)
 	command.Stderr = io.MultiWriter(os.Stderr, logFile)
-	return command.Run()
+	err = command.Run()
+	if cleanupErr := cleanupCommandProcessGroup(command); cleanupErr != nil {
+		cleanupErr = fmt.Errorf("clean up opencode task process group: %w", cleanupErr)
+		if err != nil {
+			err = errors.Join(err, cleanupErr)
+		} else {
+			err = cleanupErr
+		}
+	}
+	return err
 }
 
 type retryableOpenCodePostconditionError struct {

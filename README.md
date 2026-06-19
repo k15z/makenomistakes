@@ -33,7 +33,8 @@ also ensures `ripgrep` is available so agents have a reliable fast search tool
 inside the disposable audit environment.
 The extracted snapshot is kept as a pristine base; each OpenCode task receives a
 disposable workspace copy so build artifacts, package installs, and repro files
-do not leak between agents.
+do not leak between agents. The runner also terminates leftover child processes
+from each task attempt so background dev servers do not bleed into later work.
 
 ## Audit Pipeline
 
