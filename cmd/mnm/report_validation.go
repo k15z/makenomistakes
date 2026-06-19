@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRel string) error {
@@ -95,6 +96,9 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 				return err
 			}
 		}
+	}
+	if err := validateReportCoversAllFindings(state, seenReportIDs); err != nil {
+		return err
 	}
 	return nil
 }
@@ -249,6 +253,21 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		if info.IsDir() {
 			return fmt.Errorf("%s.evidence_paths contains directory %q; want file", prefix, evidencePath)
 		}
+	}
+	return nil
+}
+
+func validateReportCoversAllFindings(state reportLedgerState, seenReportIDs map[string]string) error {
+	ids := make([]string, 0, len(state.Findings))
+	for id := range state.Findings {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if _, ok := seenReportIDs[id]; ok {
+			continue
+		}
+		return fmt.Errorf("report JSON missing finding %s from bucket %q", id, reportBucketForFinding(state.Verdicts[id]))
 	}
 	return nil
 }

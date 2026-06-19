@@ -233,6 +233,7 @@ Finding statuses:
   registered evidence path.
 - Final report validation rejects status fields that do not match the report
   bucket implied by ledger verdicts.
+- Final report validation rejects reports that omit any ledger finding.
 
 ## PR Sequence
 

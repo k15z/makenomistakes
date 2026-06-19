@@ -92,7 +92,23 @@ func TestLedgerCommandFlow(t *testing.T) {
 	}
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
-	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"unvalidated": {
+			{
+				"id":             findingID,
+				"title":          "Missing authorization check",
+				"category":       "authz",
+				"severity":       "high",
+				"confidence":     "medium",
+				"source_lead_id": leadID,
+				"status":         "reviewed",
+				"verdicts":       []string{"review accepted"},
+				"evidence_paths": []string{},
+				"summary":        "Reviewed but not deduplicated or validated in this command-flow test.",
+				"affected_paths": []string{},
+			},
+		},
+	}))
 	stdout.Reset()
 	stderr.Reset()
 	if err := run([]string{
@@ -657,6 +673,35 @@ func TestReportFinalizeRejectsStatusThatDoesNotMatchBucket(t *testing.T) {
 	}
 	if ledgerReportFinalized(runDir) {
 		t.Fatal("report with mismatched status should not be finalized")
+	}
+}
+
+func TestReportFinalizeRequiresEveryFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "failed", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing report finding error")
+	}
+	if !strings.Contains(err.Error(), "report JSON missing finding "+findingID+` from bucket "failed"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report missing a finding should not be finalized")
 	}
 }
 
@@ -1429,26 +1474,39 @@ func validReportJSON(t *testing.T, runID, markdownPath, jsonPath string, proven 
 	if proven == nil {
 		proven = []map[string]any{}
 	}
+	return validReportJSONFromBuckets(t, runID, markdownPath, jsonPath, map[string][]map[string]any{
+		"proven": proven,
+	})
+}
+
+func validReportJSONFromBuckets(t *testing.T, runID, markdownPath, jsonPath string, buckets map[string][]map[string]any) string {
+	t.Helper()
+	proven := reportBucketItems(buckets, "proven")
+	inconclusive := reportBucketItems(buckets, "inconclusive")
+	failed := reportBucketItems(buckets, "failed")
+	rejected := reportBucketItems(buckets, "rejected")
+	duplicate := reportBucketItems(buckets, "duplicate")
+	unvalidated := reportBucketItems(buckets, "unvalidated")
 	report := map[string]any{
 		"run_id": runID,
 		"counts": map[string]any{
 			"findings_proven":       len(proven),
-			"findings_inconclusive": 0,
-			"findings_failed":       0,
-			"findings_rejected":     0,
-			"findings_duplicate":    0,
-			"findings_unvalidated":  0,
+			"findings_inconclusive": len(inconclusive),
+			"findings_failed":       len(failed),
+			"findings_rejected":     len(rejected),
+			"findings_duplicate":    len(duplicate),
+			"findings_unvalidated":  len(unvalidated),
 		},
 		"report_paths": map[string]any{
 			"markdown": markdownPath,
 			"json":     jsonPath,
 		},
 		"proven":       proven,
-		"inconclusive": []map[string]any{},
-		"failed":       []map[string]any{},
-		"rejected":     []map[string]any{},
-		"duplicate":    []map[string]any{},
-		"unvalidated":  []map[string]any{},
+		"inconclusive": inconclusive,
+		"failed":       failed,
+		"rejected":     rejected,
+		"duplicate":    duplicate,
+		"unvalidated":  unvalidated,
 	}
 	b, err := json.Marshal(report)
 	if err != nil {
@@ -1488,6 +1546,13 @@ func appendReviewAcceptedVerdictForTest(t *testing.T, runDir, findingID string) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func reportBucketItems(buckets map[string][]map[string]any, name string) []map[string]any {
+	if buckets == nil || buckets[name] == nil {
+		return []map[string]any{}
+	}
+	return buckets[name]
 }
 
 func newStoredReportRun(t *testing.T) (string, RunRecord) {

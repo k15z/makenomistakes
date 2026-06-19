@@ -1121,7 +1121,7 @@ func prependFakeOpenCode(t *testing.T, version string) {
 Fake final report.
 EOF
     cat > "$MNM_RUN_DIR/report.json" <<'EOF'
-{"run_id":"run_test","counts":{"findings_proven":0,"findings_inconclusive":0,"findings_failed":0,"findings_rejected":0,"findings_duplicate":0,"findings_unvalidated":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[],"inconclusive":[],"failed":[],"rejected":[],"duplicate":[],"unvalidated":[]}
+{"run_id":"run_test","counts":{"findings_proven":1,"findings_inconclusive":0,"findings_failed":0,"findings_rejected":0,"findings_duplicate":0,"findings_unvalidated":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[{"id":"finding_fake_lead_fake_auth","title":"Fake candidate finding","category":"authz","severity":"high","confidence":"medium","source_lead_id":"lead_fake_auth","status":"validation_proven","verdicts":["review accepted","deduplicate canonical","validation proven"],"evidence_paths":["evidence/finding-lead_fake_auth.md"],"summary":"Fake finding proven by fake validate.","affected_paths":["repo/app.go"]}],"inconclusive":[],"failed":[],"rejected":[],"duplicate":[],"unvalidated":[]}
 EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
 {"id":"event_fake_report","run_id":"run_test","type":"report.finalized","object":"report","object_id":"report_fake","task_id":"task_finalize","timestamp":"2026-01-01T00:00:13Z","data":{"markdown_path":"report.md","json_path":"report.json"}}
@@ -1165,8 +1165,9 @@ Fake finding for tests.
 EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_fake_finding_$MNM_LEAD_ID","run_id":"run_test","type":"finding.created","object":"finding","object_id":"finding_fake_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"title":"Fake candidate finding","lead_id":"$MNM_LEAD_ID","category":"authz","severity":"high","confidence":"medium","body_path":"evidence/finding-$MNM_LEAD_ID.md"}}
-{"id":"event_fake_lead_closed_$MNM_LEAD_ID","run_id":"run_test","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"status":"promoted_to_finding","reason":"Promoted by fake investigate."}}
-{"id":"event_fake_investigate_done_$MNM_LEAD_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:06Z","data":{"status":"completed","summary":"Investigated $MNM_LEAD_ID"}}
+{"id":"event_fake_finding_evidence_$MNM_LEAD_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_finding_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"kind":"markdown","title":"Fake finding evidence","path":"evidence/finding-$MNM_LEAD_ID.md","lead_id":"$MNM_LEAD_ID","finding_id":"finding_fake_$MNM_LEAD_ID"}}
+{"id":"event_fake_lead_closed_$MNM_LEAD_ID","run_id":"run_test","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:06Z","data":{"status":"promoted_to_finding","reason":"Promoted by fake investigate."}}
+{"id":"event_fake_investigate_done_$MNM_LEAD_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:07Z","data":{"status":"completed","summary":"Investigated $MNM_LEAD_ID"}}
 EOF
     printf '{"type":"done"}\n'
     exit 0
