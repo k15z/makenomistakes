@@ -17,6 +17,7 @@ const (
 	RunStatusRunning      = "running"
 	RunStatusCompleted    = "completed"
 	RunStatusFailed       = "failed"
+	RunStatusTimedOut     = "timed_out"
 )
 
 var validRunStatuses = map[string]struct{}{
@@ -27,6 +28,7 @@ var validRunStatuses = map[string]struct{}{
 	RunStatusRunning:      {},
 	RunStatusCompleted:    {},
 	RunStatusFailed:       {},
+	RunStatusTimedOut:     {},
 }
 
 type Store struct {

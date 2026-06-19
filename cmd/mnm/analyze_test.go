@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnalyzePreparesRunState(t *testing.T) {
@@ -133,6 +134,40 @@ func TestAnalyzeRunsConfiguredRunnerByDefault(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMarksDeadlineExceededRunsTimedOut(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	err := analyzeWorkspace(ctx, AnalyzeOptions{
+		WorkspaceDir: dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, deadlineRunner{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`select count(*) from runs where status = ?`, RunStatusTimedOut).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one timed out run, got %d", count)
+	}
+}
+
 type recordingRunner struct {
 	called bool
 }
@@ -146,4 +181,11 @@ func (runner *recordingRunner) Run(_ context.Context, request RunnerRequest) err
 		return err
 	}
 	return nil
+}
+
+type deadlineRunner struct{}
+
+func (deadlineRunner) Run(ctx context.Context, _ RunnerRequest) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
