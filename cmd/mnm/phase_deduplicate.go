@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,13 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 }
 
 func runDeduplicatePhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	return runDeduplicatePhaseWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner)
+}
+
+func runDeduplicatePhaseWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	allFindings, err := reviewAcceptedLedgerFindings(runDir)
 	if err != nil {
 		return err
@@ -69,7 +77,7 @@ func runDeduplicatePhaseWithAttemptRunner(runDir, runID, workspace string, cfg C
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-deduplicate.jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	notesRel := deduplicateNotesRelPath()
-	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunnerContext(ctx, attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,

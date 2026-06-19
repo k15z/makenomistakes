@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,13 @@ func runReviewPhase(runDir, runID, workspace string, cfg Config, opencodePath st
 }
 
 func runReviewPhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	return runReviewPhaseWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner)
+}
+
+func runReviewPhaseWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	findings, err := unreviewedLedgerFindings(runDir)
 	if err != nil {
 		return err
@@ -21,7 +29,7 @@ func runReviewPhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config
 	if len(findings) == 0 {
 		return nil
 	}
-	return runReviewBatchWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, findings)
+	return runReviewBatchWithAttemptRunnerContext(ctx, runDir, runID, workspace, cfg, attemptRunner, findings)
 }
 
 func runReviewBatch(runDir, runID, workspace string, cfg Config, opencodePath string, findings []FindingRecord) error {
@@ -29,6 +37,10 @@ func runReviewBatch(runDir, runID, workspace string, cfg Config, opencodePath st
 }
 
 func runReviewBatchWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, findings []FindingRecord) error {
+	return runReviewBatchWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner, findings)
+}
+
+func runReviewBatchWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, findings []FindingRecord) error {
 	parallelism := taskParallelism(cfg)
 	jobs := make(chan FindingRecord)
 	errs := make(chan error, len(findings))
@@ -38,14 +50,21 @@ func runReviewBatchWithAttemptRunner(runDir, runID, workspace string, cfg Config
 		go func() {
 			defer wg.Done()
 			for finding := range jobs {
-				if err := runReviewTaskWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
+				if err := runReviewTaskWithAttemptRunnerContext(ctx, runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
 					errs <- err
 				}
 			}
 		}()
 	}
+	var sendErr error
+sendLoop:
 	for _, finding := range findings {
-		jobs <- finding
+		select {
+		case jobs <- finding:
+		case <-ctx.Done():
+			sendErr = ctx.Err()
+			break sendLoop
+		}
 	}
 	close(jobs)
 	wg.Wait()
@@ -55,7 +74,7 @@ func runReviewBatchWithAttemptRunner(runDir, runID, workspace string, cfg Config
 	for err := range errs {
 		joined = errors.Join(joined, err)
 	}
-	return joined
+	return errors.Join(sendErr, joined)
 }
 
 func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath string, finding FindingRecord) error {
@@ -63,6 +82,13 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 }
 
 func runReviewTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, finding FindingRecord) error {
+	return runReviewTaskWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner, finding)
+}
+
+func runReviewTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, finding FindingRecord) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	safeFindingID := safeFileID(finding.ID)
 	task := TaskRecord{
 		RunID:       runID,
@@ -111,7 +137,7 @@ func runReviewTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config,
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-review-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	notesRel := reviewNotesRelPath(finding.ID)
-	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunnerContext(ctx, attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:     runID,
 		TaskID:    task.TaskID,
 		Phase:     task.Phase,

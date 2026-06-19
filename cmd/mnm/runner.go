@@ -524,6 +524,13 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 }
 
 func runReconTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	return runReconTaskWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner)
+}
+
+func runReconTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	task := TaskRecord{
 		RunID:       runID,
 		TaskID:      "task_recon",
@@ -563,7 +570,7 @@ func runReconTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, 
 		return err
 	}
 	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
-	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunnerContext(ctx, attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
@@ -727,16 +734,19 @@ type opencodeTask struct {
 }
 
 type opencodeTaskAttemptRunner interface {
-	RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error)
+	RunOpenCodeTaskAttempt(ctx context.Context, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error)
 }
 
 type directOpenCodeTaskAttemptRunner struct {
 	opencodePath string
 }
 
-func (runner directOpenCodeTaskAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+func (runner directOpenCodeTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	if runner.opencodePath == "" {
 		return openCodeAttemptResult{}, errors.New("opencode path is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return openCodeAttemptResult{}, err
 	}
 	return runDirectOpenCodeTaskAttempt(runner.opencodePath, workspace, runDir, task, attempt)
 }
@@ -746,11 +756,18 @@ func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) 
 }
 
 func runOpenCodeTaskWithAttemptRunner(attemptRunner opencodeTaskAttemptRunner, workspace, runDir string, task opencodeTask) error {
+	return runOpenCodeTaskWithAttemptRunnerContext(context.Background(), attemptRunner, workspace, runDir, task)
+}
+
+func runOpenCodeTaskWithAttemptRunnerContext(ctx context.Context, attemptRunner opencodeTaskAttemptRunner, workspace, runDir string, task opencodeTask) error {
 	var lastErr error
 	attempts := 0
 	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		attempts = attempt
-		result, err := attemptRunner.RunOpenCodeTaskAttempt(workspace, runDir, task, attempt)
+		result, err := attemptRunner.RunOpenCodeTaskAttempt(ctx, workspace, runDir, task, attempt)
 		verifyRunDir := runDir
 		cleanupVerifyRunDir := func() {}
 		if err == nil && result.Bundle {
@@ -790,7 +807,18 @@ func runOpenCodeTaskWithAttemptRunner(attemptRunner opencodeTaskAttemptRunner, w
 			return err
 		}
 		if openCodeRetryDelay > 0 {
-			time.Sleep(openCodeRetryDelay * time.Duration(attempt))
+			timer := time.NewTimer(openCodeRetryDelay * time.Duration(attempt))
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return ctx.Err()
+			}
 		}
 	}
 	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w%s", task.TaskID, attempts, lastErr, openCodeLogExcerpt(task.LogPath))

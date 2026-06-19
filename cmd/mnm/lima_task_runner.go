@@ -43,8 +43,11 @@ type LimaTaskAttemptRunner struct {
 	KeepVM       bool
 }
 
-func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	result := openCodeAttemptResult{TaskRunDir: runDir}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if !task.usesTaskBundle() {
 		return result, errors.New("Lima task attempts require task bundle metadata")
 	}
@@ -66,7 +69,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir str
 		return result, err
 	}
 	defer cleanupLedgerDir()
-	err = runner.Runner.RunTask(context.Background(), LimaTaskRequest{
+	err = runner.Runner.RunTask(ctx, LimaTaskRequest{
 		RunID:        task.RunID,
 		Task:         task.taskRecord(),
 		Attempt:      attempt,

@@ -2634,7 +2634,7 @@ type recordingAttemptCall struct {
 	attempt   int
 }
 
-func (runner *recordingAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+func (runner *recordingAttemptRunner) RunOpenCodeTaskAttempt(_ context.Context, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	runner.calls = append(runner.calls, recordingAttemptCall{
 		workspace: workspace,
 		runDir:    runDir,

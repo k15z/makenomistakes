@@ -196,7 +196,7 @@ func TestLimaTaskAttemptRunnerRunsTaskVMBundle(t *testing.T) {
 		Config:       RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20, OpenCodeTaskTimeoutMinutes: 9},
 		SnapshotPath: snapshot,
 	}
-	result, err := attemptRunner.RunOpenCodeTaskAttempt(workspace, runDir, opencodeTask{
+	result, err := attemptRunner.RunOpenCodeTaskAttempt(context.Background(), workspace, runDir, opencodeTask{
 		RunID:    task.RunID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
@@ -293,7 +293,7 @@ func TestLimaTaskAttemptRunnerCopiesFailureLogForRetry(t *testing.T) {
 		Config:       RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20},
 		SnapshotPath: snapshot,
 	}
-	result, err := attemptRunner.RunOpenCodeTaskAttempt(workspace, runDir, task, 1)
+	result, err := attemptRunner.RunOpenCodeTaskAttempt(context.Background(), workspace, runDir, task, 1)
 	if err == nil {
 		t.Fatal("expected failing VM attempt")
 	}
@@ -316,7 +316,7 @@ func TestLimaTaskAttemptRunnerCopiesFailureLogForRetry(t *testing.T) {
 }
 
 func TestLimaTaskAttemptRunnerRequiresBundleTask(t *testing.T) {
-	result, err := (LimaTaskAttemptRunner{}).RunOpenCodeTaskAttempt(t.TempDir(), t.TempDir(), opencodeTask{
+	result, err := (LimaTaskAttemptRunner{}).RunOpenCodeTaskAttempt(context.Background(), t.TempDir(), t.TempDir(), opencodeTask{
 		RunID:  "run_no_bundle",
 		TaskID: "task_recon",
 		Phase:  "recon",
