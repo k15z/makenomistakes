@@ -202,6 +202,39 @@ Finding statuses:
 - Final reports include proven, inconclusive, failed, rejected, and duplicate
   reviewed findings, with proven findings first.
 
+## PR Sequence
+
+Implementation should land as small reviewable PRs. Each PR must include tests
+and pass GitHub Actions before later work builds on it.
+
+1. CLI bootstrap and CI:
+   - Add the Go module, `mnm init`, unit tests, and GitHub Actions for
+     formatting, tests, and `go vet`.
+2. Config and run state:
+   - Parse `mnm.toml`, create `.mnm/`, define run metadata, and persist
+     host-owned state.
+3. Ledger core:
+   - Implement JSONL events and VM-side `mnm task`, `lead`, `finding`,
+     `evidence`, `verdict`, and `report` command contracts.
+4. Snapshotter:
+   - Build immutable workspace snapshots with `.mnmignore`, default excludes,
+     symlink safety, and tests.
+5. Lima runner lifecycle:
+   - Create a fresh VM per run, inject the Linux `mnm` runner payload, copy
+     inputs, collect outputs, and shut the VM down.
+6. VM-side `opencode` bootstrap:
+   - Install or unpack pinned `opencode` inside the VM and verify the host does
+     not need local `opencode`.
+7. Recon phase:
+   - Run Recon through VM-side `opencode`, require ledger writes through `mnm`,
+     and generate codebase map, risk register, and leads.
+8. Investigate, Review, Deduplicate, Validate, and Finalize:
+   - Add one phase per PR, with fixture coverage and report-quality checks.
+9. End-to-end acceptance:
+   - Run `mnm analyze` against one or more real open-source repos in a scratch
+     workspace and commit only reusable fixtures/docs, never secrets or scratch
+     outputs.
+
 ## Deferred
 
 - Host webserver and React UI.
