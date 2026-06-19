@@ -59,6 +59,7 @@ func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
 			Review:      "openrouter/review",
 			Deduplicate: "openrouter/deduplicate",
 			Validate:    "openrouter/validate",
+			Finalize:    "openrouter/finalize",
 		},
 	}
 	if got := phaseModel(cfg, "recon"); got != "openrouter/recon" {
@@ -76,6 +77,9 @@ func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
 	if got := phaseModel(cfg, "validate"); got != "openrouter/validate" {
 		t.Fatalf("validate model = %q", got)
 	}
+	if got := phaseModel(cfg, "finalize"); got != "openrouter/finalize" {
+		t.Fatalf("finalize model = %q", got)
+	}
 	cfg.Models.Investigate = ""
 	if got := phaseModel(cfg, "investigate"); got != "openrouter/default" {
 		t.Fatalf("investigate fallback = %q", got)
@@ -92,6 +96,10 @@ func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
 	if got := phaseModel(cfg, "validate"); got != "openrouter/default" {
 		t.Fatalf("validate fallback = %q", got)
 	}
+	cfg.Models.Finalize = ""
+	if got := phaseModel(cfg, "finalize"); got != "openrouter/default" {
+		t.Fatalf("finalize fallback = %q", got)
+	}
 	cfg.Models.Default = ""
 	if got := phaseModel(cfg, "investigate"); got != "openrouter/recon" {
 		t.Fatalf("investigate recon fallback = %q", got)
@@ -104,5 +112,8 @@ func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
 	}
 	if got := phaseModel(cfg, "validate"); got != "openrouter/recon" {
 		t.Fatalf("validate recon fallback = %q", got)
+	}
+	if got := phaseModel(cfg, "finalize"); got != "openrouter/recon" {
+		t.Fatalf("finalize recon fallback = %q", got)
 	}
 }

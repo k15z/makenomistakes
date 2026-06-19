@@ -44,6 +44,12 @@ type VerdictRecord struct {
 	CanonicalFindingID string
 }
 
+type ReportRecord struct {
+	ID           string
+	MarkdownPath string
+	JSONPath     string
+}
+
 func ledgerLeads(runDir string) ([]LeadRecord, error) {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
@@ -301,6 +307,30 @@ func ledgerFindingVerdict(runDir, findingID, phase string) (VerdictRecord, bool,
 func ledgerFindingHasVerdict(runDir, findingID, phase string) bool {
 	_, ok, err := ledgerFindingVerdict(runDir, findingID, phase)
 	return err == nil && ok
+}
+
+func ledgerReports(runDir string) ([]ReportRecord, error) {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return nil, err
+	}
+	var reports []ReportRecord
+	for _, event := range events {
+		if event.Type != "report.finalized" || event.Object != "report" {
+			continue
+		}
+		reports = append(reports, ReportRecord{
+			ID:           event.ObjectID,
+			MarkdownPath: stringData(event.Data, "markdown_path"),
+			JSONPath:     stringData(event.Data, "json_path"),
+		})
+	}
+	return reports, nil
+}
+
+func ledgerReportFinalized(runDir string) bool {
+	reports, err := ledgerReports(runDir)
+	return err == nil && len(reports) > 0
 }
 
 func leadBodyPath(runDir string, lead LeadRecord) (string, error) {

@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 )
 
 func taskCommand(args []string, stdout, stderr io.Writer) error {
@@ -407,6 +409,13 @@ func reportCommand(args []string, stdout, stderr io.Writer) error {
 	jsonRel, err := requirePathInsideRunDir(runDir, *jsonPath)
 	if err != nil {
 		return err
+	}
+	jsonBytes, err := os.ReadFile(filepath.Join(runDir, filepath.FromSlash(jsonRel)))
+	if err != nil {
+		return err
+	}
+	if !json.Valid(jsonBytes) {
+		return fmt.Errorf("report JSON is not valid JSON: %s", jsonRel)
 	}
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    task.RunID,

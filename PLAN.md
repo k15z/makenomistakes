@@ -129,6 +129,7 @@ investigate = "openrouter/z-ai/glm-5.2"
 review = "openrouter/z-ai/glm-5.2"
 deduplicate = "openrouter/z-ai/glm-5.2"
 validate = "openrouter/z-ai/glm-5.2"
+finalize = "openrouter/z-ai/glm-5.2"
 
 [runner]
 cpus = 4
@@ -246,7 +247,8 @@ and pass GitHub Actions before later work builds on it.
    - Run a heavier VM-side reproduction or exploit attempt for each canonical
      finding and record proven, failed, or inconclusive verdicts.
 12. Finalize phase:
-   - Add one phase per PR, with fixture coverage and report-quality checks.
+   - Render final Markdown and JSON reports from the ledger and evidence, then
+     register them with `mnm report finalize`.
 13. End-to-end acceptance:
    - Run `mnm analyze` against one or more real open-source repos in a scratch
      workspace and commit only reusable fixtures/docs, never secrets or scratch
