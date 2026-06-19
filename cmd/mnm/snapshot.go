@@ -1,0 +1,202 @@
+package main
+
+import (
+	"archive/tar"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/klauspost/compress/zstd"
+)
+
+type SnapshotOptions struct {
+	WorkspaceRoot string
+	WorkspaceDir  string
+	OutputPath    string
+	ConfigExclude []string
+}
+
+func createWorkspaceSnapshot(options SnapshotOptions) error {
+	root, err := filepath.Abs(options.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	workspaceDir, err := filepath.Abs(options.WorkspaceDir)
+	if err != nil {
+		return err
+	}
+	if options.OutputPath == "" {
+		return errors.New("snapshot output path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(options.OutputPath), dirPerm); err != nil {
+		return err
+	}
+
+	patterns := defaultSnapshotExcludes()
+	if ignore, err := os.ReadFile(filepath.Join(workspaceDir, ".mnmignore")); err == nil {
+		patterns = append(patterns, parseIgnoreFile(string(ignore))...)
+	}
+	patterns = append(patterns, options.ConfigExclude...)
+
+	output, err := os.Create(options.OutputPath)
+	if err != nil {
+		return err
+	}
+
+	encoder, err := zstd.NewWriter(output)
+	if err != nil {
+		return errors.Join(err, output.Close())
+	}
+
+	tarWriter := tar.NewWriter(encoder)
+
+	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if shouldExcludeSnapshotPath(rel, entry.IsDir(), patterns) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = rel
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			if !safeSymlinkTarget(root, path, linkTarget) {
+				return nil
+			}
+			header.Linkname = linkTarget
+			return tarWriter.WriteHeader(header)
+		}
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(tarWriter, input)
+		closeErr := input.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+	return errors.Join(walkErr, tarWriter.Close(), encoder.Close(), output.Close())
+}
+
+func defaultSnapshotExcludes() []string {
+	return parseIgnoreFile(defaultIgnore())
+}
+
+func parseIgnoreFile(text string) []string {
+	var patterns []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, filepath.ToSlash(line))
+	}
+	return patterns
+}
+
+func shouldExcludeSnapshotPath(rel string, isDir bool, patterns []string) bool {
+	base := pathBase(rel)
+	for _, raw := range patterns {
+		pattern := strings.TrimSpace(filepath.ToSlash(raw))
+		if pattern == "" {
+			continue
+		}
+		dirOnly := strings.HasSuffix(pattern, "/")
+		pattern = strings.TrimSuffix(pattern, "/")
+		if pattern == "" {
+			continue
+		}
+
+		if dirOnly {
+			if rel == pattern || strings.HasPrefix(rel, pattern+"/") || base == pattern {
+				return true
+			}
+			continue
+		}
+		if ok, _ := filepath.Match(pattern, rel); ok {
+			return true
+		}
+		if ok, _ := filepath.Match(pattern, base); ok {
+			return true
+		}
+		if rel == pattern || strings.HasPrefix(rel, pattern+"/") {
+			return true
+		}
+		if isDir && base == pattern {
+			return true
+		}
+	}
+	return false
+}
+
+func safeSymlinkTarget(root, linkPath, target string) bool {
+	if target == "" {
+		return false
+	}
+	resolved := target
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(linkPath), target)
+	}
+	resolved, err := filepath.Abs(resolved)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return false
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
+}
+
+func pathBase(rel string) string {
+	parts := strings.Split(rel, "/")
+	if len(parts) == 0 {
+		return rel
+	}
+	return parts[len(parts)-1]
+}

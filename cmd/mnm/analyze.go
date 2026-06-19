@@ -68,6 +68,7 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 		WorkspaceRoot:      resolved.WorkspaceRoot,
 		ConfigPath:         resolved.ConfigPath,
 		ConfigSnapshotPath: configSnapshotPath,
+		SnapshotPath:       filepath.Join(runDir, "snapshot.tar.zst"),
 		RunDir:             runDir,
 		Model:              resolved.Model,
 		CreatedAt:          now,
@@ -76,12 +77,24 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 	if err := store.CreateRun(run); err != nil {
 		return err
 	}
+	if err := store.UpdateRunStatus(runID, RunStatusSnapshotting); err != nil {
+		return err
+	}
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: resolved.WorkspaceRoot,
+		WorkspaceDir:  workspaceDir,
+		OutputPath:    run.SnapshotPath,
+		ConfigExclude: cfg.Workspace.Exclude,
+	}); err != nil {
+		return err
+	}
 	if err := store.UpdateRunStatus(runID, RunStatusPrepared); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(stdout, "prepared run %s\n", runID)
 	fmt.Fprintf(stdout, "workspace: %s\n", resolved.WorkspaceRoot)
+	fmt.Fprintf(stdout, "snapshot: %s\n", run.SnapshotPath)
 	fmt.Fprintf(stdout, "run dir: %s\n", runDir)
 	return nil
 }

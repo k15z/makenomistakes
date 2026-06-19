@@ -10,13 +10,15 @@ import (
 )
 
 const (
-	RunStatusCreated  = "created"
-	RunStatusPrepared = "prepared"
+	RunStatusCreated      = "created"
+	RunStatusSnapshotting = "snapshotting"
+	RunStatusPrepared     = "prepared"
 )
 
 var validRunStatuses = map[string]struct{}{
-	RunStatusCreated:  {},
-	RunStatusPrepared: {},
+	RunStatusCreated:      {},
+	RunStatusSnapshotting: {},
+	RunStatusPrepared:     {},
 }
 
 type Store struct {
@@ -30,6 +32,7 @@ type RunRecord struct {
 	WorkspaceRoot      string
 	ConfigPath         string
 	ConfigSnapshotPath string
+	SnapshotPath       string
 	RunDir             string
 	Model              string
 	CreatedAt          time.Time
@@ -61,11 +64,54 @@ func (s *Store) migrate() error {
 		workspace_root text not null,
 		config_path text not null,
 		config_snapshot_path text not null,
+		snapshot_path text not null,
 		run_dir text not null,
 		model text not null,
 		created_at text not null,
 		updated_at text not null
 	)`)
+	if err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "config_snapshot_path", ddl: "config_snapshot_path text not null default ''"},
+		{name: "snapshot_path", ddl: "snapshot_path text not null default ''"},
+	} {
+		if err := s.ensureRunColumn(column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureRunColumn(name, ddl string) error {
+	rows, err := s.db.Query(`pragma table_info(runs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var columnName string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if columnName == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`alter table runs add column ` + ddl)
 	return err
 }
 
@@ -80,17 +126,19 @@ func (s *Store) CreateRun(run RunRecord) error {
 		workspace_root,
 		config_path,
 		config_snapshot_path,
+		snapshot_path,
 		run_dir,
 		model,
 		created_at,
 		updated_at
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID,
 		run.Status,
 		run.WorkspaceDir,
 		run.WorkspaceRoot,
 		run.ConfigPath,
 		run.ConfigSnapshotPath,
+		run.SnapshotPath,
 		run.RunDir,
 		run.Model,
 		run.CreatedAt.Format(time.RFC3339Nano),
@@ -132,6 +180,7 @@ func (s *Store) GetRun(runID string) (RunRecord, error) {
 		workspace_root,
 		config_path,
 		config_snapshot_path,
+		snapshot_path,
 		run_dir,
 		model,
 		created_at,
@@ -143,6 +192,7 @@ func (s *Store) GetRun(runID string) (RunRecord, error) {
 		&run.WorkspaceRoot,
 		&run.ConfigPath,
 		&run.ConfigSnapshotPath,
+		&run.SnapshotPath,
 		&run.RunDir,
 		&run.Model,
 		&createdAt,
