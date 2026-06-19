@@ -22,7 +22,10 @@ func cleanupCommandProcessGroup(command *exec.Cmd) error {
 		return nil
 	}
 	pgid := command.Process.Pid
-	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
 		return err
 	}
 	time.Sleep(200 * time.Millisecond)

@@ -1373,6 +1373,80 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunOpenCodeTaskTimesOutAttemptWithoutRetry(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(runDir, "timeout-child-heartbeat")
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+(
+  while :; do
+    printf 'alive\n' >> "$MNM_RUN_DIR/timeout-child-heartbeat"
+    sleep 0.05
+  done
+) &
+sleep 5
+`)
+
+	start := time.Now()
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_timeout",
+		TaskID:  "task_timeout",
+		Phase:   "validate",
+		Title:   "mnm timeout test",
+		Model:   "openrouter/test",
+		Prompt:  "hang until timeout",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-timeout.jsonl"),
+		Timeout: 500 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	var timeoutErr openCodeTaskTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected openCodeTaskTimeoutError, got: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("timeout took too long: %s", elapsed)
+	}
+
+	count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+	if count != "1" {
+		t.Fatalf("attempt count = %s, want 1", count)
+	}
+	if supportsCommandProcessGroupCleanup() {
+		before := fileSizeOrZero(t, markerPath)
+		time.Sleep(250 * time.Millisecond)
+		after := fileSizeOrZero(t, markerPath)
+		if after != before {
+			t.Fatalf("timeout child kept running after cleanup: size before=%d after=%d", before, after)
+		}
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == "task.retrying" {
+			t.Fatalf("unexpected retry event after task timeout: %#v", event)
+		}
+	}
+}
+
 func TestRunOpenCodeTaskDoesNotRetryMissingPostconditionAfterLedgerWrite(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0

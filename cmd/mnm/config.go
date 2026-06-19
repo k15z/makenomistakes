@@ -12,6 +12,7 @@ import (
 )
 
 const configVersion = 1
+const defaultOpenCodeTaskTimeoutMinutes = 30
 
 type Config struct {
 	Version      int               `toml:"version"`
@@ -42,13 +43,14 @@ type ModelConfig struct {
 }
 
 type RunnerConfig struct {
-	CPUs              int `toml:"cpus"`
-	MemoryGB          int `toml:"memory_gb"`
-	DiskGB            int `toml:"disk_gb"`
-	TimeoutMinutes    int `toml:"timeout_minutes"`
-	MaxLeads          int `toml:"max_leads"`
-	MaxInvestigations int `toml:"max_investigations"`
-	ParallelTasks     int `toml:"parallel_tasks"`
+	CPUs                       int `toml:"cpus"`
+	MemoryGB                   int `toml:"memory_gb"`
+	DiskGB                     int `toml:"disk_gb"`
+	TimeoutMinutes             int `toml:"timeout_minutes"`
+	OpenCodeTaskTimeoutMinutes int `toml:"opencode_task_timeout_minutes"`
+	MaxLeads                   int `toml:"max_leads"`
+	MaxInvestigations          int `toml:"max_investigations"`
+	ParallelTasks              int `toml:"parallel_tasks"`
 }
 
 type ResolvedConfig struct {
@@ -130,6 +132,12 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 	if cfg.Runner.TimeoutMinutes <= 0 {
 		return ResolvedConfig{}, errors.New("runner.timeout_minutes must be greater than zero")
 	}
+	if cfg.Runner.OpenCodeTaskTimeoutMinutes < 0 {
+		return ResolvedConfig{}, errors.New("runner.opencode_task_timeout_minutes must not be negative")
+	}
+	if cfg.Runner.OpenCodeTaskTimeoutMinutes > cfg.Runner.TimeoutMinutes {
+		return ResolvedConfig{}, errors.New("runner.opencode_task_timeout_minutes must not exceed runner.timeout_minutes")
+	}
 	if cfg.Runner.MaxLeads <= 0 {
 		return ResolvedConfig{}, errors.New("runner.max_leads must be greater than zero")
 	}
@@ -147,4 +155,18 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 		Model:         model,
 		Timeout:       time.Duration(cfg.Runner.TimeoutMinutes) * time.Minute,
 	}, nil
+}
+
+func effectiveOpenCodeTaskTimeoutMinutes(cfg Config) int {
+	if cfg.Runner.OpenCodeTaskTimeoutMinutes > 0 {
+		return cfg.Runner.OpenCodeTaskTimeoutMinutes
+	}
+	if cfg.Runner.TimeoutMinutes > 0 && cfg.Runner.TimeoutMinutes < defaultOpenCodeTaskTimeoutMinutes {
+		return cfg.Runner.TimeoutMinutes
+	}
+	return defaultOpenCodeTaskTimeoutMinutes
+}
+
+func openCodeTaskTimeout(cfg Config) time.Duration {
+	return time.Duration(effectiveOpenCodeTaskTimeoutMinutes(cfg)) * time.Minute
 }

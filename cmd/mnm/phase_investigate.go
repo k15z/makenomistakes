@@ -219,6 +219,7 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 		Prompt:   prompt,
 		LogPath:  logPath,
 		TaskFile: taskPath,
+		Timeout:  openCodeTaskTimeout(cfg),
 		Verify: func() error {
 			evidence, ok := ledgerLeadTaskEvidence(runDir, lead.ID, task.TaskID, notesRel)
 			if !ok {

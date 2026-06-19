@@ -26,6 +26,8 @@ snapshot the configured workspace, launch a disposable local VM, run the audit
 pipeline, and generate local reports.
 Interrupting `mnm analyze` asks the runner to stop and records the run as
 `stopped`; configured runner deadlines are recorded as `timed_out`.
+Each VM-side OpenCode task attempt also has its own configurable timeout, so a
+hung proof command fails that task without consuming the entire run deadline.
 Use `mnm analyze --resume RUN_ID` to continue a prepared, stopped, timed out, or
 failed run from its saved snapshot and ledger. Use `mnm runs` to rediscover run
 IDs, statuses, resumability, update times, and run directories.

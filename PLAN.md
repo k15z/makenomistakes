@@ -57,6 +57,8 @@ events.
   - Orchestrate every phase by invoking `opencode run --format json`.
   - Provide each `opencode` instance with phase prompt, scope, prior ledger state,
     and required `mnm` output commands.
+  - Time-box each `opencode` task attempt and terminate its process group on
+    timeout so hung proof commands do not consume the whole run deadline.
   - Reject malformed outputs through `mnm` schema validation.
   - Run validation commands, Docker/Compose, dev servers, tests, and proof of
     concept scripts inside the VM only.
@@ -151,6 +153,7 @@ cpus = 4
 memory_gb = 8
 disk_gb = 80
 timeout_minutes = 120
+opencode_task_timeout_minutes = 30
 max_leads = 24
 max_investigations = 24
 parallel_tasks = 2
@@ -245,6 +248,8 @@ Finding statuses:
   paths and rejects conflicting final report path rewrites for the same task.
 - Runner-owned lifecycle and failure evidence is idempotent for repeated
   identical run/path registrations.
+- OpenCode task attempts have a configurable per-attempt timeout, do not retry
+  after that local timeout, and clean up child processes before the next task.
 - Ledger reads reject malformed event envelopes, unknown event types, event
   type/object mismatches, missing required event data fields, and invalid event
   data enum values before downstream phases consume state.

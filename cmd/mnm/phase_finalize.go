@@ -64,6 +64,7 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		Prompt:   prompt,
 		LogPath:  logPath,
 		TaskFile: taskPath,
+		Timeout:  openCodeTaskTimeout(cfg),
 		Verify: func() error {
 			report, ok, err := latestFinalizedReportForTask(runDir, task.TaskID)
 			if err != nil {

@@ -109,6 +109,7 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 		Prompt:    prompt,
 		LogPath:   logPath,
 		TaskFile:  taskPath,
+		Timeout:   openCodeTaskTimeout(cfg),
 		Verify: func() error {
 			if !ledgerFindingHasTaskEvidencePath(runDir, finding.ID, task.TaskID, notesRel) {
 				return fmt.Errorf("review opencode task did not register review evidence %s for finding %s", notesRel, finding.ID)
