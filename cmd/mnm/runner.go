@@ -37,6 +37,9 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if *runID == "" || *runDir == "" || *snapshot == "" || *configPath == "" {
 		return errors.New("runner requires --run-id, --run-dir, --snapshot, and --config")
 	}
+	if err := validateRunnerRunID(*runID); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
 		return err
 	}
@@ -141,7 +144,12 @@ func workspaceFileList(root string) ([]string, error) {
 func ensureOpenCode() (string, string, error) {
 	if path, err := exec.LookPath("opencode"); err == nil {
 		version, err := commandOutput(path, "--version")
-		return path, version, err
+		if err != nil {
+			return "", "", err
+		}
+		if opencodeVersionMatches(version) {
+			return path, version, nil
+		}
 	}
 
 	install := fmt.Sprintf("curl -fsSL https://opencode.ai/install | bash -s -- --version %s --no-modify-path", shellQuote(opencodeVersion))
@@ -156,14 +164,24 @@ func ensureOpenCode() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	pathEnv := filepath.Join(home, ".opencode", "bin") + string(os.PathListSeparator) + os.Getenv("PATH")
-	os.Setenv("PATH", pathEnv)
-	path, err := exec.LookPath("opencode")
-	if err != nil {
-		return "", "", fmt.Errorf("opencode install completed but binary was not found: %w", err)
-	}
+	path := filepath.Join(home, ".opencode", "bin", "opencode")
 	version, err := commandOutput(path, "--version")
-	return path, version, err
+	if err != nil {
+		return "", "", err
+	}
+	if !opencodeVersionMatches(version) {
+		return "", "", fmt.Errorf("opencode install produced version %q, want %s", strings.TrimSpace(version), opencodeVersion)
+	}
+	return path, version, nil
+}
+
+func opencodeVersionMatches(output string) bool {
+	for _, field := range strings.Fields(output) {
+		if field == opencodeVersion {
+			return true
+		}
+	}
+	return strings.TrimSpace(output) == opencodeVersion
 }
 
 func commandOutput(name string, args ...string) (string, error) {
@@ -173,4 +191,23 @@ func commandOutput(name string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(output))
 	}
 	return string(output), nil
+}
+
+func validateRunnerRunID(runID string) error {
+	for _, r := range runID {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid run id %q: use only letters, digits, underscores, and hyphens", runID)
+	}
+	return nil
 }

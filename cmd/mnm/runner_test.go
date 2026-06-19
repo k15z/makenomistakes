@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
-	prependFakeOpenCode(t, "1.15.11\n")
+	prependFakeOpenCode(t, opencodeVersion+"\n")
 	source := t.TempDir()
 	writeWorkspaceFile(t, source, "repo/app.go", "package main")
 	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.zst")
@@ -54,8 +54,45 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, `"opencode_version": "1.15.11"`) {
+	if !strings.Contains(manifest, `"opencode_version": "`+opencodeVersion+`"`) {
 		t.Fatalf("manifest missing opencode version:\n%s", manifest)
+	}
+}
+
+func TestEnsureOpenCodeInstallsWhenExistingVersionMismatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	prependFakeOpenCode(t, "0.0.0\n")
+	prependFakeOpenCodeInstaller(t, opencodeVersion+"\n")
+
+	path, version, err := ensureOpenCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(home, ".opencode", "bin", "opencode")
+	if path != wantPath {
+		t.Fatalf("expected managed opencode path %q, got %q", wantPath, path)
+	}
+	if strings.TrimSpace(version) != opencodeVersion {
+		t.Fatalf("expected opencode version %q, got %q", opencodeVersion, strings.TrimSpace(version))
+	}
+}
+
+func TestRunnerCommandRejectsUnsafeRunID(t *testing.T) {
+	runDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner",
+		"--run-id", "run/../../victim",
+		"--run-dir", runDir,
+		"--snapshot", filepath.Join(runDir, "snapshot.tar.zst"),
+		"--config", filepath.Join(runDir, "mnm.toml"),
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unsafe run id error")
+	}
+	if !strings.Contains(err.Error(), "invalid run id") {
+		t.Fatalf("expected invalid run id error, got %v", err)
 	}
 }
 
@@ -128,9 +165,29 @@ func prependFakeOpenCode(t *testing.T, version string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
-	body := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '" + version + "'; exit 0; fi\nprintf 'fake opencode\\n'\n"
+	if err := os.WriteFile(path, []byte(fakeOpenCodeScript(version)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func prependFakeOpenCodeInstaller(t *testing.T, version string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bash")
+	body := `#!/bin/sh
+set -eu
+mkdir -p "$HOME/.opencode/bin"
+cat > "$HOME/.opencode/bin/opencode" <<'SCRIPT'
+` + fakeOpenCodeScript(version) + `SCRIPT
+chmod +x "$HOME/.opencode/bin/opencode"
+`
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func fakeOpenCodeScript(version string) string {
+	return "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '" + version + "'; exit 0; fi\nprintf 'fake opencode\\n'\n"
 }
