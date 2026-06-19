@@ -130,8 +130,32 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if ledgerFindingHasVerdict(runDir, "finding_one", "review") {
+		t.Fatal("expected incomplete review task verdict to stay pending")
+	}
+	findings, err = unreviewedLedgerFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].ID != "finding_one" {
+		t.Fatalf("expected finding_one to remain unreviewed, got %#v", findings)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_review_finding_one",
+		TaskID:   "task_review_finding_one",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Reviewed finding.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	if !ledgerFindingHasVerdict(runDir, "finding_one", "review") {
-		t.Fatal("expected finding_one to have a review verdict")
+		t.Fatal("expected finding_one to have a completed review verdict")
 	}
 	findings, err = unreviewedLedgerFindings(runDir)
 	if err != nil {
@@ -167,6 +191,19 @@ func TestLedgerFindingsEvidenceAndVerdicts(t *testing.T) {
 			"value":                "canonical",
 			"reason":               "Unique issue.",
 			"canonical_finding_id": "",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: "task_deduplicate",
+		TaskID:   "task_deduplicate",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Deduplicated finding.",
 		},
 	}); err != nil {
 		t.Fatal(err)

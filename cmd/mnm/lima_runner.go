@@ -31,6 +31,9 @@ func (runner LimaRunner) Run(ctx context.Context, request RunnerRequest) error {
 	if runner.Executor == nil {
 		return errors.New("runner executor is required")
 	}
+	if err := validateRunnerRunID(request.Run.ID); err != nil {
+		return err
+	}
 	instanceName := limaInstanceName(request.Run.ID)
 	payloadPath, cleanupPayload, err := buildLinuxRunnerPayload(request.Run.RunDir)
 	if err != nil {
