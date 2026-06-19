@@ -105,6 +105,22 @@ func TestRunsCommandIgnoresStaleRunnerFailureAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestRunsCommandIgnoresStaleRunnerFailureAfterStopAfter(t *testing.T) {
+	dir := t.TempDir()
+	record := createStoredRun(t, dir, "run_stopped", RunStatusStopped, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC))
+	appendRunnerFailureForTest(t, record.RunDir, record.ID, "validate", "validation environment failed")
+	appendRunnerStoppedForTest(t, record.RunDir, record.ID, "recon")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"runs", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("runs failed: %v\nstderr: %s", err, stderr.String())
+	}
+	output := stdout.String()
+	if strings.Contains(output, "failed during validate") {
+		t.Fatalf("runs output includes stale failure:\n%s", output)
+	}
+}
+
 func TestRunsCommandListsRunsAsJSON(t *testing.T) {
 	dir := t.TempDir()
 	failed := createStoredRun(t, dir, "run_stopped", RunStatusStopped, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC))
@@ -177,6 +193,22 @@ func appendRunnerFailureForTest(t *testing.T, runDir, runID, stage, message stri
 			"stage": stage,
 			"error": message,
 			"path":  "evidence/runner-failure.json",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendRunnerStoppedForTest(t *testing.T, runDir, runID, phase string) {
+	t.Helper()
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "runner.stopped",
+		Object:   "run",
+		ObjectID: runID,
+		Data: map[string]any{
+			"phase":     phase,
+			"workspace": "/tmp/workspace",
 		},
 	}); err != nil {
 		t.Fatal(err)

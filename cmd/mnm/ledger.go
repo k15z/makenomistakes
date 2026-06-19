@@ -242,6 +242,8 @@ func validateLedgerEventData(event LedgerEvent) error {
 	switch event.Type {
 	case "runner.started", "runner.completed":
 		return requireEventString(event, "workspace")
+	case "runner.stopped":
+		return requireEventStrings(event, "phase", "workspace")
 	case "runner.failed":
 		return requireEventStrings(event, "stage", "error", "path")
 	case "task.started":
@@ -410,7 +412,7 @@ func requireEventNumber(event LedgerEvent, key string) error {
 
 func ledgerEventObject(eventType string) (string, bool) {
 	switch eventType {
-	case "runner.started", "runner.completed", "runner.failed":
+	case "runner.started", "runner.completed", "runner.stopped", "runner.failed":
 		return "run", true
 	case "task.started", "task.completed", "task.retrying":
 		return "task", true

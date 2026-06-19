@@ -21,6 +21,7 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 	prepareOnly := flags.Bool("prepare-only", false, "prepare the run without starting the VM runner")
 	keepVM := flags.Bool("keep-vm", false, "keep the Lima VM after the runner exits")
 	resumeRunID := flags.String("resume", "", "resume an existing prepared, stopped, timed_out, or failed run")
+	stopAfterPhase := flags.String("stop-after", "", "stop cleanly after recon|investigate|review|deduplicate|validate")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -40,12 +41,13 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	options := AnalyzeOptions{
-		WorkspaceDir: workspaceDir,
-		PrepareOnly:  *prepareOnly,
-		KeepVM:       *keepVM,
-		ResumeRunID:  *resumeRunID,
-		Stdout:       stdout,
-		Stderr:       stderr,
+		WorkspaceDir:   workspaceDir,
+		PrepareOnly:    *prepareOnly,
+		KeepVM:         *keepVM,
+		ResumeRunID:    *resumeRunID,
+		StopAfterPhase: *stopAfterPhase,
+		Stdout:         stdout,
+		Stderr:         stderr,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -57,15 +59,24 @@ func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 type AnalyzeOptions struct {
-	WorkspaceDir string
-	PrepareOnly  bool
-	KeepVM       bool
-	ResumeRunID  string
-	Stdout       io.Writer
-	Stderr       io.Writer
+	WorkspaceDir   string
+	PrepareOnly    bool
+	KeepVM         bool
+	ResumeRunID    string
+	StopAfterPhase string
+	Stdout         io.Writer
+	Stderr         io.Writer
 }
 
 func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner AnalyzeRunner) error {
+	stopAfterPhase, err := normalizeStopAfterPhase(options.StopAfterPhase)
+	if err != nil {
+		return err
+	}
+	options.StopAfterPhase = stopAfterPhase
+	if options.PrepareOnly && options.StopAfterPhase != "" {
+		return errors.New("analyze --stop-after cannot be combined with --prepare-only")
+	}
 	workspaceDir := options.WorkspaceDir
 	if options.ResumeRunID != "" {
 		return resumeAnalyzeRun(ctx, options, runner)
@@ -231,11 +242,12 @@ func executePreparedRun(ctx context.Context, options AnalyzeOptions, store *Stor
 		}
 	}()
 	err := runner.Run(runCtx, RunnerRequest{
-		Run:         run,
-		Config:      cfg,
-		ModelAPIKey: os.Getenv(resolved.APIKeyEnv),
-		KeepVM:      options.KeepVM,
-		Resume:      options.ResumeRunID != "",
+		Run:            run,
+		Config:         cfg,
+		ModelAPIKey:    os.Getenv(resolved.APIKeyEnv),
+		KeepVM:         options.KeepVM,
+		Resume:         options.ResumeRunID != "",
+		StopAfterPhase: options.StopAfterPhase,
 	})
 	close(runnerDone)
 	<-monitorDone
@@ -251,6 +263,13 @@ func executePreparedRun(ctx context.Context, options AnalyzeOptions, store *Stor
 			return errors.Join(err, fmt.Errorf("update run status to %s: %w", status, updateErr))
 		}
 		return err
+	}
+	if options.StopAfterPhase != "" {
+		if err := store.UpdateRunStatus(run.ID, RunStatusStopped); err != nil {
+			return err
+		}
+		fmt.Fprintf(options.Stdout, "runner stopped after %s\n", options.StopAfterPhase)
+		return nil
 	}
 	if err := store.UpdateRunStatus(run.ID, RunStatusCompleted); err != nil {
 		return err

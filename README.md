@@ -29,6 +29,8 @@ Interrupting `mnm analyze` asks the runner to stop and records the run as
 Use `mnm analyze --resume RUN_ID` to continue a prepared, stopped, timed out, or
 failed run from its saved snapshot and ledger. Use `mnm runs` to rediscover run
 IDs, statuses, resumability, update times, and run directories.
+Use `mnm analyze --stop-after recon` to checkpoint after Recon while iterating
+on audit setup or reviewing generated leads before resuming.
 Use `mnm report show RUN_ID` to print the latest finalized Markdown report, or
 `mnm report show --json RUN_ID` for the structured report.
 If a VM-side run fails before Finalize, `mnm runs` shows the failed stage and
