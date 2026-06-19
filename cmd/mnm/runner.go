@@ -19,9 +19,10 @@ type AnalyzeRunner interface {
 }
 
 type RunnerRequest struct {
-	Run    RunRecord
-	Config Config
-	KeepVM bool
+	Run         RunRecord
+	Config      Config
+	ModelAPIKey string
+	KeepVM      bool
 }
 
 func runnerCommand(args []string, stdout, stderr io.Writer) error {
@@ -40,7 +41,8 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
 		return err
 	}
-	if _, err := loadConfig(*configPath); err != nil {
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
 		return err
 	}
 
@@ -68,6 +70,10 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 			"workspace": workspace,
 		},
 	}); err != nil {
+		return err
+	}
+
+	if err := runReconTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
 
@@ -102,6 +108,155 @@ func runnerCommand(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "runner completed for %s\n", *runID)
 	return nil
+}
+
+func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	task := TaskRecord{
+		RunID:       runID,
+		TaskID:      "task_recon",
+		Phase:       "recon",
+		Title:       "Recon",
+		Instruction: "Map the workspace, interpret scope, identify risks, and create focused leads for later investigation.",
+	}
+	if err := writeJSON(filepath.Join(runDir, currentTaskFile), task); err != nil {
+		return err
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "task.started",
+		Object:   "task",
+		ObjectID: task.TaskID,
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"phase": task.Phase,
+			"title": task.Title,
+		},
+	}); err != nil {
+		return err
+	}
+	prompt := reconPrompt(runDir, workspace, cfg)
+	promptPath := filepath.Join(runDir, "evidence", "recon-prompt.md")
+	if err := os.WriteFile(promptPath, []byte(prompt), filePerm); err != nil {
+		return err
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: newLedgerID("evidence"),
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"kind":  "markdown",
+			"title": "Recon prompt",
+			"path":  "evidence/recon-prompt.md",
+		},
+	}); err != nil {
+		return err
+	}
+	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
+	if err := runOpenCodeRecon(opencodePath, workspace, runDir, reconModel(cfg), prompt, logPath); err != nil {
+		return err
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: newLedgerID("evidence"),
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"kind":  "jsonl",
+			"title": "OpenCode Recon transcript",
+			"path":  "evidence/opencode-recon.jsonl",
+		},
+	}); err != nil {
+		return err
+	}
+	if !ledgerTaskCompleted(runDir, task.TaskID) {
+		return errors.New("recon opencode task did not complete through mnm task complete")
+	}
+	return nil
+}
+
+func runOpenCodeRecon(opencodePath, workspace, runDir, model, prompt, logPath string) error {
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	command := exec.Command(opencodePath,
+		"run",
+		"--format", "json",
+		"--dir", workspace,
+		"--model", model,
+		"--title", "mnm recon",
+		"--dangerously-skip-permissions",
+		prompt,
+	)
+	command.Env = append(os.Environ(),
+		"MNM_RUN_DIR="+runDir,
+		"PATH=/tmp:"+os.Getenv("PATH"),
+	)
+	command.Stdout = io.MultiWriter(os.Stdout, logFile)
+	command.Stderr = os.Stderr
+	return command.Run()
+}
+
+func reconModel(cfg Config) string {
+	if strings.TrimSpace(cfg.Models.Recon) != "" {
+		return strings.TrimSpace(cfg.Models.Recon)
+	}
+	return strings.TrimSpace(cfg.Models.Default)
+}
+
+func ledgerTaskCompleted(runDir, taskID string) bool {
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		return false
+	}
+	for _, event := range events {
+		if event.Type == "task.completed" && event.Object == "task" && event.ObjectID == taskID {
+			return true
+		}
+	}
+	return false
+}
+
+func reconPrompt(runDir, workspace string, cfg Config) string {
+	scope := strings.TrimSpace(cfg.Instructions.Scope)
+	if scope == "" {
+		scope = "No additional scope instructions were provided."
+	}
+	return fmt.Sprintf(`# makenomistakes Recon
+
+You are running inside an isolated VM. Your job is to inspect the workspace and create durable Recon outputs through the injected mnm CLI.
+
+Workspace: %[1]s
+Run directory: %[2]s
+Maximum leads: %[3]d
+
+Scope instructions:
+
+%[4]s
+
+Required actions:
+
+1. Run: mnm task current
+2. Inspect the workspace using local tools such as find, rg, package manifests, framework configs, tests, docs, and build files.
+3. Write a concise codebase map to: %[2]s/evidence/recon-codebase-map.md
+4. Register it with: mnm evidence add --kind markdown --title "Recon codebase map" --path %[2]s/evidence/recon-codebase-map.md
+5. Write a risk register to: %[2]s/evidence/recon-risk-register.md
+6. Register it with: mnm evidence add --kind markdown --title "Recon risk register" --path %[2]s/evidence/recon-risk-register.md
+7. Create focused leads. For each lead, write a body file under %[2]s/evidence/, then run: mnm lead create --title "Specific lead title" --category security --priority medium --body-file %[2]s/evidence/lead-specific-name.md
+8. Create no more than %[3]d leads.
+9. Complete the task with: mnm task complete --status completed --summary "Recon completed"
+
+Lead quality bar:
+
+- A lead is a focused question or risk area, not a final finding.
+- Prefer specific components, files, flows, trust boundaries, data flows, parsers, auth paths, dependency risks, or runtime setup concerns.
+- Include enough context that a later Investigate task can start without redoing Recon.
+- Avoid generic leads like "review security" or "check code quality".
+`, workspace, runDir, cfg.Runner.MaxLeads, scope)
 }
 
 func writeRunnerManifest(path, runID, workspace, opencodePath, opencodeVersionOutput string) error {

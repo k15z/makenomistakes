@@ -50,6 +50,11 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 			t.Fatalf("missing event type %q in %#v", want, types)
 		}
 	}
+	for _, want := range []string{"task.started", "lead.created", "task.completed"} {
+		if !contains(types, want) {
+			t.Fatalf("missing recon event type %q in %#v", want, types)
+		}
+	}
 	manifest := readFile(t, filepath.Join(runDir, "evidence", "runner-manifest.json"))
 	if !strings.Contains(manifest, "repo/app.go") {
 		t.Fatalf("manifest missing unpacked workspace file:\n%s", manifest)
@@ -105,6 +110,26 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 	}
 }
 
+func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
+	cfg := Config{
+		Runner: RunnerConfig{MaxLeads: 3},
+		Instructions: InstructionConfig{
+			Scope: "Focus on parser bugs.",
+		},
+	}
+	prompt := reconPrompt("/tmp/run", "/tmp/workspace", cfg)
+	for _, want := range []string{
+		"Maximum leads: 3",
+		"Focus on parser bugs.",
+		"mnm lead create --title",
+		"--body-file /tmp/run/evidence/lead-specific-name.md",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 type recordingExecutor struct {
 	commands []string
 }
@@ -128,7 +153,41 @@ func prependFakeOpenCode(t *testing.T, version string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
-	body := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '" + version + "'; exit 0; fi\nprintf 'fake opencode\\n'\n"
+	body := `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  printf '` + version + `'
+  exit 0
+fi
+if [ "${1:-}" = "run" ]; then
+  : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+  mkdir -p "$MNM_RUN_DIR/evidence"
+  cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase Map
+
+Fake map for tests.
+EOF
+  cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk Register
+
+Fake risk register for tests.
+EOF
+  cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+
+Investigate authentication boundaries.
+EOF
+  cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+{"id":"event_fake_map","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_map","task_id":"task_recon","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md"}}
+{"id":"event_fake_risk","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_risk","task_id":"task_recon","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md"}}
+{"id":"event_fake_lead","run_id":"run_test","type":"lead.created","object":"lead","object_id":"lead_fake_auth","task_id":"task_recon","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate authentication boundaries","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_fake_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_recon","task_id":"task_recon","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"Recon completed"}}
+EOF
+  printf '{"type":"done"}\n'
+  exit 0
+fi
+printf 'fake opencode\n'
+`
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
