@@ -18,6 +18,7 @@ The first usable version is planned as a local CLI-first product:
 mnm init
 mnm analyze
 mnm runs
+mnm report show RUN_ID
 ```
 
 `mnm init` will create a project-level configuration file. `mnm analyze` will
@@ -28,6 +29,8 @@ Interrupting `mnm analyze` asks the runner to stop and records the run as
 Use `mnm analyze --resume RUN_ID` to continue a prepared, stopped, timed out, or
 failed run from its saved snapshot and ledger. Use `mnm runs` to rediscover run
 IDs, statuses, resumability, update times, and run directories.
+Use `mnm report show RUN_ID` to print the latest finalized Markdown report, or
+`mnm report show --json RUN_ID` for the structured report.
 
 The default runner target is macOS with Lima/QEMU. Future runner targets may
 include cloud VMs.

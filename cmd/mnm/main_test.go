@@ -93,6 +93,7 @@ func TestUsageMentionsRunsAndResume(t *testing.T) {
 	for _, want := range []string{
 		"mnm analyze [--prepare-only] [--keep-vm] [--resume RUN_ID] [path]",
 		"mnm runs [--json] [path]",
+		"mnm report show [--json] RUN_ID [path]",
 		"runs       List local audit runs, statuses, and resumability.",
 	} {
 		if !strings.Contains(output, want) {

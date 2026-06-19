@@ -439,15 +439,26 @@ func verdictValues(phase string) string {
 }
 
 func reportCommand(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "finalize" {
-		return errors.New("report supports: finalize")
+	if len(args) == 0 {
+		return errors.New("report supports: finalize, show")
 	}
+	switch args[0] {
+	case "finalize":
+		return reportFinalizeCommand(args[1:], stdout, stderr)
+	case "show":
+		return reportShowCommand(args[1:], stdout, stderr)
+	default:
+		return errors.New("report supports: finalize, show")
+	}
+}
+
+func reportFinalizeCommand(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("report finalize", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	runDirFlag := flags.String("run-dir", "", "run directory")
 	markdownPath := flags.String("markdown", "", "markdown report path")
 	jsonPath := flags.String("json", "", "json report path")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	runDir, task, err := currentTaskForCommand(*runDirFlag)
