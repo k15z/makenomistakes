@@ -23,6 +23,15 @@ type AnalyzeRunner interface {
 	Run(context.Context, RunnerRequest) error
 }
 
+type AnalyzePreflightRunner interface {
+	Preflight(context.Context, RunnerPreflightRequest) error
+}
+
+type RunnerPreflightRequest struct {
+	Config Config
+	Resume bool
+}
+
 type RunnerRequest struct {
 	Run         RunRecord
 	Config      Config

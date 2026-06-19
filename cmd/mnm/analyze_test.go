@@ -135,6 +135,101 @@ func TestAnalyzeRunsConfiguredRunnerByDefault(t *testing.T) {
 	}
 }
 
+func TestAnalyzePreflightsBeforeCreatingRun(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	runner := &preflightBlockingRunner{err: errors.New("preflight blocked")}
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, runner)
+	if err == nil {
+		t.Fatal("expected preflight error")
+	}
+	if !strings.Contains(err.Error(), "preflight blocked") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !runner.preflighted {
+		t.Fatal("expected runner preflight to be called")
+	}
+	if runner.called {
+		t.Fatal("runner should not run after failed preflight")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".mnm", "mnm.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("failed preflight should not create run state, stat err=%v", err)
+	}
+}
+
+func TestAnalyzePrepareOnlySkipsRunnerPreflight(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	runner := &preflightBlockingRunner{err: errors.New("preflight blocked")}
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		PrepareOnly:  true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, runner); err != nil {
+		t.Fatalf("prepare-only should not preflight runner: %v", err)
+	}
+	if runner.preflighted {
+		t.Fatal("prepare-only should skip runner preflight")
+	}
+	if got := onlyRunIDWithStatus(t, dir, RunStatusPrepared); got == "" {
+		t.Fatal("expected prepared run")
+	}
+}
+
+func TestAnalyzeResumePreflightDoesNotMutateRunStatus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		PrepareOnly:  true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, &recordingRunner{}); err != nil {
+		t.Fatalf("prepare analyze failed: %v", err)
+	}
+	runID := onlyRunIDWithStatus(t, dir, RunStatusPrepared)
+
+	runner := &preflightBlockingRunner{err: errors.New("preflight blocked")}
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		ResumeRunID:  runID,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, runner)
+	if err == nil {
+		t.Fatal("expected preflight error")
+	}
+	if !runner.preflighted {
+		t.Fatal("expected runner preflight to be called")
+	}
+	if runner.called {
+		t.Fatal("runner should not run after failed resume preflight")
+	}
+	_ = onlyRunIDWithStatus(t, dir, RunStatusPrepared)
+}
+
 func TestAnalyzeResumesPreparedRun(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
@@ -357,6 +452,17 @@ func (runner *recordingRunner) Run(_ context.Context, request RunnerRequest) err
 		return err
 	}
 	return nil
+}
+
+type preflightBlockingRunner struct {
+	recordingRunner
+	err         error
+	preflighted bool
+}
+
+func (runner *preflightBlockingRunner) Preflight(context.Context, RunnerPreflightRequest) error {
+	runner.preflighted = true
+	return runner.err
 }
 
 type deadlineRunner struct{}

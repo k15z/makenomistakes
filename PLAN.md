@@ -39,6 +39,8 @@ events.
 - Host responsibilities:
   - Validate `mnm.toml`, model environment variables, Lima/QEMU, disk, CPU, and
     RAM.
+  - Preflight local runner tooling before creating run state for VM-backed
+    execution.
   - Create `.mnm/` and host-owned SQLite state.
   - Build an immutable workspace snapshot.
   - Start one fresh Lima VM per audit run.

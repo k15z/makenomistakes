@@ -335,6 +335,44 @@ func TestLimaRunnerSeedsExistingRunDirectoryWhenResuming(t *testing.T) {
 	}
 }
 
+func TestLimaRunnerPreflightRequiresLima(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	err := (LimaRunner{}).Preflight(context.Background(), RunnerPreflightRequest{})
+	if err == nil {
+		t.Fatal("expected missing limactl error")
+	}
+	if !strings.Contains(err.Error(), "limactl is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightRequiresGoWhenBuildingPayload(t *testing.T) {
+	dir := t.TempDir()
+	writeExecutable(t, filepath.Join(dir, "limactl"))
+	t.Setenv("PATH", dir)
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", "")
+
+	err := (LimaRunner{}).Preflight(context.Background(), RunnerPreflightRequest{})
+	if err == nil {
+		t.Fatal("expected missing go error")
+	}
+	if !strings.Contains(err.Error(), "go is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLimaRunnerPreflightAcceptsProvidedPayloadWithoutGo(t *testing.T) {
+	dir := t.TempDir()
+	writeExecutable(t, filepath.Join(dir, "limactl"))
+	t.Setenv("PATH", dir)
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", filepath.Join(dir, "mnm-linux"))
+
+	if err := (LimaRunner{}).Preflight(context.Background(), RunnerPreflightRequest{}); err != nil {
+		t.Fatalf("preflight failed: %v", err)
+	}
+}
+
 func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 	command := guestRunnerCommand(RunRecord{ID: "run_quote'value"})
 
@@ -809,6 +847,13 @@ func fileSizeOrZero(t *testing.T, path string) int64 {
 		t.Fatal(err)
 	}
 	return info.Size()
+}
+
+func writeExecutable(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {

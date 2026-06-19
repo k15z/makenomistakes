@@ -27,6 +27,21 @@ func newDefaultRunner(stdout, stderr io.Writer) AnalyzeRunner {
 	}
 }
 
+func (runner LimaRunner) Preflight(ctx context.Context, _ RunnerPreflightRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := exec.LookPath("limactl"); err != nil {
+		return fmt.Errorf("limactl is required to run the audit VM; install Lima or use mnm analyze --prepare-only: %w", err)
+	}
+	if os.Getenv("MNM_LINUX_RUNNER_PAYLOAD") == "" {
+		if _, err := exec.LookPath("go"); err != nil {
+			return fmt.Errorf("go is required to build the Linux runner payload; install Go or set MNM_LINUX_RUNNER_PAYLOAD: %w", err)
+		}
+	}
+	return nil
+}
+
 func (runner LimaRunner) Run(ctx context.Context, request RunnerRequest) error {
 	if runner.Executor == nil {
 		return errors.New("runner executor is required")
