@@ -225,6 +225,8 @@ Finding statuses:
   with evidence.
 - Final reports include proven, inconclusive, failed, rejected, and duplicate
   reviewed findings, with proven findings first.
+- Final report validation rejects structured report items whose bucket does not
+  match their review, deduplication, and validation verdicts in the ledger.
 
 ## PR Sequence
 

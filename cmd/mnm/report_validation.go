@@ -57,7 +57,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 		return err
 	}
 
-	knownIDs, knownLeadIDs, findingLeadIDs, err := reportKnownIDs(runDir)
+	state, err := reportKnownState(runDir)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 			return fmt.Errorf("report JSON counts.%s = %d, want %d", bucket.countName, count, len(items))
 		}
 		for i, item := range items {
-			if err := validateReportFindingItem(runDir, bucket.name, i, item, knownIDs, knownLeadIDs, findingLeadIDs, seenReportIDs); err != nil {
+			if err := validateReportFindingItem(runDir, bucket.name, i, item, state, seenReportIDs); err != nil {
 				return err
 			}
 		}
@@ -99,27 +99,49 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 	return nil
 }
 
-func reportKnownIDs(runDir string) (map[string]bool, map[string]bool, map[string]string, error) {
+type reportLedgerState struct {
+	Findings map[string]FindingRecord
+	Leads    map[string]bool
+	Verdicts map[string]map[string]VerdictRecord
+}
+
+func reportKnownState(runDir string) (reportLedgerState, error) {
 	leads, err := ledgerLeads(runDir)
 	if err != nil {
-		return nil, nil, nil, err
+		return reportLedgerState{}, err
 	}
 	findings, err := ledgerFindings(runDir)
 	if err != nil {
-		return nil, nil, nil, err
+		return reportLedgerState{}, err
 	}
-	knownIDs := map[string]bool{}
-	knownLeadIDs := map[string]bool{}
-	findingLeadIDs := map[string]string{}
+	verdicts, err := ledgerVerdicts(runDir)
+	if err != nil {
+		return reportLedgerState{}, err
+	}
+	state := reportLedgerState{
+		Findings: map[string]FindingRecord{},
+		Leads:    map[string]bool{},
+		Verdicts: map[string]map[string]VerdictRecord{},
+	}
 	for _, lead := range leads {
-		knownIDs[lead.ID] = true
-		knownLeadIDs[lead.ID] = true
+		state.Leads[lead.ID] = true
 	}
 	for _, finding := range findings {
-		knownIDs[finding.ID] = true
-		findingLeadIDs[finding.ID] = finding.LeadID
+		state.Findings[finding.ID] = finding
 	}
-	return knownIDs, knownLeadIDs, findingLeadIDs, nil
+	for _, verdict := range verdicts {
+		if verdict.FindingID == "" || verdict.Phase == "" {
+			continue
+		}
+		if !ledgerTaskCompleted(runDir, verdict.TaskID) {
+			continue
+		}
+		if state.Verdicts[verdict.FindingID] == nil {
+			state.Verdicts[verdict.FindingID] = map[string]VerdictRecord{}
+		}
+		state.Verdicts[verdict.FindingID][verdict.Phase] = verdict
+	}
+	return state, nil
 }
 
 func validateReportPaths(runDir string, root map[string]json.RawMessage, markdownRel, jsonRel string) error {
@@ -152,19 +174,23 @@ func validateReportPaths(runDir string, root map[string]json.RawMessage, markdow
 	return nil
 }
 
-func validateReportFindingItem(runDir, bucket string, index int, item map[string]json.RawMessage, knownIDs, knownLeadIDs map[string]bool, findingLeadIDs map[string]string, seenReportIDs map[string]string) error {
+func validateReportFindingItem(runDir, bucket string, index int, item map[string]json.RawMessage, state reportLedgerState, seenReportIDs map[string]string) error {
 	prefix := fmt.Sprintf("%s[%d]", bucket, index)
 	id, err := requiredStringField(item, "id")
 	if err != nil {
 		return fmt.Errorf("%s.%w", prefix, err)
 	}
-	if !knownIDs[id] {
-		return fmt.Errorf("%s.id %q does not reference a known lead or finding", prefix, id)
+	if _, ok := state.Findings[id]; !ok {
+		return fmt.Errorf("%s.id %q does not reference a known finding", prefix, id)
 	}
 	if previous, exists := seenReportIDs[id]; exists {
 		return fmt.Errorf("%s.id %q duplicates report item in %s", prefix, id, previous)
 	}
 	seenReportIDs[id] = prefix
+	expectedBucket := reportBucketForFinding(state.Verdicts[id])
+	if bucket != expectedBucket {
+		return fmt.Errorf("%s.id %q is in bucket %q, want %q from ledger verdicts", prefix, id, bucket, expectedBucket)
+	}
 	for _, field := range []string{"title", "category", "severity", "confidence", "status", "summary"} {
 		if _, err := requiredStringField(item, field); err != nil {
 			return fmt.Errorf("%s.%w", prefix, err)
@@ -174,10 +200,10 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if err != nil {
 		return fmt.Errorf("%s.%w", prefix, err)
 	}
-	if sourceLeadID != "" && !knownLeadIDs[sourceLeadID] {
+	if sourceLeadID != "" && !state.Leads[sourceLeadID] {
 		return fmt.Errorf("%s.source_lead_id %q does not reference a known lead", prefix, sourceLeadID)
 	}
-	if expectedLeadID, isFinding := findingLeadIDs[id]; isFinding && sourceLeadID != expectedLeadID {
+	if expectedLeadID := state.Findings[id].LeadID; sourceLeadID != expectedLeadID {
 		return fmt.Errorf("%s.source_lead_id = %q, want %q for finding %s", prefix, sourceLeadID, expectedLeadID, id)
 	}
 	for _, field := range []string{"verdicts", "evidence_paths", "affected_paths"} {
@@ -200,6 +226,46 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		}
 	}
 	return nil
+}
+
+func reportBucketForFinding(verdicts map[string]VerdictRecord) string {
+	review, ok := verdicts["review"]
+	if !ok {
+		return "unvalidated"
+	}
+	if review.Value == "rejected" {
+		return "rejected"
+	}
+	if review.Value != "accepted" {
+		return "unvalidated"
+	}
+
+	deduplicate, ok := verdicts["deduplicate"]
+	if !ok {
+		return "unvalidated"
+	}
+	switch deduplicate.Value {
+	case "duplicate":
+		return "duplicate"
+	case "canonical":
+	default:
+		return "unvalidated"
+	}
+
+	validate, ok := verdicts["validate"]
+	if !ok {
+		return "unvalidated"
+	}
+	switch validate.Value {
+	case "proven":
+		return "proven"
+	case "inconclusive":
+		return "inconclusive"
+	case "failed":
+		return "failed"
+	default:
+		return "unvalidated"
+	}
 }
 
 func requiredObjectField(root map[string]json.RawMessage, field string) (map[string]json.RawMessage, error) {

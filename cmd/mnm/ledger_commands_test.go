@@ -303,7 +303,7 @@ func TestReportFinalizeValidatesFindingItems(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unknown report item id error")
 	}
-	if !strings.Contains(err.Error(), "does not reference a known lead or finding") {
+	if !strings.Contains(err.Error(), "does not reference a known finding") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ledgerReportFinalized(runDir) {
@@ -339,6 +339,9 @@ func TestReportFinalizeRequiresMatchingSourceLead(t *testing.T) {
 	sourceLeadID := createLeadForTest(t, runDir)
 	otherLeadID := createLeadForTest(t, runDir)
 	findingID := createFindingForTest(t, runDir, sourceLeadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
@@ -379,6 +382,9 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
 	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
 	if err := os.MkdirAll(filepath.Join(runDir, "evidence", "proof-dir"), dirPerm); err != nil {
 		t.Fatal(err)
 	}
@@ -437,6 +443,9 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 	findingID := strings.TrimSpace(stdout.String())
 	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
 
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
@@ -467,6 +476,50 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 	if !ledgerReportFinalized(runDir) {
 		t.Fatal("expected traceable report to be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "failed", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "validation failed"},
+			"evidence_paths": []string{proofPath},
+			"summary":        "This should not be proven.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected misbucketed report item error")
+	}
+	if !strings.Contains(err.Error(), `is in bucket "proven", want "failed"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("misbucketed report item should not be finalized")
 	}
 }
 
@@ -1150,6 +1203,48 @@ func createFindingForTest(t *testing.T, runDir, leadID string) string {
 		t.Fatalf("finding create failed: %v\nstderr: %s", err, stderr.String())
 	}
 	return strings.TrimSpace(stdout.String())
+}
+
+func recordVerdictForTest(t *testing.T, runDir, findingID, phase, value, canonicalFindingID string) {
+	t.Helper()
+	taskID := "task_" + phase + "_" + safeFileID(findingID)
+	if err := writeCurrentTaskForTest(runDir, TaskRecord{
+		RunID:       "run_test",
+		TaskID:      taskID,
+		Phase:       phase,
+		Title:       "Test " + phase,
+		Instruction: "Record test verdict.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", phase,
+		"--value", value,
+		"--reason", "test verdict",
+	}
+	if canonicalFindingID != "" {
+		args = append(args, "--canonical-finding", canonicalFindingID)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(args, &stdout, &stderr); err != nil {
+		t.Fatalf("verdict record failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "Completed test verdict.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
