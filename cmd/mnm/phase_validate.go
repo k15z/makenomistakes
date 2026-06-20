@@ -9,12 +9,16 @@ import (
 )
 
 func runValidatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	return runValidatePhaseWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath})
+}
+
+func runValidatePhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
 	findings, err := unvalidatedCanonicalFindings(runDir)
 	if err != nil {
 		return err
 	}
 	for _, finding := range findings {
-		if err := runValidateTask(runDir, runID, workspace, cfg, opencodePath, finding); err != nil {
+		if err := runValidateTaskWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
 			return err
 		}
 	}
@@ -22,6 +26,10 @@ func runValidatePhase(runDir, runID, workspace string, cfg Config, opencodePath 
 }
 
 func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath string, finding FindingRecord) error {
+	return runValidateTaskWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}, finding)
+}
+
+func runValidateTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, finding FindingRecord) error {
 	safeFindingID := safeFileID(finding.ID)
 	task := TaskRecord{
 		RunID:       runID,
@@ -70,7 +78,7 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-validate-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	notesRel := validationNotesRelPath(finding.ID)
-	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:     runID,
 		TaskID:    task.TaskID,
 		Phase:     task.Phase,

@@ -10,6 +10,10 @@ import (
 )
 
 func runReviewPhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	return runReviewPhaseWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath})
+}
+
+func runReviewPhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
 	findings, err := unreviewedLedgerFindings(runDir)
 	if err != nil {
 		return err
@@ -17,10 +21,14 @@ func runReviewPhase(runDir, runID, workspace string, cfg Config, opencodePath st
 	if len(findings) == 0 {
 		return nil
 	}
-	return runReviewBatch(runDir, runID, workspace, cfg, opencodePath, findings)
+	return runReviewBatchWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, findings)
 }
 
 func runReviewBatch(runDir, runID, workspace string, cfg Config, opencodePath string, findings []FindingRecord) error {
+	return runReviewBatchWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}, findings)
+}
+
+func runReviewBatchWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, findings []FindingRecord) error {
 	parallelism := taskParallelism(cfg)
 	jobs := make(chan FindingRecord)
 	errs := make(chan error, len(findings))
@@ -30,7 +38,7 @@ func runReviewBatch(runDir, runID, workspace string, cfg Config, opencodePath st
 		go func() {
 			defer wg.Done()
 			for finding := range jobs {
-				if err := runReviewTask(runDir, runID, workspace, cfg, opencodePath, finding); err != nil {
+				if err := runReviewTaskWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
 					errs <- err
 				}
 			}
@@ -51,6 +59,10 @@ func runReviewBatch(runDir, runID, workspace string, cfg Config, opencodePath st
 }
 
 func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath string, finding FindingRecord) error {
+	return runReviewTaskWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}, finding)
+}
+
+func runReviewTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, finding FindingRecord) error {
 	safeFindingID := safeFileID(finding.ID)
 	task := TaskRecord{
 		RunID:       runID,
@@ -99,7 +111,7 @@ func runReviewTask(runDir, runID, workspace string, cfg Config, opencodePath str
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-review-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	notesRel := reviewNotesRelPath(finding.ID)
-	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:     runID,
 		TaskID:    task.TaskID,
 		Phase:     task.Phase,

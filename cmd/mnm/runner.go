@@ -520,6 +520,10 @@ func registerRunnerEvidence(runDir, runID, kind, title, relPath string, allowCon
 }
 
 func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	return runReconTaskWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath})
+}
+
+func runReconTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
 	task := TaskRecord{
 		RunID:       runID,
 		TaskID:      "task_recon",
@@ -558,7 +562,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		return err
 	}
 	logPath := filepath.Join(runDir, "evidence", "opencode-recon.jsonl")
-	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:   runID,
 		TaskID:  task.TaskID,
 		Phase:   task.Phase,

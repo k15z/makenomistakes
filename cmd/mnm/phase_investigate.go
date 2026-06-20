@@ -10,6 +10,10 @@ import (
 )
 
 func runInvestigatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
+	return runInvestigatePhaseWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath})
+}
+
+func runInvestigatePhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
 	processed, invalidClosed, err := completedInvestigationLeads(runDir)
 	if err != nil {
 		return err
@@ -39,7 +43,7 @@ func runInvestigatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		if len(batch) > remaining {
 			batch = batch[:remaining]
 		}
-		if err := runInvestigateBatch(runDir, runID, workspace, cfg, opencodePath, batch); err != nil {
+		if err := runInvestigateBatchWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, batch); err != nil {
 			return err
 		}
 		for _, lead := range batch {
@@ -131,6 +135,10 @@ func appendInvestigateLimitReached(runDir, runID string, limit, processed int) e
 }
 
 func runInvestigateBatch(runDir, runID, workspace string, cfg Config, opencodePath string, leads []LeadRecord) error {
+	return runInvestigateBatchWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}, leads)
+}
+
+func runInvestigateBatchWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, leads []LeadRecord) error {
 	parallelism := taskParallelism(cfg)
 	jobs := make(chan LeadRecord)
 	errs := make(chan error, len(leads))
@@ -140,7 +148,7 @@ func runInvestigateBatch(runDir, runID, workspace string, cfg Config, opencodePa
 		go func() {
 			defer wg.Done()
 			for lead := range jobs {
-				if err := runInvestigateTask(runDir, runID, workspace, cfg, opencodePath, lead); err != nil {
+				if err := runInvestigateTaskWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, lead); err != nil {
 					errs <- err
 				}
 			}
@@ -161,6 +169,10 @@ func runInvestigateBatch(runDir, runID, workspace string, cfg Config, opencodePa
 }
 
 func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePath string, lead LeadRecord) error {
+	return runInvestigateTaskWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}, lead)
+}
+
+func runInvestigateTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, lead LeadRecord) error {
 	safeLeadID := safeFileID(lead.ID)
 	task := TaskRecord{
 		RunID:       runID,
@@ -209,7 +221,7 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-investigate-"+safeLeadID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	notesRel := investigationNotesRelPath(lead.ID)
-	if err := runOpenCodeTask(opencodePath, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:    runID,
 		TaskID:   task.TaskID,
 		Phase:    task.Phase,
