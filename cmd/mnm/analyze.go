@@ -18,8 +18,8 @@ import (
 func analyzeCommand(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	prepareOnly := flags.Bool("prepare-only", false, "prepare the run without starting the VM runner")
-	keepVM := flags.Bool("keep-vm", false, "keep the Lima VM after the runner exits")
+	prepareOnly := flags.Bool("prepare-only", false, "prepare the run without starting task runners")
+	keepVM := flags.Bool("keep-vm", false, "keep Lima task VMs after attempts exit")
 	resumeRunID := flags.String("resume", "", "resume an existing prepared, stopped, timed_out, or failed run")
 	stopAfterPhase := flags.String("stop-after", "", "stop cleanly after recon|investigate|review|deduplicate|validate")
 	if err := flags.Parse(args); err != nil {
@@ -215,7 +215,7 @@ func executePreparedRun(ctx context.Context, options AnalyzeOptions, store *Stor
 	if err := store.UpdateRunStatus(run.ID, RunStatusVMStarting); err != nil {
 		return err
 	}
-	fmt.Fprintf(options.Stdout, "starting runner VM\n")
+	fmt.Fprintf(options.Stdout, "starting runner\n")
 	runCtx, cancel := context.WithTimeout(ctx, resolved.Timeout)
 	defer cancel()
 	if err := store.UpdateRunStatus(run.ID, RunStatusRunning); err != nil {

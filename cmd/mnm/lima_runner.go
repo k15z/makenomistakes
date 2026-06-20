@@ -32,10 +32,15 @@ type HostResources struct {
 }
 
 func newDefaultRunner(stdout, stderr io.Writer) AnalyzeRunner {
-	return LimaRunner{
+	taskRunner := LimaRunner{
 		Executor: ShellExecutor{Stdout: stdout, Stderr: stderr},
 		Stdout:   stdout,
 		Stderr:   stderr,
+	}
+	return HostPipelineRunner{
+		TaskRunner: taskRunner,
+		Stdout:     stdout,
+		Stderr:     stderr,
 	}
 }
 
