@@ -74,6 +74,7 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 		Prompt:   prompt,
 		LogPath:  logPath,
 		TaskFile: taskPath,
+		Timeout:  openCodeTaskTimeout(cfg),
 		Verify: func() error {
 			evidence, ok := ledgerTaskEvidence(runDir, task.TaskID, notesRel)
 			if !ok {

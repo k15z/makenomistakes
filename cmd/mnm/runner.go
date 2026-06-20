@@ -320,6 +320,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 		Model:   phaseModel(cfg, "recon"),
 		Prompt:  prompt,
 		LogPath: logPath,
+		Timeout: openCodeTaskTimeout(cfg),
 		Verify: func() error {
 			return validateReconTaskComplete(runDir, task.TaskID, cfg)
 		},
@@ -465,6 +466,7 @@ type opencodeTask struct {
 	Prompt    string
 	LogPath   string
 	TaskFile  string
+	Timeout   time.Duration
 	Verify    func() error
 }
 
@@ -549,7 +551,7 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	command.Env = env
 	command.Stdout = logFile
 	command.Stderr = os.Stderr
-	runErr := command.Run()
+	runErr := runOpenCodeCommand(command, task)
 	if cleanupErr := cleanupCommandProcessGroup(command); cleanupErr != nil {
 		cleanupErr = fmt.Errorf("clean up opencode task process group: %w", cleanupErr)
 		if runErr != nil {
@@ -616,6 +618,55 @@ func fileModifiedSince(path string, previousSize int64) bool {
 	return err != nil || currentSize != previousSize
 }
 
+func runOpenCodeCommand(command *exec.Cmd, task opencodeTask) error {
+	if task.Timeout <= 0 {
+		return command.Run()
+	}
+	if err := command.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- command.Wait()
+	}()
+	timer := time.NewTimer(task.Timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		killErr := command.Process.Kill()
+		cleanupErr := cleanupCommandProcessGroup(command)
+		err := <-done
+		timeoutErr := openCodeTaskTimeoutError{
+			taskID:  task.TaskID,
+			timeout: task.Timeout,
+			err:     err,
+		}
+		if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			timeoutErr.err = errors.Join(timeoutErr.err, fmt.Errorf("kill timed out opencode process: %w", killErr))
+		}
+		if cleanupErr != nil {
+			timeoutErr.err = errors.Join(timeoutErr.err, fmt.Errorf("clean up timed out opencode task process group: %w", cleanupErr))
+		}
+		return timeoutErr
+	}
+}
+
+type openCodeTaskTimeoutError struct {
+	taskID  string
+	timeout time.Duration
+	err     error
+}
+
+func (e openCodeTaskTimeoutError) Error() string {
+	return fmt.Sprintf("opencode task %s exceeded timeout %s", e.taskID, e.timeout)
+}
+
+func (e openCodeTaskTimeoutError) Unwrap() error {
+	return e.err
+}
+
 type retryableOpenCodePostconditionError struct {
 	err            error
 	ledgerModified bool
@@ -631,6 +682,10 @@ func (e retryableOpenCodePostconditionError) Unwrap() error {
 
 func retryableOpenCodeError(logPath string, err error) bool {
 	if err == nil {
+		return false
+	}
+	var timeoutErr openCodeTaskTimeoutError
+	if errors.As(err, &timeoutErr) {
 		return false
 	}
 	var postconditionErr retryableOpenCodePostconditionError

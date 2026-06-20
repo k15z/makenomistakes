@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigRejectsUnsupportedVersion(t *testing.T) {
@@ -47,6 +48,91 @@ func TestConfigUsesReconModelWhenSet(t *testing.T) {
 	}
 	if resolved.Model != "openrouter/test-recon" {
 		t.Fatalf("expected recon model, got %q", resolved.Model)
+	}
+}
+
+func TestConfigDefaultsOpenCodeTaskTimeoutWhenOmitted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), "opencode_task_timeout_minutes = 30\n", "", 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.validate(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := openCodeTaskTimeout(cfg); got != 30*time.Minute {
+		t.Fatalf("OpenCode task timeout = %s, want 30m", got)
+	}
+}
+
+func TestConfigClampsDefaultOpenCodeTaskTimeoutToRunTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), "timeout_minutes = 120", "timeout_minutes = 10", 1)
+	config = strings.Replace(config, "opencode_task_timeout_minutes = 30\n", "", 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.validate(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := openCodeTaskTimeout(cfg); got != 10*time.Minute {
+		t.Fatalf("OpenCode task timeout = %s, want 10m", got)
+	}
+}
+
+func TestConfigRejectsInvalidOpenCodeTaskTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		replace  string
+		wantText string
+	}{
+		{
+			name:     "negative",
+			replace:  "opencode_task_timeout_minutes = -1",
+			wantText: "must not be negative",
+		},
+		{
+			name:     "longer than run",
+			replace:  "opencode_task_timeout_minutes = 121",
+			wantText: "must not exceed runner.timeout_minutes",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "mnm.toml")
+			config := strings.Replace(defaultConfig(), "opencode_task_timeout_minutes = 30", tt.replace, 1)
+			if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+			cfg, err := loadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = cfg.validate(dir)
+			if err == nil {
+				t.Fatal("expected OpenCode task timeout validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
