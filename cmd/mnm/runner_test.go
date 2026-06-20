@@ -1577,6 +1577,10 @@ func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
 		"Focus on parser bugs.",
 		"mnm lead create --title",
 		"--body-file /tmp/run/evidence/lead-specific-name.md",
+		"Recon maps the workspace and schedules focused work; Investigate and Validate prove, exploit, or falsify issues.",
+		"If scope instructions ask for tests or proofs, treat them as requirements for later Investigate or Validate",
+		"Do not build end-to-end proof scripts, start long-lived services",
+		"Unregistered files are scratch and may be lost.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)

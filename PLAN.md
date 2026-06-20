@@ -246,6 +246,9 @@ Finding statuses:
 - Recon tasks fail postcondition checks unless they register non-empty codebase
   map and risk register evidence, create at least one lead, and stay within
   `runner.max_leads`.
+- Recon prompts steer agents to map the workspace and create focused leads
+  promptly, leaving proof, exploitation, and falsification work to Investigate
+  and Validate.
 - Investigate tasks fail postcondition checks unless they register a non-empty
   investigation evidence file for the lead being processed, and promoted leads
   must create at least one finding.
