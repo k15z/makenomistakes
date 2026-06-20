@@ -679,12 +679,31 @@ type opencodeTask struct {
 	Verify    func(string) error
 }
 
+type opencodeTaskAttemptRunner interface {
+	RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error)
+}
+
+type directOpenCodeTaskAttemptRunner struct {
+	opencodePath string
+}
+
+func (runner directOpenCodeTaskAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+	if runner.opencodePath == "" {
+		return openCodeAttemptResult{}, errors.New("opencode path is required")
+	}
+	return runDirectOpenCodeTaskAttempt(runner.opencodePath, workspace, runDir, task, attempt)
+}
+
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
+	return runOpenCodeTaskWithAttemptRunner(directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}, workspace, runDir, task)
+}
+
+func runOpenCodeTaskWithAttemptRunner(attemptRunner opencodeTaskAttemptRunner, workspace, runDir string, task opencodeTask) error {
 	var lastErr error
 	attempts := 0
 	for attempt := 1; attempt <= openCodeMaxAttempts; attempt++ {
 		attempts = attempt
-		result, err := runOpenCodeTaskAttempt(opencodePath, workspace, runDir, task, attempt)
+		result, err := attemptRunner.RunOpenCodeTaskAttempt(workspace, runDir, task, attempt)
 		verifyRunDir := runDir
 		cleanupVerifyRunDir := func() {}
 		if err == nil && result.Bundle {
@@ -737,7 +756,7 @@ type openCodeAttemptResult struct {
 	Bundle         bool
 }
 
-func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+func runDirectOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	result := openCodeAttemptResult{TaskRunDir: runDir}
 	taskRunDir := runDir
 	taskFile := task.TaskFile

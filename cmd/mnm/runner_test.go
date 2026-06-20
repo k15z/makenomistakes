@@ -1670,6 +1670,46 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunOpenCodeTaskWithAttemptRunnerUsesInjectedRunner(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	attemptRunner := &recordingAttemptRunner{}
+	verified := false
+
+	err := runOpenCodeTaskWithAttemptRunner(attemptRunner, workspace, runDir, opencodeTask{
+		RunID:   "run_injected",
+		TaskID:  "task_injected",
+		Phase:   "review",
+		Title:   "mnm injected runner test",
+		Model:   "openrouter/test",
+		Prompt:  "run through injected attempt runner",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-injected.jsonl"),
+		Verify: func(verifyRunDir string) error {
+			verified = true
+			if verifyRunDir != runDir {
+				return fmt.Errorf("verify run dir = %s, want %s", verifyRunDir, runDir)
+			}
+			if !ledgerTaskCompleted(verifyRunDir, "task_injected") {
+				return errors.New("task was not completed")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("injected runner failed: %v", err)
+	}
+	if !verified {
+		t.Fatal("verify hook was not called")
+	}
+	if len(attemptRunner.calls) != 1 {
+		t.Fatalf("attempt calls = %d, want 1", len(attemptRunner.calls))
+	}
+	call := attemptRunner.calls[0]
+	if call.workspace != workspace || call.runDir != runDir || call.taskID != "task_injected" || call.attempt != 1 {
+		t.Fatalf("unexpected attempt call: %#v", call)
+	}
+}
+
 func TestRunOpenCodeTaskRetriesMissingPostcondition(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
@@ -2444,6 +2484,37 @@ func reconTestConfig() Config {
 
 type recordingExecutor struct {
 	commands []string
+}
+
+type recordingAttemptRunner struct {
+	calls []recordingAttemptCall
+}
+
+type recordingAttemptCall struct {
+	workspace string
+	runDir    string
+	taskID    string
+	attempt   int
+}
+
+func (runner *recordingAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+	runner.calls = append(runner.calls, recordingAttemptCall{
+		workspace: workspace,
+		runDir:    runDir,
+		taskID:    task.TaskID,
+		attempt:   attempt,
+	})
+	return openCodeAttemptResult{TaskRunDir: runDir}, appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    task.RunID,
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: task.TaskID,
+		TaskID:   task.TaskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "completed by injected attempt runner",
+		},
+	})
 }
 
 func (executor *recordingExecutor) Run(_ context.Context, name string, args ...string) error {
