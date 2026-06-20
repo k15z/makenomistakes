@@ -134,6 +134,7 @@ func TestLedgerCommandFlow(t *testing.T) {
 			},
 		},
 	}))
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	stdout.Reset()
 	stderr.Reset()
 	if err := run([]string{
@@ -280,6 +281,7 @@ func TestReportFinalizeRejectsMalformedJSONWithoutLedgerEvent(t *testing.T) {
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", `{"run_id":`)
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -298,6 +300,29 @@ func TestReportFinalizeRejectsMalformedJSONWithoutLedgerEvent(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsWrongCurrentTaskPhase(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected wrong task phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "recon" cannot run report finalize`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report should not be finalized from the wrong phase")
+	}
+}
+
 func TestReportFinalizeRequiresExpectedBuckets(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
@@ -308,6 +333,7 @@ func TestReportFinalizeRequiresExpectedBuckets(t *testing.T) {
 		"proven": []
 	}`)
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -384,6 +410,7 @@ func TestReportFinalizeRejectsNullScalarFields(t *testing.T) {
 			reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 			reportJSON := writeRunFile(t, runDir, "report.json", tt.reportJSON)
 
+			setCurrentTaskPhaseForTest(t, runDir, "finalize")
 			var stdout, stderr bytes.Buffer
 			err := run([]string{
 				"report", "finalize",
@@ -409,6 +436,7 @@ func TestReportFinalizeIsIdempotentForSamePaths(t *testing.T) {
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"report", "finalize",
@@ -432,7 +460,7 @@ func TestReportFinalizeIsIdempotentForSamePaths(t *testing.T) {
 	if !strings.Contains(stdout.String(), "report finalized") {
 		t.Fatalf("unexpected stdout: %s", stdout.String())
 	}
-	assertReportFinalizedEventCount(t, runDir, "task_recon", 1)
+	assertReportFinalizedEventCount(t, runDir, "task_finalize", 1)
 }
 
 func TestReportFinalizeIsAtomicForParallelSamePaths(t *testing.T) {
@@ -440,6 +468,7 @@ func TestReportFinalizeIsAtomicForParallelSamePaths(t *testing.T) {
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	const workers = 8
 	start := make(chan struct{})
 	errs := make(chan error, workers)
@@ -467,7 +496,7 @@ func TestReportFinalizeIsAtomicForParallelSamePaths(t *testing.T) {
 			t.Fatalf("parallel report finalize failed: %v", err)
 		}
 	}
-	assertReportFinalizedEventCount(t, runDir, "task_recon", 1)
+	assertReportFinalizedEventCount(t, runDir, "task_finalize", 1)
 }
 
 func TestReportFinalizeRejectsConflictingPathsForSameTask(t *testing.T) {
@@ -477,6 +506,7 @@ func TestReportFinalizeRejectsConflictingPathsForSameTask(t *testing.T) {
 	altReportMD := writeRunFile(t, runDir, "alt-report.md", "# Alternate Report")
 	altReportJSON := writeRunFile(t, runDir, "alt-report.json", validReportJSON(t, "run_test", "alt-report.md", "alt-report.json", nil))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"report", "finalize",
@@ -501,7 +531,7 @@ func TestReportFinalizeRejectsConflictingPathsForSameTask(t *testing.T) {
 	if !strings.Contains(err.Error(), "already finalized report") || !strings.Contains(err.Error(), "different paths") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertReportFinalizedEventCount(t, runDir, "task_recon", 1)
+	assertReportFinalizedEventCount(t, runDir, "task_finalize", 1)
 }
 
 func TestReportFinalizeValidatesFindingItems(t *testing.T) {
@@ -523,6 +553,7 @@ func TestReportFinalizeValidatesFindingItems(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -546,6 +577,7 @@ func TestReportFinalizeRejectsEmptyMarkdown(t *testing.T) {
 	reportMD := writeRunFile(t, runDir, "report.md", " \n\t")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -601,6 +633,7 @@ func TestReportFinalizeRequiresMatchingSourceLead(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -664,6 +697,7 @@ func TestReportFinalizeRequiresEvidencePathsToBeFiles(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -723,6 +757,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	stdout.Reset()
 	stderr.Reset()
 	if err := run([]string{
@@ -766,6 +801,7 @@ func TestReportFinalizeRejectsProvenFindingWithoutValidationProofCitation(t *tes
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -810,6 +846,7 @@ func TestReportFinalizeRejectsLateValidationProofCitation(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -854,6 +891,7 @@ func TestReportFinalizeRejectsMarkdownMissingFindingID(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -898,6 +936,7 @@ func TestReportFinalizeRejectsMarkdownMissingEvidencePath(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -942,6 +981,7 @@ func TestReportFinalizeRejectsMarkdownEvidencePathSubstring(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1031,6 +1071,7 @@ func TestReportFinalizeRejectsInvalidAffectedPaths(t *testing.T) {
 				},
 			}))
 
+			setCurrentTaskPhaseForTest(t, runDir, "finalize")
 			var stdout, stderr bytes.Buffer
 			err := run([]string{
 				"report", "finalize",
@@ -1078,6 +1119,7 @@ func TestReportFinalizeRejectsFindingMetadataMismatch(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1133,6 +1175,7 @@ func TestReportFinalizeRejectsSourceLeadMismatch(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1178,6 +1221,7 @@ func TestReportFinalizeRejectsVerdictMismatch(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1223,6 +1267,7 @@ func TestReportFinalizeRejectsMisbucketedFinding(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1268,6 +1313,7 @@ func TestReportFinalizeRejectsUnregisteredFindingEvidence(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1333,6 +1379,7 @@ func TestReportFinalizeRejectsUnnormalizedEvidencePaths(t *testing.T) {
 				},
 			}))
 
+			setCurrentTaskPhaseForTest(t, runDir, "finalize")
 			var stdout, stderr bytes.Buffer
 			err := run([]string{
 				"report", "finalize",
@@ -1395,6 +1442,7 @@ func TestReportFinalizeRejectsEmptyRegisteredEvidence(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1443,6 +1491,7 @@ func TestReportFinalizeRejectsChangedRegisteredEvidence(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1507,6 +1556,7 @@ func TestReportFinalizeRejectsSymlinkEvidencePath(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1576,6 +1626,7 @@ func TestReportFinalizeRejectsProvenFindingWithoutEvidence(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1621,6 +1672,7 @@ func TestReportFinalizeRejectsStatusThatDoesNotMatchBucket(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1684,6 +1736,7 @@ func TestReportFinalizeAcceptsDuplicateWithCanonicalFinding(t *testing.T) {
 		},
 	}))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{
 		"report", "finalize",
@@ -1711,6 +1764,7 @@ func TestReportFinalizeRejectsDuplicateMissingCanonicalFinding(t *testing.T) {
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", duplicateReportBuckets(leadID, canonicalID, duplicateID, map[string]any{})))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1762,6 +1816,7 @@ func TestReportFinalizeRejectsDuplicateCanonicalMismatch(t *testing.T) {
 		},
 	})))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",
@@ -1791,6 +1846,7 @@ func TestReportFinalizeRequiresEveryFinding(t *testing.T) {
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", nil))
 
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"report", "finalize",

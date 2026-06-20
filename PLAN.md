@@ -222,6 +222,8 @@ Finding statuses:
   lifecycle action.
 - VM-side `mnm verdict record` rejects attempts to record a Review,
   Deduplicate, or Validate verdict from any other current task phase.
+- VM-side `mnm report finalize` rejects attempts from any current task phase
+  other than Finalize.
 - VM-side `mnm verdict record` is idempotent for repeated identical decisions
   and rejects conflicting verdict rewrites for the same finding and phase.
 - VM-side `mnm lead create` is idempotent for repeated identical task/body
