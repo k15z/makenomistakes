@@ -24,6 +24,7 @@ func TestValidatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Admin mutation is reachable without authorization.",
 		"Docker/Compose/minikube",
 		"mnm evidence add --kind markdown",
+		"Validation notes alone are not enough for a proven verdict.",
 		"mnm verdict record --finding finding_auth --phase validate --value proven",
 		"mnm verdict record --finding finding_auth --phase validate --value failed",
 		"mnm verdict record --finding finding_auth --phase validate --value inconclusive",
@@ -51,10 +52,14 @@ cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-notes.md" <<'EOF'
 
 Proof observed by fake opencode.
 EOF
+cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-proof.log" <<'EOF'
+curl /admin returned 200 without authorization.
+EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_validate_evidence_$MNM_FINDING_ID","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"e17c0f25a13f204cc60aeca367b6ba453e176189f24810b938164b9b46aaac6d","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
-{"id":"event_validate_$MNM_FINDING_ID","run_id":"run_validate","type":"verdict.recorded","object":"verdict","object_id":"verdict_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"proven by fake opencode","canonical_finding_id":""}}
-{"id":"event_done_$MNM_FINDING_ID","run_id":"run_validate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+{"id":"event_validate_proof_$MNM_FINDING_ID","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_proof_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"log","title":"Validation proof","path":"evidence/validate-$MNM_FINDING_ID-proof.log","content_sha256":"f96ec713c4678c5a741bca24d4af533e9f821a9b585ad94a5ac8170643001a40","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_validate_$MNM_FINDING_ID","run_id":"run_validate","type":"verdict.recorded","object":"verdict","object_id":"verdict_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"proven by fake opencode","canonical_finding_id":""}}
+{"id":"event_done_$MNM_FINDING_ID","run_id":"run_validate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
 `
@@ -81,6 +86,140 @@ printf '{"type":"done"}\n'
 	}
 	if !ok || verdict.Value != "proven" {
 		t.Fatalf("unexpected validation verdict: %#v", verdict)
+	}
+}
+
+func TestRunValidatePhaseRequiresProofEvidenceForProvenVerdict(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addCanonicalFindingForTest(t, runDir, "finding_auth", "evidence/finding-auth.md", "Candidate auth defect.")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-notes.md" <<'EOF'
+# Validation notes
+
+Proof claimed without a separate artifact.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_validate_evidence_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"0d4efc321ef76ae548d993d64630934853873aebbf327b3a3cac79690a19a710","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_validate_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"verdict.recorded","object":"verdict","object_id":"verdict_validate_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"proven by fake opencode","canonical_finding_id":""}}
+{"id":"event_done_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+	}
+	err := runValidatePhase(runDir, "run_validate", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected missing proof evidence error")
+	}
+	if !strings.Contains(err.Error(), "recorded proven verdict for finding finding_auth without registering proof evidence beyond evidence/validate-finding_auth-notes.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunValidatePhaseRequiresProofEvidenceBeforeProvenVerdict(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addCanonicalFindingForTest(t, runDir, "finding_auth", "evidence/finding-auth.md", "Candidate auth defect.")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-notes.md" <<'EOF'
+# Validation notes
+
+Proof claimed before the proof artifact was registered.
+EOF
+cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-proof.log" <<'EOF'
+curl /admin returned 200 without authorization.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_validate_evidence_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"eba091e23f96a3b32c27621b46977ef6fb7cd569e997c0f437324948a917535a","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_validate_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"verdict.recorded","object":"verdict","object_id":"verdict_validate_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"proven by fake opencode","canonical_finding_id":""}}
+{"id":"event_validate_proof_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_proof_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"kind":"log","title":"Validation proof","path":"evidence/validate-$MNM_FINDING_ID-proof.log","content_sha256":"f96ec713c4678c5a741bca24d4af533e9f821a9b585ad94a5ac8170643001a40","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_done_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+	}
+	err := runValidatePhase(runDir, "run_validate", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected late proof evidence error")
+	}
+	if !strings.Contains(err.Error(), "recorded proven verdict for finding finding_auth without registering proof evidence beyond evidence/validate-finding_auth-notes.md") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunValidatePhaseRejectsStaleProofEvidenceForProvenVerdict(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	addCanonicalFindingForTest(t, runDir, "finding_auth", "evidence/finding-auth.md", "Candidate auth defect.")
+
+	opencodePath := filepath.Join(t.TempDir(), "opencode")
+	body := `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_FINDING_ID:?MNM_FINDING_ID is required}"
+cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-notes.md" <<'EOF'
+# Validation notes
+
+Proof claimed with a stale proof hash.
+EOF
+cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-proof.log" <<'EOF'
+curl /admin returned 200 without authorization.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_validate_evidence_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"9a2441c6a6b8ad5178a70aa0b393ff643a9f2f792e907365328e5889401aa993","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_validate_proof_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"evidence.added","object":"evidence","object_id":"evidence_validate_proof_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"log","title":"Validation proof","path":"evidence/validate-$MNM_FINDING_ID-proof.log","content_sha256":"0000000000000000000000000000000000000000000000000000000000000000","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_validate_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"verdict.recorded","object":"verdict","object_id":"verdict_validate_${MNM_FINDING_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"proven by fake opencode","canonical_finding_id":""}}
+{"id":"event_done_${MNM_FINDING_ID}_$$","run_id":"run_validate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`
+	if err := os.WriteFile(opencodePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+	}
+	err := runValidatePhase(runDir, "run_validate", t.TempDir(), cfg, opencodePath)
+	if err == nil {
+		t.Fatal("expected stale proof evidence hash error")
+	}
+	if !strings.Contains(err.Error(), "evidence file evidence/validate-finding_auth-proof.log changed after registration") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

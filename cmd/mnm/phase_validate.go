@@ -99,8 +99,26 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 			if err := validateNonEmptyValidationEvidence(runDir, notesRel); err != nil {
 				return err
 			}
-			if !ledgerFindingHasVerdict(runDir, finding.ID, "validate") {
+			verdict, ok, err := ledgerFindingVerdict(runDir, finding.ID, "validate")
+			if err != nil {
+				return err
+			}
+			if !ok {
 				return fmt.Errorf("validate opencode task did not record validation verdict for finding %s", finding.ID)
+			}
+			if verdict.Value == "proven" {
+				proofEvidence, err := validationProofEvidence(runDir, finding.ID, task.TaskID, verdict.eventIndex, promptRel, notesRel)
+				if err != nil {
+					return err
+				}
+				if len(proofEvidence) == 0 {
+					return fmt.Errorf("validate opencode task recorded proven verdict for finding %s without registering proof evidence beyond %s", finding.ID, notesRel)
+				}
+				for _, evidence := range proofEvidence {
+					if err := registeredEvidenceFileError(runDir, evidence.Path, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+						return err
+					}
+				}
 			}
 			if !ledgerTaskCompleted(runDir, task.TaskID) {
 				return fmt.Errorf("validate opencode task did not complete task %s", task.TaskID)
@@ -138,6 +156,25 @@ func validateNonEmptyValidationEvidence(runDir, relPath string) error {
 		return fmt.Errorf("validation evidence %s must not be empty", relPath)
 	}
 	return nil
+}
+
+func validationProofEvidence(runDir, findingID, taskID string, beforeIndex int, excludedPaths ...string) ([]EvidenceRecord, error) {
+	evidence, err := ledgerEvidenceForFinding(runDir, findingID)
+	if err != nil {
+		return nil, err
+	}
+	excluded := map[string]bool{}
+	for _, path := range excludedPaths {
+		excluded[path] = true
+	}
+	var proof []EvidenceRecord
+	for _, item := range evidence {
+		if item.TaskID != taskID || item.eventIndex >= beforeIndex || excluded[item.Path] {
+			continue
+		}
+		proof = append(proof, item)
+	}
+	return proof, nil
 }
 
 func validationNotesRelPath(findingID string) string {
@@ -215,10 +252,11 @@ Required actions:
 5. Attempt the highest-fidelity reproduction or exploit that is feasible inside this VM. Build services, run tests, start dev servers, use Docker/Compose/minikube if available and scoped to this workspace, seed data, send requests, inject malformed inputs, trigger crashes, or write small proof scripts as needed.
 6. Write validation notes, commands, observed output, blockers, and any proof artifacts to %[2]s/evidence/validate-%[16]s-notes.md.
 7. Register the notes with: mnm evidence add --kind markdown --title "Validation notes: %[4]s" --finding %[3]s --path %[2]s/evidence/validate-%[16]s-notes.md
-8. If you observed the claimed failure, exploit path, crash, data exposure, or other concrete impact, record: mnm verdict record --finding %[3]s --phase validate --value proven --reason "..."
-9. If focused validation contradicts the finding or shows it is not reachable/applicable, record: mnm verdict record --finding %[3]s --phase validate --value failed --reason "..."
-10. If the environment, dependencies, missing services, credentials, or time prevent a fair proof while the finding remains plausible, record: mnm verdict record --finding %[3]s --phase validate --value inconclusive --reason "..."
-11. Complete the task with: mnm task complete --status completed --summary "Validated %[3]s"
+8. If you observed the claimed failure, exploit path, crash, data exposure, or other concrete impact, write at least one separate proof artifact such as a command log, request/response capture, minimized reproduction script, stack trace, or screenshot under %[2]s/evidence/ and register it with: mnm evidence add --kind log --title "Validation proof: %[4]s" --finding %[3]s --path PROOF_PATH. Validation notes alone are not enough for a proven verdict.
+9. If you observed concrete impact and registered separate proof evidence, record: mnm verdict record --finding %[3]s --phase validate --value proven --reason "..."
+10. If focused validation contradicts the finding or shows it is not reachable/applicable, record: mnm verdict record --finding %[3]s --phase validate --value failed --reason "..."
+11. If the environment, dependencies, missing services, credentials, or time prevent a fair proof while the finding remains plausible, record: mnm verdict record --finding %[3]s --phase validate --value inconclusive --reason "..."
+12. Complete the task with: mnm task complete --status completed --summary "Validated %[3]s"
 
 Validation quality bar:
 
