@@ -117,6 +117,7 @@ type reportLedgerState struct {
 	Leads           map[string]bool
 	Verdicts        map[string]map[string]VerdictRecord
 	FindingEvidence map[string]map[string]EvidenceRecord
+	WorkspaceFiles  map[string]bool
 }
 
 func reportKnownState(runDir string) (reportLedgerState, error) {
@@ -136,11 +137,16 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 	if err != nil {
 		return reportLedgerState{}, err
 	}
+	workspaceFiles, err := reportWorkspaceFiles(runDir)
+	if err != nil {
+		return reportLedgerState{}, err
+	}
 	state := reportLedgerState{
 		Findings:        map[string]FindingRecord{},
 		Leads:           map[string]bool{},
 		Verdicts:        map[string]map[string]VerdictRecord{},
 		FindingEvidence: map[string]map[string]EvidenceRecord{},
+		WorkspaceFiles:  workspaceFiles,
 	}
 	for _, lead := range leads {
 		state.Leads[lead.ID] = true
@@ -170,6 +176,39 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 		state.FindingEvidence[item.FindingID][item.Path] = item
 	}
 	return state, nil
+}
+
+func reportWorkspaceFiles(runDir string) (map[string]bool, error) {
+	relPath := "evidence/runner-manifest.json"
+	evidence, ok := ledgerTaskEvidence(runDir, "", relPath)
+	if !ok {
+		return nil, nil
+	}
+	if err := registeredEvidenceFileError(runDir, relPath, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+		return nil, fmt.Errorf("registered runner manifest is unusable: %w", err)
+	}
+	path := filepath.Join(runDir, filepath.FromSlash(relPath))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read runner manifest: %w", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse runner manifest: %w", err)
+	}
+	workspaceFilesRaw, ok := raw["workspace_files"]
+	if !ok || bytes.Equal(bytes.TrimSpace(workspaceFilesRaw), []byte("null")) {
+		return nil, errors.New("runner manifest workspace_files is required")
+	}
+	var workspaceFiles []string
+	if err := json.Unmarshal(workspaceFilesRaw, &workspaceFiles); err != nil {
+		return nil, fmt.Errorf("parse runner manifest workspace_files: %w", err)
+	}
+	files := map[string]bool{}
+	for _, item := range workspaceFiles {
+		files[item] = true
+	}
+	return files, nil
 }
 
 func validateReportPaths(runDir string, root map[string]json.RawMessage, markdownRel, jsonRel string) error {
@@ -278,7 +317,7 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	if err != nil {
 		return fmt.Errorf("%s.%w", prefix, err)
 	}
-	if err := validateAffectedPaths(prefix, affectedPaths); err != nil {
+	if err := validateAffectedPaths(prefix, affectedPaths, state.WorkspaceFiles); err != nil {
 		return err
 	}
 	if bucket == "proven" && len(evidencePaths) == 0 {
@@ -321,7 +360,7 @@ func citesValidationProofEvidence(findingID string, verdict VerdictRecord, evide
 	return false
 }
 
-func validateAffectedPaths(prefix string, paths []string) error {
+func validateAffectedPaths(prefix string, paths []string, workspaceFiles map[string]bool) error {
 	for i, path := range paths {
 		itemPrefix := fmt.Sprintf("%s.affected_paths[%d]", prefix, i)
 		if strings.TrimSpace(path) == "" {
@@ -345,6 +384,9 @@ func validateAffectedPaths(prefix string, paths []string) error {
 		}
 		if clean != path {
 			return fmt.Errorf("%s = %q, want clean relative path %q", itemPrefix, path, clean)
+		}
+		if workspaceFiles != nil && !workspaceFiles[path] {
+			return fmt.Errorf("%s = %q was not found in the runner workspace manifest", itemPrefix, path)
 		}
 	}
 	return nil

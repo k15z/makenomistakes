@@ -1092,6 +1092,131 @@ func TestReportFinalizeRejectsInvalidAffectedPaths(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsAffectedPathMissingFromWorkspaceManifest(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeAndRegisterRunnerManifestForTest(t, runDir, map[string]any{
+		"run_id":          "run_test",
+		"workspace":       "/workspace",
+		"workspace_files": []string{"server/auth.go"},
+	})
+
+	err := finalizeReportWithAffectedPathForTest(t, runDir, "server/missing.go")
+	if err == nil {
+		t.Fatal("expected missing affected path error")
+	}
+	if !strings.Contains(err.Error(), `affected_paths[0] = "server/missing.go" was not found in the runner workspace manifest`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with affected path outside workspace manifest should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsChangedRunnerManifest(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeAndRegisterRunnerManifestForTest(t, runDir, map[string]any{
+		"run_id":          "run_test",
+		"workspace":       "/workspace",
+		"workspace_files": []string{"server/auth.go"},
+	})
+	if err := writeJSON(filepath.Join(runDir, "evidence", "runner-manifest.json"), map[string]any{
+		"run_id":          "run_test",
+		"workspace":       "/workspace",
+		"workspace_files": []string{"server/missing.go"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := finalizeReportWithAffectedPathForTest(t, runDir, "server/missing.go")
+	if err == nil {
+		t.Fatal("expected changed runner manifest error")
+	}
+	if !strings.Contains(err.Error(), "registered runner manifest is unusable") ||
+		!strings.Contains(err.Error(), "changed after registration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with changed runner manifest should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsMalformedRunnerManifest(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeAndRegisterRunnerManifestForTest(t, runDir, map[string]any{
+		"run_id":    "run_test",
+		"workspace": "/workspace",
+	})
+
+	err := finalizeReportWithAffectedPathForTest(t, runDir, "server/auth.go")
+	if err == nil {
+		t.Fatal("expected malformed runner manifest error")
+	}
+	if !strings.Contains(err.Error(), "runner manifest workspace_files is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with malformed runner manifest should not be finalized")
+	}
+}
+
+func finalizeReportWithAffectedPathForTest(t *testing.T, runDir, affectedPath string) error {
+	t.Helper()
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\nEvidence: "+proofRel+"\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "Traceable finding with an invented affected path.",
+			"affected_paths": []string{affectedPath},
+		},
+	}))
+
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
+	var stdout, stderr bytes.Buffer
+	return run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+}
+
+func writeAndRegisterRunnerManifestForTest(t *testing.T, runDir string, manifest map[string]any) {
+	t.Helper()
+	if err := writeJSON(filepath.Join(runDir, "evidence", "runner-manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registerRunnerEvidence(runDir, "run_test", "json", "Runner lifecycle manifest", "evidence/runner-manifest.json", false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReportFinalizeSkipsWorkspaceManifestCheckForLegacyRuns(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+
+	err := finalizeReportWithAffectedPathForTest(t, runDir, "server/missing.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ledgerReportFinalized(runDir) {
+		t.Fatal("legacy report without runner manifest should still finalize")
+	}
+}
+
 func TestReportFinalizeRejectsFindingMetadataMismatch(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
