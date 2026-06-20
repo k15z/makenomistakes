@@ -4,31 +4,30 @@
 
 Build `mnm` as a single Go CLI for local, resumable audits. Users run
 `mnm init` to create `mnm.toml`, then `mnm analyze` to snapshot the workspace,
-launch a disposable Lima/QEMU VM, and run the entire audit pipeline inside that
-VM.
+and execute the audit pipeline through disposable Lima/QEMU task VMs.
 
 Every audit phase, from Recon through Finalize, is performed by one or more
-non-interactive `opencode` instances running inside the VM. The host never runs
-`opencode`. The host only manages config, snapshots, VM lifecycle, state
-ingestion, and local report access.
+non-interactive `opencode` instances running inside task-scoped VMs. The host
+never runs `opencode`. The host only manages config, snapshots, task scheduling,
+VM lifecycle, output ingestion, and local report access.
 
-The `mnm` binary is injected into the VM and used by `opencode` as the
+The `mnm` binary is injected into each task VM and used by `opencode` as the
 structured audit ledger interface. Agents do not write durable audit state
 freehand; they call `mnm` commands that validate schemas and append normalized
-events.
+events into a task output bundle that the host validates and ingests.
 
 ## Key Components
 
 - CLI commands:
   - `mnm init`: create `mnm.toml` and `.mnmignore`.
-  - `mnm analyze`: read config, create/resume a run, launch VM, execute the
-    pipeline, and collect results.
+  - `mnm analyze`: read config, create/resume a run, schedule task VMs, execute
+    the pipeline, and collect results.
   - `mnm analyze --resume <run_id>`: resume an incomplete run from its saved
     snapshot, config snapshot, ledger, and evidence.
   - `mnm analyze --prepare-only`: create config snapshot, workspace snapshot,
     and run state without launching a VM.
-  - `mnm analyze --keep-vm`: stop but do not delete the Lima VM after the runner
-    exits, for local debugging.
+  - `mnm analyze --keep-vm`: keep task VMs after failure or checkpointed stop,
+    for local debugging.
   - `mnm analyze --stop-after <phase>`: run through a completed phase
     (`recon`, `investigate`, `review`, `deduplicate`, or `validate`), checkpoint
     the run as `stopped`, and resume later.
@@ -36,46 +35,56 @@ events.
     run directories for resume and report lookup.
   - `mnm report show <run_id>`: print the latest finalized Markdown or JSON
     report for a local run.
-  - `mnm runner`: hidden VM-side runner entrypoint.
+  - `mnm runner`: hidden task VM runner entrypoint.
   - `mnm task`, `mnm lead`, `mnm finding`, `mnm evidence`, `mnm verdict`, and
-    `mnm report`: VM-side ledger commands used by `opencode`.
+    `mnm report`: ledger commands used by `opencode` inside task VMs.
 - Host responsibilities:
   - Validate `mnm.toml`, model environment variables, Lima/QEMU, disk, CPU, and
     RAM.
-  - Preflight local runner tooling and host resources before creating run state
-    for VM-backed execution.
+  - Preflight local runner tooling and aggregate host resources before creating
+    run state for VM-backed execution.
   - Create `.mnm/` and host-owned SQLite state.
   - Build an immutable workspace snapshot.
-  - Start one fresh Lima VM per audit run.
-  - Inject the matching `mnm` binary, runner config, schemas, prompts, and
-    pinned `opencode` bootstrap into the VM.
-  - Ingest JSONL events and evidence manifests after or during execution.
-  - Render final Markdown and JSON reports from validated ledger state.
-- VM runner responsibilities:
+  - Write `evidence/runner-manifest.json` from the captured snapshot before the
+    first task is scheduled.
+  - Schedule phase tasks from the validated ledger state.
+  - Start one fresh Lima/QEMU VM per task attempt; parallel phases start
+    parallel VMs up to `runner.parallel_tasks`.
+  - Inject the matching `mnm` binary, task file, config snapshot, workspace
+    snapshot, relevant run context, and pinned `opencode` bootstrap into each
+    task VM.
+  - Copy back each task VM's output bundle, validate its JSONL events and
+    evidence, and atomically ingest it into the central run ledger.
+  - Delete each task VM after its output bundle is collected unless debugging
+    options require keeping it.
+  - Expose finalized Markdown and JSON reports from validated ledger state.
+- Task VM runner responsibilities:
   - Bootstrap pinned `opencode`.
   - Unpack the workspace snapshot into `/workspace`.
-  - Write `evidence/runner-manifest.json` with the captured workspace file list
-    before Recon begins.
-  - Orchestrate every phase by invoking `opencode run --format json`.
-  - Provide each `opencode` instance with phase prompt, scope, prior ledger state,
+  - Restore the task file, config snapshot, current ledger snapshot, and
+    evidence files needed by that task.
+  - Invoke exactly one `opencode run --format json` task attempt.
+  - Provide the `opencode` instance with phase prompt, scope, prior ledger state,
     and required `mnm` output commands.
   - Time-box each `opencode` task attempt and terminate its process group on
     timeout so hung proof commands do not consume the whole run deadline.
   - Reject malformed outputs through `mnm` schema validation.
   - Run validation commands, Docker/Compose, dev servers, tests, and proof of
-    concept scripts inside the VM only.
-  - Isolate each `opencode` task attempt in its own process group and terminate
-    leftover child processes before the next task starts.
-  - Write events and evidence files to mounted `.mnm/runs/<run_id>/`.
-  - Record `evidence/runner-failure.json` and a `runner.failed` event when the
-    VM-side pipeline exits before completion.
-  - Shut down the VM after completion or checkpointed stop.
+    concept scripts inside the task VM only.
+  - Isolate the `opencode` process group and terminate leftover child processes
+    before the task VM exits.
+  - Write task-local JSONL events, evidence files, transcripts, and diagnostics
+    to an output bundle for host ingestion.
+  - Record `runner-failure.json` in the task output bundle and emit a
+    `runner.failed` event when the task VM exits before completion.
+  - Never write host SQLite or the central run event stream directly.
 
 ## Ledger Model
 
 - `Run`: one execution of `mnm analyze` against one immutable workspace
   snapshot.
-- `Task`: one scheduled unit of work for a single `opencode` instance.
+- `Task`: one scheduled unit of work for a single `opencode` instance in a
+  disposable task VM.
 - `Lead`: a question, risk area, or suspected path worth investigating.
 - `Finding`: a possible defect or vulnerability that may survive review,
   deduplication, and validation.
@@ -85,7 +94,7 @@ events.
   duplicate, validation proven, validation failed, or validation inconclusive.
 - `Report`: the final human-readable and machine-readable audit output.
 
-## VM-Side Command Contract
+## Task VM Command Contract
 
 - `mnm task current`: show the current scheduled task and required output
   contract.
@@ -102,27 +111,27 @@ events.
   finding.
 - `mnm report finalize`: register the final Markdown and JSON reports.
 
-Only these VM-side commands append durable ledger events. Direct files created
-by `opencode` are scratch files until they are registered through
-`mnm evidence add` or `mnm report finalize`.
+Only these task VM commands emit task-local ledger events eligible for host
+validation and ingestion. Direct files created by `opencode` are scratch files
+until they are registered through `mnm evidence add` or `mnm report finalize`.
 
 ## Audit Pipeline
 
 - `Recon`: inspect `/workspace` and produce a codebase map, scope
   interpretation, risk register, and leads through `mnm evidence add` and
   `mnm lead create`.
-- `Investigate`: run one `opencode` instance per lead with bounded parallelism.
-  Each task must close the lead, create follow-up leads, or create findings
-  through `mnm lead close`, `mnm lead create`, and `mnm finding create`.
-- `Review`: run one `opencode` instance per candidate finding. Each task records
-  a review verdict through `mnm verdict record`.
-- `Deduplicate`: cluster reviewed findings and record canonical or duplicate
-  verdicts through `mnm verdict record`.
-- `Validate`: run one `opencode` instance per canonical reviewed finding. Each
-  task attempts end-to-end reproduction or exploitation inside the VM and must
-  record a validation verdict through `mnm verdict record`.
-- `Finalize`: run a final `opencode` instance that consumes the ledger and
-  evidence files, then calls `mnm report finalize`.
+- `Investigate`: run one task VM per lead with bounded parallelism. Each task
+  must close the lead, create follow-up leads, or create findings through
+  `mnm lead close`, `mnm lead create`, and `mnm finding create`.
+- `Review`: run one task VM per candidate finding. Each task records a review
+  verdict through `mnm verdict record`.
+- `Deduplicate`: run a task VM that clusters reviewed findings and records
+  canonical or duplicate verdicts through `mnm verdict record`.
+- `Validate`: run one task VM per canonical reviewed finding. Each task attempts
+  end-to-end reproduction or exploitation inside its VM and must record a
+  validation verdict through `mnm verdict record`.
+- `Finalize`: run a final task VM that consumes the ledger and evidence files,
+  then calls `mnm report finalize`.
 
 ## Configuration
 
@@ -161,20 +170,29 @@ max_investigations = 24
 parallel_tasks = 2
 ```
 
+`cpus`, `memory_gb`, and `disk_gb` are per-task VM requests. `parallel_tasks`
+controls the maximum number of task VMs that may run at once; host preflight
+checks the aggregate CPU, memory, and disk demand for that maximum local
+parallelism.
+
 ## Local State
 
 - `.mnm/mnm.sqlite`: host-owned indexed state.
 - `.mnm/runs/<run_id>/snapshot.tar.zst`: immutable workspace snapshot.
 - `.mnm/runs/<run_id>/events.jsonl`: append-only validated event stream.
+- `.mnm/runs/<run_id>/task-bundles/`: staged per-task output bundles copied
+  back from task VMs before host ingestion.
 - `.mnm/runs/<run_id>/evidence/`: logs, phase outputs, proof of concept files,
   screenshots, and validation bundles.
-- `.mnm/runs/<run_id>/evidence/runner-failure.json`: structured diagnostics
-  for VM-side bootstrap or phase failures.
+- `.mnm/runs/<run_id>/task-bundles/<task_id>/runner-failure.json`: structured
+  diagnostics for task VM bootstrap or phase failures before ingestion.
 - `.mnm/runs/<run_id>/report.md`
 - `.mnm/runs/<run_id>/report.json`
 
-SQLite is host-owned. The VM never writes directly to SQLite. VM-to-host state
-sync uses mounted evidence files plus append-only JSONL events.
+SQLite is host-owned. Task VMs never write directly to SQLite or the central
+`events.jsonl`. VM-to-host state sync uses staged task bundles containing JSONL
+events, evidence files, transcripts, and diagnostics; the host validates and
+ingests each bundle atomically.
 
 ## Statuses
 
@@ -217,41 +235,50 @@ Finding statuses:
   environment variables are missing.
 - Host snapshot excludes `.mnm`, `.git`, dependency/cache folders, and
   `.mnmignore` entries.
-- Host starts a fresh Lima VM, injects `mnm`, bootstraps VM-side `opencode`, and
-  receives validated events.
-- Every pipeline phase is verified to run through VM-side `opencode`; tests fail
-  if any phase executes `opencode` on the host.
-- VM-side `mnm` rejects malformed leads, findings, verdicts, invalid status
-  transitions, missing references, whitespace-only command fields, empty
-  registered artifacts, ambiguous evidence ownership, and evidence paths outside
-  the run directory after symlink resolution.
-- VM-side `mnm lead create`, `mnm lead close`, and `mnm finding create` reject
-  attempts from current task phases that are not allowed to perform that
+- Host starts a fresh Lima task VM for each task attempt, injects `mnm`,
+  bootstraps `opencode` inside it, collects an output bundle, and ingests
+  validated events.
+- Parallel phases start no more than `runner.parallel_tasks` task VMs at once,
+  and host preflight checks aggregate local resources for that maximum.
+- Every pipeline phase is verified to run `opencode` inside task VMs; tests fail
+  if any phase executes `opencode` on the host or if distinct tasks share a VM
+  instance.
+- `mnm` inside task VMs rejects malformed leads, findings, verdicts, invalid
+  status transitions, missing references, whitespace-only command fields, empty
+  registered artifacts, ambiguous evidence ownership, and evidence paths
+  outside the task output bundle's evidence root after symlink resolution.
+- `mnm lead create`, `mnm lead close`, and `mnm finding create` inside task VMs
+  reject attempts from current task phases that are not allowed to perform that
   lifecycle action.
-- VM-side `mnm evidence add` rejects owner/phase mismatches: only Recon and
-  Deduplicate can register unowned evidence, only Investigate can attach
+- `mnm evidence add` inside task VMs rejects owner/phase mismatches: only Recon
+  and Deduplicate can register unowned evidence, only Investigate can attach
   evidence to leads, and only Investigate, Review, and Validate can attach
   evidence to findings.
-- VM-side `mnm verdict record` rejects attempts to record a Review,
+- `mnm verdict record` inside task VMs rejects attempts to record a Review,
   Deduplicate, or Validate verdict from any other current task phase.
-- VM-side `mnm report finalize` rejects attempts from any current task phase
+- `mnm report finalize` inside task VMs rejects attempts from any current task phase
   other than Finalize.
-- VM-side `mnm verdict record` is idempotent for repeated identical decisions
-  and rejects conflicting verdict rewrites for the same finding and phase.
-- VM-side `mnm lead create` is idempotent for repeated identical task/body
+- `mnm verdict record` inside task VMs is idempotent for repeated identical
+  decisions and rejects conflicting verdict rewrites for the same finding and
+  phase.
+- `mnm lead create` inside task VMs is idempotent for repeated identical task/body
   registrations and rejects conflicting metadata for the same task/body path.
-- VM-side `mnm evidence add` is idempotent for repeated identical
+- `mnm evidence add` inside task VMs is idempotent for repeated identical
   task/path/owner registrations, can associate the same artifact with both a
   lead and a finding, and rejects conflicting metadata for the same
   task/path/owner.
-- VM-side `mnm task complete` is idempotent for repeated identical terminal
+- `mnm task complete` inside task VMs is idempotent for repeated identical terminal
   status and rejects conflicting task completion status rewrites.
-- VM-side `mnm report finalize` is idempotent for repeated identical report
-  paths and rejects conflicting final report path rewrites for the same task.
+- `mnm report finalize` inside task VMs is idempotent for repeated identical
+  report paths and rejects conflicting final report path rewrites for the same
+  task.
 - Runner-owned lifecycle and failure evidence is idempotent for repeated
   identical run/path registrations.
-- OpenCode task attempts have a configurable per-attempt timeout, do not retry
-  after that local timeout, and clean up child processes before the next task.
+- `opencode` task attempts have a configurable per-attempt timeout, do not retry
+  after that local timeout, and clean up child processes before the task VM is
+  deleted.
+- Task VM bundles are rejected unless their event stream, evidence paths,
+  current task identity, and terminal task status match the scheduled task.
 - Ledger reads reject malformed event envelopes, unknown event types, event
   type/object mismatches, missing required event data fields, and invalid event
   data enum values before downstream phases consume state.
@@ -275,13 +302,13 @@ Finding statuses:
   required validation notes.
 - Interrupted runs checkpoint to `stopped`; rerunning
   `mnm analyze --resume <run_id>` resumes incomplete tasks.
-- `mnm analyze --stop-after recon` completes Recon through the real VM/OpenCode
-  path, copies back registered map/risk/lead artifacts, marks the run
-  `stopped`, and can later resume into Investigate.
+- `mnm analyze --stop-after recon` completes Recon through the real task
+  VM/`opencode` path, copies back registered map/risk/lead artifacts, marks the
+  run `stopped`, and can later resume into Investigate.
 - Fixture repos cover clean, vulnerable, duplicate-finding,
   malformed-agent-output, and broken-dev-environment cases.
 - A manual acceptance fixture under `examples/vulnerable-workspace` exercises a
-  multi-repo workspace through the real Lima/OpenCode runner and fails unless
+  multi-repo workspace through the real Lima/`opencode` runner and fails unless
   the final structured report contains at least one proven file-access finding
   with evidence.
 - Final reports include proven, inconclusive, failed, rejected, and duplicate
@@ -327,31 +354,31 @@ and pass GitHub Actions before later work builds on it.
    - Parse `mnm.toml`, create `.mnm/`, define run metadata, and persist
      host-owned state.
 3. Ledger core:
-   - Implement JSONL events and VM-side `mnm task`, `lead`, `finding`,
+   - Implement JSONL events and task VM `mnm task`, `lead`, `finding`,
      `evidence`, `verdict`, and `report` command contracts.
 4. Snapshotter:
    - Build immutable workspace snapshots with `.mnmignore`, default excludes,
      symlink safety, and tests.
-5. Lima runner lifecycle:
-   - Create a fresh VM per run, inject the Linux `mnm` runner payload, copy
-     inputs, collect outputs, and shut the VM down.
-6. VM-side `opencode` bootstrap:
-   - Install or unpack pinned `opencode` inside the VM and verify the host does
-     not need local `opencode`.
+5. Task VM lifecycle:
+   - Create a fresh VM per task attempt, inject the Linux `mnm` runner payload,
+     copy inputs, collect the output bundle, and shut the VM down.
+6. Task VM `opencode` bootstrap and task runner:
+   - Install or unpack pinned `opencode` inside the task VM and verify the host
+     does not need local `opencode`.
 7. Recon phase:
-   - Run Recon through VM-side `opencode`, require ledger writes through `mnm`,
-     and generate codebase map, risk register, and leads.
+   - Run Recon through `opencode` inside a task VM, require ledger writes
+     through `mnm`, and generate codebase map, risk register, and leads.
 8. Investigate phase:
-   - Run one OpenCode task per lead, allow follow-up leads, promote concrete
-     findings, and cap investigation growth.
+   - Run one task VM per lead, allow follow-up leads, promote concrete findings,
+     and cap investigation growth.
 9. Review phase:
-   - Run one skeptical OpenCode task per candidate finding and record accepted
-     or rejected review verdicts.
+   - Run one skeptical task VM per candidate finding and record accepted or
+     rejected review verdicts.
 10. Deduplicate phase:
    - Cluster review-accepted findings and record canonical or duplicate
      verdicts with structured canonical finding references.
 11. Validate phase:
-   - Run a heavier VM-side reproduction or exploit attempt for each canonical
+   - Run a heavier task-VM reproduction or exploit attempt for each canonical
      finding and record proven, failed, or inconclusive verdicts.
 12. Finalize phase:
    - Render final Markdown and JSON reports from the ledger and evidence, then
