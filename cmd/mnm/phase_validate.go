@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,12 +14,19 @@ func runValidatePhase(runDir, runID, workspace string, cfg Config, opencodePath 
 }
 
 func runValidatePhaseWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	return runValidatePhaseWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner)
+}
+
+func runValidatePhaseWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	findings, err := unvalidatedCanonicalFindings(runDir)
 	if err != nil {
 		return err
 	}
 	for _, finding := range findings {
-		if err := runValidateTaskWithAttemptRunner(runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
+		if err := runValidateTaskWithAttemptRunnerContext(ctx, runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
 			return err
 		}
 	}
@@ -30,6 +38,13 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 }
 
 func runValidateTaskWithAttemptRunner(runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, finding FindingRecord) error {
+	return runValidateTaskWithAttemptRunnerContext(context.Background(), runDir, runID, workspace, cfg, attemptRunner, finding)
+}
+
+func runValidateTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, finding FindingRecord) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	safeFindingID := safeFileID(finding.ID)
 	task := TaskRecord{
 		RunID:       runID,
@@ -78,7 +93,7 @@ func runValidateTaskWithAttemptRunner(runDir, runID, workspace string, cfg Confi
 	logRel := filepath.ToSlash(filepath.Join("evidence", "opencode-validate-"+safeFindingID+".jsonl"))
 	logPath := filepath.Join(runDir, filepath.FromSlash(logRel))
 	notesRel := validationNotesRelPath(finding.ID)
-	if err := runOpenCodeTaskWithAttemptRunner(attemptRunner, taskWorkspace, runDir, opencodeTask{
+	if err := runOpenCodeTaskWithAttemptRunnerContext(ctx, attemptRunner, taskWorkspace, runDir, opencodeTask{
 		RunID:     runID,
 		TaskID:    task.TaskID,
 		Phase:     task.Phase,
