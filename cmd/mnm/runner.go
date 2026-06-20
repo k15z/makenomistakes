@@ -504,6 +504,18 @@ type openCodeAttemptResult struct {
 }
 
 func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+	taskRunDir := runDir
+	taskFile := task.TaskFile
+	prompt := task.Prompt
+	if task.usesTaskBundle() {
+		outputDir, preparedTaskFile, err := prepareOpenCodeTaskBundleAttempt(runDir, task, attempt)
+		if err != nil {
+			return openCodeAttemptResult{}, err
+		}
+		taskRunDir = outputDir
+		taskFile = preparedTaskFile
+		prompt = taskBundlePrompt(task.Prompt, runDir, outputDir)
+	}
 	flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	var logOffset int64
 	if attempt > 1 {
@@ -512,7 +524,7 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 			logOffset = info.Size()
 		}
 	}
-	ledgerOffset, err := fileSize(filepath.Join(runDir, eventsFile))
+	ledgerOffset, err := fileSize(filepath.Join(taskRunDir, eventsFile))
 	if err != nil {
 		return openCodeAttemptResult{}, err
 	}
@@ -527,23 +539,26 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 		"--model", task.Model,
 		"--title", task.Title,
 		"--dangerously-skip-permissions",
-		task.Prompt,
+		prompt,
 	)
 	isolateCommandProcessGroup(command)
 	env := append(os.Environ(),
-		"MNM_RUN_DIR="+runDir,
+		"MNM_RUN_DIR="+taskRunDir,
 		"MNM_TASK_ID="+task.TaskID,
 		"MNM_PHASE="+task.Phase,
 		"PATH=/tmp:"+os.Getenv("PATH"),
 	)
+	if task.usesTaskBundle() {
+		env = append(env, ledgerDirEnv+"="+runDir)
+	}
 	if task.LeadID != "" {
 		env = append(env, "MNM_LEAD_ID="+task.LeadID)
 	}
 	if task.FindingID != "" {
 		env = append(env, "MNM_FINDING_ID="+task.FindingID)
 	}
-	if task.TaskFile != "" {
-		env = append(env, taskFileEnv+"="+task.TaskFile)
+	if taskFile != "" {
+		env = append(env, taskFileEnv+"="+taskFile)
 	}
 	command.Env = env
 	command.Stdout = logFile
@@ -562,13 +577,21 @@ func runOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencod
 	}
 	result := openCodeAttemptResult{
 		logText:        readLogSuffix(task.LogPath, logOffset),
-		ledgerModified: fileModifiedSince(filepath.Join(runDir, eventsFile), ledgerOffset),
+		ledgerModified: fileModifiedSince(filepath.Join(taskRunDir, eventsFile), ledgerOffset),
 	}
 	if runErr != nil {
 		return result, openCodeAttemptError{
 			err:            runErr,
 			logText:        result.logText,
 			ledgerModified: result.ledgerModified,
+		}
+	}
+	if task.usesTaskBundle() {
+		if err := ingestTaskBundle(runDir, task.taskRecord(), taskRunDir); err != nil {
+			return result, retryableOpenCodePostconditionError{
+				err:            err,
+				ledgerModified: result.ledgerModified,
+			}
 		}
 	}
 	return result, nil
@@ -613,6 +636,79 @@ func fileSize(path string) (int64, error) {
 func fileModifiedSince(path string, previousSize int64) bool {
 	currentSize, err := fileSize(path)
 	return err != nil || currentSize != previousSize
+}
+
+func (task opencodeTask) usesTaskBundle() bool {
+	return task.TaskFile != "" && task.RunID != "" && task.TaskID != "" && task.Phase != ""
+}
+
+func (task opencodeTask) taskRecord() TaskRecord {
+	return TaskRecord{
+		RunID:  task.RunID,
+		TaskID: task.TaskID,
+		Phase:  task.Phase,
+	}
+}
+
+func prepareOpenCodeTaskBundleAttempt(runDir string, task opencodeTask, attempt int) (string, string, error) {
+	outputDir := filepath.Join(runDir, taskBundlesDir, safeFileID(task.TaskID), fmt.Sprintf("attempt-%d", attempt))
+	if err := os.RemoveAll(outputDir); err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(filepath.Join(outputDir, "evidence"), dirPerm); err != nil {
+		return "", "", err
+	}
+	if err := copyRunContextForTaskBundle(runDir, outputDir); err != nil {
+		return "", "", err
+	}
+	taskFile := filepath.Join(outputDir, currentTaskFile)
+	if err := copyFile(task.TaskFile, taskFile); err != nil {
+		return "", "", err
+	}
+	_ = os.Remove(filepath.Join(outputDir, eventsFile))
+	_ = os.Remove(filepath.Join(outputDir, ".events.lock"))
+	return outputDir, taskFile, nil
+}
+
+func copyRunContextForTaskBundle(runDir, outputDir string) error {
+	for _, relDir := range []string{"evidence"} {
+		source := filepath.Join(runDir, relDir)
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyDirContents(source, filepath.Join(outputDir, relDir)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func taskBundlePrompt(prompt, runDir, outputDir string) string {
+	return fmt.Sprintf(`Task output directory: %[1]s
+Ledger snapshot directory: %[2]s
+
+Write new durable artifacts under the task output directory. The injected mnm CLI reads prior ledger state from the ledger snapshot and appends this task's events only to the task output directory.
+
+%[3]s`, outputDir, runDir, rewriteTaskBundlePromptPaths(prompt, runDir, outputDir))
+}
+
+func rewriteTaskBundlePromptPaths(prompt, runDir, outputDir string) string {
+	const ledgerPlaceholder = "__MNM_LEDGER_EVENTS_PATH__"
+	ledgerPaths := []string{
+		filepath.Join(runDir, eventsFile),
+		filepath.ToSlash(filepath.Join(runDir, eventsFile)),
+	}
+	rewritten := prompt
+	for _, ledgerPath := range ledgerPaths {
+		rewritten = strings.ReplaceAll(rewritten, ledgerPath, ledgerPlaceholder)
+	}
+	rewritten = strings.ReplaceAll(rewritten, runDir, outputDir)
+	for _, ledgerPath := range ledgerPaths {
+		rewritten = strings.ReplaceAll(rewritten, ledgerPlaceholder, ledgerPath)
+	}
+	return rewritten
 }
 
 func runOpenCodeCommand(command *exec.Cmd, task opencodeTask) error {

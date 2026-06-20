@@ -104,7 +104,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected invalid direct report event to fail")
 	}
-	if !strings.Contains(err.Error(), "failed validation") {
+	if !strings.Contains(err.Error(), "validate task bundle report report_fake") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -151,8 +151,8 @@ func TestRunFinalizeTaskValidatesCompletedExistingFinalizedReport(t *testing.T) 
 
 func TestRunFinalizeTaskIgnoresReportsFromOtherTasks(t *testing.T) {
 	runDir := newLedgerTestRun(t)
-	writeRunFile(t, runDir, "report.md", "# Wrong Report")
-	writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_finalize", "report.md", "report.json", nil))
+	writeRunFile(t, runDir, "other-report.md", "# Wrong Report")
+	writeRunFile(t, runDir, "other-report.json", validReportJSON(t, "run_finalize", "other-report.md", "other-report.json", nil))
 	if err := appendLedgerEvent(runDir, LedgerEvent{
 		RunID:    "run_finalize",
 		Type:     "report.finalized",
@@ -160,8 +160,8 @@ func TestRunFinalizeTaskIgnoresReportsFromOtherTasks(t *testing.T) {
 		ObjectID: "report_other",
 		TaskID:   "task_other",
 		Data: map[string]any{
-			"markdown_path": "report.md",
-			"json_path":     "report.json",
+			"markdown_path": "other-report.md",
+			"json_path":     "other-report.json",
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -170,11 +170,11 @@ func TestRunFinalizeTaskIgnoresReportsFromOtherTasks(t *testing.T) {
 		RunID:    "run_finalize",
 		Type:     "task.completed",
 		Object:   "task",
-		ObjectID: "task_finalize",
-		TaskID:   "task_finalize",
+		ObjectID: "task_other",
+		TaskID:   "task_other",
 		Data: map[string]any{
 			"status":  "completed",
-			"summary": "done",
+			"summary": "other task done",
 		},
 	}); err != nil {
 		t.Fatal(err)

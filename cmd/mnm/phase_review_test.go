@@ -205,7 +205,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing review evidence file error")
 	}
-	if !strings.Contains(err.Error(), "read evidence file evidence/review-finding_auth-notes.md") {
+	if !strings.Contains(err.Error(), "artifact evidence/review-finding_auth-notes.md") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -244,7 +244,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected blank review evidence error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/review-finding_auth-notes.md must not be empty") {
+	if !strings.Contains(err.Error(), "whitespace-only") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

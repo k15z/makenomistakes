@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath string) error {
@@ -18,6 +19,10 @@ func runFinalizeTask(runDir, runID, workspace string, cfg Config, opencodePath s
 		return err
 	} else if ok && ledgerTaskCompleted(runDir, task.TaskID) {
 		return validateFinalizedReport(runDir, task, report)
+	} else if ok {
+		if err := removeIncompleteFinalizeArtifacts(runDir, report); err != nil {
+			return err
+		}
 	}
 	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
 	if err := writeTaskFile(taskPath, task); err != nil {
@@ -115,6 +120,25 @@ func validateFinalizedReport(runDir string, task TaskRecord, report ReportRecord
 	}
 	if err := validateReportArtifacts(runDir, task, report.MarkdownPath, report.JSONPath); err != nil {
 		return fmt.Errorf("finalized report %s failed validation: %w", report.ID, err)
+	}
+	return nil
+}
+
+func removeIncompleteFinalizeArtifacts(runDir string, report ReportRecord) error {
+	for _, relPath := range []string{report.MarkdownPath, report.JSONPath} {
+		if strings.TrimSpace(relPath) == "" {
+			continue
+		}
+		if err := validateTaskBundleRelPath(relPath); err != nil {
+			continue
+		}
+		path, err := taskBundleArtifactTargetPath(runDir, relPath)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove incomplete finalize artifact %s: %w", relPath, err)
+		}
 	}
 	return nil
 }

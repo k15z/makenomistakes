@@ -218,7 +218,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected stale proof evidence hash error")
 	}
-	if !strings.Contains(err.Error(), "evidence file evidence/validate-finding_auth-proof.log changed after registration") {
+	if !strings.Contains(err.Error(), "content_sha256") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -291,7 +291,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected missing validation evidence file error")
 	}
-	if !strings.Contains(err.Error(), "read validation evidence evidence/validate-finding_auth-notes.md") {
+	if !strings.Contains(err.Error(), "artifact evidence/validate-finding_auth-notes.md") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -329,7 +329,7 @@ printf '{"type":"done"}\n'
 	if err == nil {
 		t.Fatal("expected blank validation evidence error")
 	}
-	if !strings.Contains(err.Error(), "validation evidence evidence/validate-finding_auth-notes.md must not be empty") {
+	if !strings.Contains(err.Error(), "whitespace-only") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
