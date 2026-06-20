@@ -2611,7 +2611,7 @@ func TestEvidenceAddRejectsChangedContentForSameTaskPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected changed evidence content error")
 	}
-	if !strings.Contains(err.Error(), "already registered evidence path evidence/proof.log with different metadata or content") {
+	if !strings.Contains(err.Error(), "evidence path evidence/proof.log is already registered with different content") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)

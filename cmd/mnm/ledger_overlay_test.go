@@ -102,6 +102,78 @@ func TestLedgerOverlayReadsSnapshotAndWritesTaskOutput(t *testing.T) {
 	}
 }
 
+func TestLedgerOverlayRejectsChangedPriorEvidencePath(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_overlay",
+		TaskID: "task_validate_finding_auth",
+		Phase:  "validate",
+	}
+	writeRunFile(t, ledgerDir, "evidence/finding-auth.md", "# Finding\n")
+	writeRunFile(t, ledgerDir, "evidence/proof.log", "original proof\n")
+	if err := appendLedgerEvent(ledgerDir, LedgerEvent{
+		ID:        "event_finding",
+		RunID:     task.RunID,
+		Type:      "finding.created",
+		Object:    "finding",
+		ObjectID:  "finding_auth",
+		TaskID:    "task_investigate_lead_auth",
+		Timestamp: "2026-01-01T00:00:00Z",
+		Data: map[string]any{
+			"title":      "Auth bypass",
+			"category":   "security",
+			"severity":   "high",
+			"confidence": "high",
+			"lead_id":    "lead_auth",
+			"body_path":  "evidence/finding-auth.md",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(ledgerDir, LedgerEvent{
+		ID:        "event_prior_evidence",
+		RunID:     task.RunID,
+		Type:      "evidence.added",
+		Object:    "evidence",
+		ObjectID:  "evidence_prior",
+		TaskID:    "task_investigate_lead_auth",
+		Timestamp: "2026-01-01T00:00:01Z",
+		Data: map[string]any{
+			"kind":           "log",
+			"title":          "Prior proof",
+			"path":           "evidence/proof.log",
+			"lead_id":        "",
+			"finding_id":     "finding_auth",
+			"content_sha256": runFileSHA256ForTest(t, ledgerDir, "evidence/proof.log"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTaskFile(filepath.Join(outputDir, currentTaskFile), task); err != nil {
+		t.Fatal(err)
+	}
+	writeRunFile(t, outputDir, "evidence/proof.log", "fresh validation proof\n")
+
+	t.Setenv("MNM_RUN_DIR", outputDir)
+	t.Setenv(ledgerDirEnv, ledgerDir)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "add",
+		"--kind", "log",
+		"--title", "Validation proof",
+		"--finding", "finding_auth",
+		"--path", filepath.Join(outputDir, "evidence", "proof.log"),
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected changed prior evidence path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "evidence path evidence/proof.log is already registered with different content") {
+		t.Fatalf("unexpected error: %v\nstderr: %s", err, stderr.String())
+	}
+}
+
 func TestLedgerOverlayCanCloseSnapshotLead(t *testing.T) {
 	ledgerDir := t.TempDir()
 	outputDir := t.TempDir()

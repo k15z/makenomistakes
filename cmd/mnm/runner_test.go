@@ -2187,6 +2187,19 @@ func TestTaskBundlePromptRewritesArtifactsButPreservesLedgerPath(t *testing.T) {
 	}
 }
 
+func TestTaskBundlePromptIncludesShellHygieneGuidance(t *testing.T) {
+	got := taskBundlePromptForDirs("Do the task.", "/tmp/mnm-output", "/tmp/mnm-ledger")
+	for _, want := range []string{
+		"Do not put Markdown backticks inside double-quoted shell arguments",
+		"Avoid broad pkill -f patterns",
+		"Treat any pre-existing evidence files in the task output directory as immutable prior context",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRunOpenCodeTaskCleansProcessGroupChildren(t *testing.T) {
 	if !supportsCommandProcessGroupCleanup() {
 		t.Skip("process group cleanup is not supported on this platform")
