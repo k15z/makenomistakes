@@ -235,8 +235,10 @@ Finding statuses:
   and rejects conflicting verdict rewrites for the same finding and phase.
 - VM-side `mnm lead create` is idempotent for repeated identical task/body
   registrations and rejects conflicting metadata for the same task/body path.
-- VM-side `mnm evidence add` is idempotent for repeated identical task/path
-  registrations and rejects conflicting metadata for the same task/path.
+- VM-side `mnm evidence add` is idempotent for repeated identical
+  task/path/owner registrations, can associate the same artifact with both a
+  lead and a finding, and rejects conflicting metadata for the same
+  task/path/owner.
 - VM-side `mnm task complete` is idempotent for repeated identical terminal
   status and rejects conflicting task completion status rewrites.
 - VM-side `mnm report finalize` is idempotent for repeated identical report

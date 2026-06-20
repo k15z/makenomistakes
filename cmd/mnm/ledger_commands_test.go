@@ -2523,6 +2523,51 @@ func TestEvidenceAddUsesLatestExistingTaskPathRegistration(t *testing.T) {
 	assertEvidenceEventCount(t, runDir, "task_recon", proofRel, 2)
 }
 
+func TestEvidenceAddAllowsSamePathForLeadThenFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proof := writeRunFile(t, runDir, "evidence/shared-proof.log", "proof")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--lead", leadID,
+		"--kind", "log",
+		"--title", "Lead proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("lead evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	leadEvidenceID := strings.TrimSpace(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"evidence", "add",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--kind", "log",
+		"--title", "Finding proof",
+		"--path", proof,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("finding evidence add failed: %v\nstderr: %s", err, stderr.String())
+	}
+	findingEvidenceID := strings.TrimSpace(stdout.String())
+	if findingEvidenceID == leadEvidenceID {
+		t.Fatalf("finding evidence reused lead evidence id %q", findingEvidenceID)
+	}
+
+	if _, ok := ledgerLeadTaskEvidence(runDir, leadID, "task_investigate", "evidence/shared-proof.log"); !ok {
+		t.Fatal("expected proof evidence associated with lead")
+	}
+	if !ledgerFindingHasTaskEvidencePath(runDir, findingID, "task_investigate", "evidence/shared-proof.log") {
+		t.Fatal("expected proof evidence associated with finding")
+	}
+	assertEvidenceEventCount(t, runDir, "task_investigate", "evidence/shared-proof.log", 2)
+}
+
 func TestRegisterTaskEvidenceIsIdempotentForSameMetadata(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	writeRunFile(t, runDir, "evidence/recon-prompt.md", "prompt")
