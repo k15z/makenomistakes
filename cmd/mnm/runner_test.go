@@ -88,6 +88,69 @@ func TestRunnerCommandExtractsSnapshotAndWritesLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerCommandStopsAfterRecon(t *testing.T) {
+	prependFakeOpenCode(t, opencodeVersion+"\n")
+	source := t.TempDir()
+	writeWorkspaceFile(t, source, "repo/app.go", "package main")
+	snapshot := filepath.Join(t.TempDir(), "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: source,
+		WorkspaceDir:  source,
+		OutputPath:    snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runDir := t.TempDir()
+	configPath := filepath.Join(runDir, "mnm.toml")
+	if err := os.WriteFile(configPath, []byte(defaultConfig()), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner",
+		"--run-id", "run_test",
+		"--run-dir", runDir,
+		"--snapshot", snapshot,
+		"--config", configPath,
+		"--stop-after", "recon",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runner failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "runner stopped after recon") {
+		t.Fatalf("stdout missing stop-after message:\n%s", stdout.String())
+	}
+	if !ledgerTaskCompleted(runDir, "task_recon") {
+		t.Fatal("expected recon task to complete")
+	}
+	if ledgerTaskCompleted(runDir, "task_investigate_lead_fake_auth") {
+		t.Fatal("investigate should not run after stop-after recon")
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := eventTypes(events)
+	if !contains(types, "lead.created") {
+		t.Fatalf("expected recon lead in %#v", types)
+	}
+	if !contains(types, "runner.stopped") {
+		t.Fatalf("expected runner.stopped in %#v", types)
+	}
+	if contains(types, "runner.completed") {
+		t.Fatalf("runner.completed should not be written on stop-after recon: %#v", types)
+	}
+	for _, event := range events {
+		if event.Type == "runner.stopped" {
+			if event.ObjectID != "run_test" || event.Data["phase"] != "recon" {
+				t.Fatalf("unexpected runner.stopped event: %#v", event)
+			}
+		}
+	}
+}
+
 func TestEnsureOpenCodeInstallsWhenExistingVersionMismatches(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -394,7 +457,8 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 			SnapshotPath:       snapshot,
 			ConfigSnapshotPath: configPath,
 		},
-		Config: Config{Runner: RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20}},
+		Config:         Config{Runner: RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20}},
+		StopAfterPhase: "recon",
 	})
 	if err != nil {
 		t.Fatalf("runner failed: %v", err)
@@ -408,6 +472,7 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 		"limactl shell mnm-run-abc bash -lc",
 		"command -v rg",
 		"apt-get install -y ripgrep",
+		"--stop-after 'recon'",
 		"limactl stop --tty=false mnm-run-abc",
 		"limactl delete --force --tty=false mnm-run-abc",
 	} {
@@ -581,7 +646,7 @@ func TestLimaRunnerPreflightAcceptsSufficientHostResources(t *testing.T) {
 }
 
 func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
-	command := guestRunnerCommand(RunRecord{ID: "run_quote'value"})
+	command := guestRunnerCommand(RunRecord{ID: "run_quote'value"}, "")
 
 	ripgrepInstall := "apt-get install -y ripgrep"
 	runnerStart := "/tmp/mnm runner --run-id 'run_quote'\\''value'"
@@ -601,6 +666,24 @@ func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 	}
 	if !strings.Contains(command, "ripgrep is required in the audit VM") {
 		t.Fatalf("guest runner command should fail clearly when ripgrep cannot be installed:\n%s", command)
+	}
+	if _, err := exec.LookPath("bash"); err == nil {
+		check := exec.Command("bash", "-n")
+		check.Stdin = strings.NewReader(command)
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("guest runner command has invalid bash syntax: %v\n%s\n%s", err, output, command)
+		}
+	}
+}
+
+func TestGuestRunnerCommandPassesStopAfterPhase(t *testing.T) {
+	command := guestRunnerCommand(RunRecord{ID: "run_checkpoint"}, "recon")
+
+	if !strings.Contains(command, "/tmp/mnm runner --run-id 'run_checkpoint'") {
+		t.Fatalf("guest runner command missing runner invocation:\n%s", command)
+	}
+	if !strings.Contains(command, "--stop-after 'recon'") {
+		t.Fatalf("guest runner command missing stop-after phase:\n%s", command)
 	}
 	if _, err := exec.LookPath("bash"); err == nil {
 		check := exec.Command("bash", "-n")

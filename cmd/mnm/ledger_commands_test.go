@@ -2096,6 +2096,38 @@ func TestReportShowIgnoresStaleRunnerFailureAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestReportShowIgnoresStaleRunnerFailureAfterStopAfter(t *testing.T) {
+	workspace := t.TempDir()
+	runRecord := testRunRecord(workspace, "run_stopped_without_report", RunStatusStopped, nowForTest())
+	if err := os.MkdirAll(runRecord.RunDir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(workspace, ".mnm", "mnm.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateRun(runRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendRunnerFailureForTest(t, runRecord.RunDir, runRecord.ID, "validate", "validation crashed")
+	appendRunnerStoppedForTest(t, runRecord.RunDir, runRecord.ID, "recon")
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{"report", "show", runRecord.ID, workspace}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing finalized report error")
+	}
+	if !strings.Contains(err.Error(), "has no finalized report") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "validation crashed") {
+		t.Fatalf("report show error includes stale runner failure: %v", err)
+	}
+}
+
 func TestTaskCurrentUsesTaskFileEnv(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	task := TaskRecord{

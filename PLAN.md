@@ -29,6 +29,9 @@ events.
     and run state without launching a VM.
   - `mnm analyze --keep-vm`: stop but do not delete the Lima VM after the runner
     exits, for local debugging.
+  - `mnm analyze --stop-after <phase>`: run through a completed phase
+    (`recon`, `investigate`, `review`, `deduplicate`, or `validate`), checkpoint
+    the run as `stopped`, and resume later.
   - `mnm runs`: list local run IDs, statuses, resumability, update times, and
     run directories for resume and report lookup.
   - `mnm report show <run_id>`: print the latest finalized Markdown or JSON
@@ -263,6 +266,9 @@ Finding statuses:
   required validation notes.
 - Interrupted runs checkpoint to `stopped`; rerunning
   `mnm analyze --resume <run_id>` resumes incomplete tasks.
+- `mnm analyze --stop-after recon` completes Recon through the real VM/OpenCode
+  path, copies back registered map/risk/lead artifacts, marks the run
+  `stopped`, and can later resume into Investigate.
 - Fixture repos cover clean, vulnerable, duplicate-finding,
   malformed-agent-output, and broken-dev-environment cases.
 - A manual acceptance fixture under `examples/vulnerable-workspace` exercises a

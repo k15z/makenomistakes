@@ -135,6 +135,78 @@ func TestAnalyzeRunsConfiguredRunnerByDefault(t *testing.T) {
 	}
 }
 
+func TestAnalyzeStopAfterMarksRunStopped(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	runner := &recordingRunner{}
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir:   dir,
+		StopAfterPhase: "recon",
+		Stdout:         &stdout,
+		Stderr:         &stderr,
+	}, runner)
+	if err != nil {
+		t.Fatalf("analyzeWorkspace failed: %v", err)
+	}
+	if !runner.called {
+		t.Fatal("expected analyzeWorkspace to call runner")
+	}
+	if runner.request.StopAfterPhase != "recon" {
+		t.Fatalf("runner stop-after phase = %q, want recon", runner.request.StopAfterPhase)
+	}
+	if got := onlyRunIDWithStatus(t, dir, RunStatusStopped); got == "" {
+		t.Fatal("expected stopped run")
+	}
+	if !strings.Contains(stdout.String(), "runner stopped after recon") {
+		t.Fatalf("stdout missing stop-after message:\n%s", stdout.String())
+	}
+}
+
+func TestAnalyzeStopAfterRejectsPrepareOnly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir:   dir,
+		PrepareOnly:    true,
+		StopAfterPhase: "recon",
+		Stdout:         &stdout,
+		Stderr:         &stderr,
+	}, &recordingRunner{})
+	if err == nil {
+		t.Fatal("expected prepare-only stop-after error")
+	}
+	if !strings.Contains(err.Error(), "cannot be combined with --prepare-only") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAnalyzeRejectsInvalidStopAfterPhase(t *testing.T) {
+	err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir:   t.TempDir(),
+		StopAfterPhase: "finalize",
+		Stdout:         &bytes.Buffer{},
+		Stderr:         &bytes.Buffer{},
+	}, &recordingRunner{})
+	if err == nil {
+		t.Fatal("expected invalid stop-after phase error")
+	}
+	if !strings.Contains(err.Error(), `stop-after phase "finalize" is invalid`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestAnalyzePreflightsBeforeCreatingRun(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")

@@ -236,7 +236,7 @@ func (runner LimaRunner) Run(ctx context.Context, request RunnerRequest) error {
 	if err := runner.copyInputs(ctx, instanceName, payloadPath, request); err != nil {
 		return err
 	}
-	if err := runner.runGuestRunner(ctx, instanceName, request.Run); err != nil {
+	if err := runner.runGuestRunner(ctx, instanceName, request.Run, request.StopAfterPhase); err != nil {
 		_ = runner.copyOutputs(context.Background(), instanceName, request.Run.RunDir)
 		return err
 	}
@@ -279,11 +279,15 @@ func (runner LimaRunner) copyInputs(ctx context.Context, instanceName, payloadPa
 	return nil
 }
 
-func (runner LimaRunner) runGuestRunner(ctx context.Context, instanceName string, run RunRecord) error {
-	return runner.Executor.Run(ctx, "limactl", "shell", instanceName, "bash", "-lc", guestRunnerCommand(run))
+func (runner LimaRunner) runGuestRunner(ctx context.Context, instanceName string, run RunRecord, stopAfterPhase string) error {
+	return runner.Executor.Run(ctx, "limactl", "shell", instanceName, "bash", "-lc", guestRunnerCommand(run, stopAfterPhase))
 }
 
-func guestRunnerCommand(run RunRecord) string {
+func guestRunnerCommand(run RunRecord, stopAfterPhase string) string {
+	runnerCommand := fmt.Sprintf("/tmp/mnm runner --run-id %s --run-dir /tmp/mnm-run --snapshot /tmp/snapshot.tar.zst --config /tmp/mnm.toml", shellQuote(run.ID))
+	if stopAfterPhase != "" {
+		runnerCommand += " --stop-after " + shellQuote(stopAfterPhase)
+	}
 	return strings.Join([]string{
 		"set -euo pipefail",
 		"chmod +x /tmp/mnm",
@@ -292,7 +296,7 @@ func guestRunnerCommand(run RunRecord) string {
 		"if [ -f /tmp/opencode-auth.json ]; then mv /tmp/opencode-auth.json \"$HOME/.local/share/opencode/auth.json\"; chmod 600 \"$HOME/.local/share/opencode/auth.json\"; fi",
 		"mkdir -p /tmp/mnm-run",
 		"rm -f /tmp/mnm-run/.events.lock",
-		fmt.Sprintf("/tmp/mnm runner --run-id %s --run-dir /tmp/mnm-run --snapshot /tmp/snapshot.tar.zst --config /tmp/mnm.toml", shellQuote(run.ID)),
+		runnerCommand,
 	}, "\n")
 }
 

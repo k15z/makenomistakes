@@ -622,7 +622,7 @@ func latestRunnerFailure(runDir string) (RunnerFailureRecord, bool, error) {
 				Path:  stringData(event.Data, "path"),
 			}
 			found = true
-		case "runner.completed":
+		case "runner.completed", "runner.stopped":
 			failure = RunnerFailureRecord{}
 			found = false
 		}

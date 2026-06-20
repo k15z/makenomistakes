@@ -35,11 +35,12 @@ type RunnerPreflightRequest struct {
 }
 
 type RunnerRequest struct {
-	Run         RunRecord
-	Config      Config
-	ModelAPIKey string
-	KeepVM      bool
-	Resume      bool
+	Run            RunRecord
+	Config         Config
+	ModelAPIKey    string
+	KeepVM         bool
+	Resume         bool
+	StopAfterPhase string
 }
 
 func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
@@ -49,7 +50,12 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	runDir := flags.String("run-dir", "", "run directory")
 	snapshot := flags.String("snapshot", "", "workspace snapshot")
 	configPath := flags.String("config", "", "run config snapshot")
+	stopAfter := flags.String("stop-after", "", "stop cleanly after recon|investigate|review|deduplicate|validate")
 	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	stopAfterPhase, err := normalizeStopAfterPhase(*stopAfter)
+	if err != nil {
 		return err
 	}
 	if *runID == "" || *runDir == "" || *snapshot == "" || *configPath == "" {
@@ -121,21 +127,36 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	if err := runReconTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	if shouldStopAfterPhase(stopAfterPhase, "recon") {
+		return recordRunnerStopped(*runDir, *runID, workspace, "recon", stdout)
+	}
 	failure.Stage = "investigate"
 	if err := runInvestigatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
+	}
+	if shouldStopAfterPhase(stopAfterPhase, "investigate") {
+		return recordRunnerStopped(*runDir, *runID, workspace, "investigate", stdout)
 	}
 	failure.Stage = "review"
 	if err := runReviewPhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	if shouldStopAfterPhase(stopAfterPhase, "review") {
+		return recordRunnerStopped(*runDir, *runID, workspace, "review", stdout)
+	}
 	failure.Stage = "deduplicate"
 	if err := runDeduplicatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
 	}
+	if shouldStopAfterPhase(stopAfterPhase, "deduplicate") {
+		return recordRunnerStopped(*runDir, *runID, workspace, "deduplicate", stdout)
+	}
 	failure.Stage = "validate"
 	if err := runValidatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
 		return err
+	}
+	if shouldStopAfterPhase(stopAfterPhase, "validate") {
+		return recordRunnerStopped(*runDir, *runID, workspace, "validate", stdout)
 	}
 	failure.Stage = "finalize"
 	if err := runFinalizeTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
@@ -164,6 +185,38 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	}
 
 	fmt.Fprintf(stdout, "runner completed for %s\n", *runID)
+	return nil
+}
+
+func normalizeStopAfterPhase(value string) (string, error) {
+	phase := strings.TrimSpace(value)
+	if phase == "" {
+		return "", nil
+	}
+	if oneOf(phase, "recon", "investigate", "review", "deduplicate", "validate") {
+		return phase, nil
+	}
+	return "", fmt.Errorf("stop-after phase %q is invalid; expected one of: recon, investigate, review, deduplicate, validate", phase)
+}
+
+func shouldStopAfterPhase(stopAfterPhase, completedPhase string) bool {
+	return stopAfterPhase != "" && stopAfterPhase == completedPhase
+}
+
+func recordRunnerStopped(runDir, runID, workspace, phase string, stdout io.Writer) error {
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    runID,
+		Type:     "runner.stopped",
+		Object:   "run",
+		ObjectID: runID,
+		Data: map[string]any{
+			"phase":     phase,
+			"workspace": workspace,
+		},
+	}); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "runner stopped after %s for %s\n", phase, runID)
 	return nil
 }
 
