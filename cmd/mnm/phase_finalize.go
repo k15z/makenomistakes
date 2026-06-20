@@ -188,6 +188,7 @@ Markdown report requirements:
 - Start with a concise executive summary.
 - List proven findings first, then inconclusive findings, failed validations, rejected findings, and duplicate findings.
 - For each finding, include ID, title, severity, confidence, status, affected paths when known, evidence paths, reproduction or validation summary, and limits of confidence.
+- Mention every ledger finding ID exactly as written in the final Markdown report.
 - If there are no findings, say that clearly and summarize what phases ran.
 - Preserve nuance. A rejected, failed, duplicate, or inconclusive finding must not be presented as proven.
 

@@ -116,7 +116,7 @@ func TestLedgerCommandFlow(t *testing.T) {
 		t.Fatalf("task complete failed: %v\nstderr: %s", err, stderr.String())
 	}
 
-	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\n")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
 		"unvalidated": {
 			{
@@ -695,7 +695,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
 
-	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\n")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
 		{
 			"id":             findingID,
@@ -724,6 +724,51 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 	if !ledgerReportFinalized(runDir) {
 		t.Fatal("expected traceable report to be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsMarkdownMissingFindingID(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
+	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nMissing authorization check without the ledger ID.\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "Traceable finding in JSON only.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected markdown coverage error")
+	}
+	if !strings.Contains(err.Error(), "markdown report missing finding "+findingID) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with incomplete markdown coverage should not be finalized")
 	}
 }
 
@@ -1340,7 +1385,7 @@ func TestReportFinalizeAcceptsDuplicateWithCanonicalFinding(t *testing.T) {
 	recordVerdictForTest(t, runDir, duplicateID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, duplicateID, "deduplicate", "duplicate", canonicalID)
 
-	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFindings: "+canonicalID+" "+duplicateID+"\n")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
 		"unvalidated": {
 			{

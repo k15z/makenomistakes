@@ -102,6 +102,9 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 	if err := validateReportCoversAllFindings(state, seenReportIDs); err != nil {
 		return err
 	}
+	if err := validateMarkdownReportCoversAllFindings(markdown, state); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -388,6 +391,49 @@ func validateReportCoversAllFindings(state reportLedgerState, seenReportIDs map[
 		return fmt.Errorf("report JSON missing finding %s from bucket %q", id, reportBucketForFinding(state.Verdicts[id]))
 	}
 	return nil
+}
+
+func validateMarkdownReportCoversAllFindings(markdown []byte, state reportLedgerState) error {
+	ids := make([]string, 0, len(state.Findings))
+	for id := range state.Findings {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if markdownContainsFindingID(markdown, id) {
+			continue
+		}
+		return fmt.Errorf("markdown report missing finding %s", id)
+	}
+	return nil
+}
+
+func markdownContainsFindingID(markdown []byte, id string) bool {
+	if id == "" {
+		return false
+	}
+	needle := []byte(id)
+	for start := 0; start < len(markdown); {
+		index := bytes.Index(markdown[start:], needle)
+		if index < 0 {
+			return false
+		}
+		index += start
+		end := index + len(needle)
+		if (index == 0 || !isFindingIDChar(markdown[index-1])) && (end == len(markdown) || !isFindingIDChar(markdown[end])) {
+			return true
+		}
+		start = index + 1
+	}
+	return false
+}
+
+func isFindingIDChar(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' ||
+		value == '_' ||
+		value == '-'
 }
 
 func reportBucketForFinding(verdicts map[string]VerdictRecord) string {

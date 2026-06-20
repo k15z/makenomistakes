@@ -265,6 +265,8 @@ Finding statuses:
   canonical finding recorded in the deduplication verdict.
 - Final report validation rejects report `verdicts` arrays that do not exactly
   match ledger verdicts in review, deduplicate, validate order.
+- Final report validation rejects Markdown reports that omit any ledger finding
+  ID.
 - Final report validation rejects status fields that do not match the report
   bucket implied by ledger verdicts.
 - Final report validation rejects reports that omit any ledger finding.
