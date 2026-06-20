@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -567,13 +568,24 @@ func TestReportFinalizeRejectsEmptyMarkdown(t *testing.T) {
 func TestReportFinalizeRequiresMatchingSourceLead(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	sourceLeadID := createLeadForTest(t, runDir)
-	otherLeadID := createLeadForTest(t, runDir)
+	otherLeadBody := writeRunFile(t, runDir, "evidence/lead-other.md", "Investigate something else.")
+	var createStdout, createStderr bytes.Buffer
+	if err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate something else",
+		"--body-file", otherLeadBody,
+	}, &createStdout, &createStderr); err != nil {
+		t.Fatalf("other lead create failed: %v\nstderr: %s", err, createStderr.String())
+	}
+	otherLeadID := strings.TrimSpace(createStdout.String())
 	findingID := createFindingForTest(t, runDir, sourceLeadID)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
 
-	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\nEvidence: "+proofRel+"\n")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
 		{
 			"id":             findingID,
@@ -584,7 +596,7 @@ func TestReportFinalizeRequiresMatchingSourceLead(t *testing.T) {
 			"source_lead_id": otherLeadID,
 			"status":         "validation_proven",
 			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
-			"evidence_paths": []string{},
+			"evidence_paths": []string{proofRel},
 			"summary":        "Traceable finding with the wrong source lead.",
 			"affected_paths": []string{"server/auth.go"},
 		},
@@ -1087,15 +1099,24 @@ func TestReportFinalizeRejectsFindingMetadataMismatch(t *testing.T) {
 func TestReportFinalizeRejectsSourceLeadMismatch(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
-	otherLeadID := createLeadForTest(t, runDir)
+	otherLeadBody := writeRunFile(t, runDir, "evidence/lead-other.md", "Investigate something else.")
+	var createStdout, createStderr bytes.Buffer
+	if err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate something else",
+		"--body-file", otherLeadBody,
+	}, &createStdout, &createStderr); err != nil {
+		t.Fatalf("other lead create failed: %v\nstderr: %s", err, createStderr.String())
+	}
+	otherLeadID := strings.TrimSpace(createStdout.String())
 	findingID := createFindingForTest(t, runDir, leadID)
-	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
-	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
 
-	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\nEvidence: "+proofRel+"\n")
 	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
 		{
 			"id":             findingID,
@@ -2400,6 +2421,132 @@ func TestLeadCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
 	}
 }
 
+func TestLeadCreateIsIdempotentForSameMetadata(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	body := writeRunFile(t, runDir, "evidence/lead-auth.md", "Investigate auth.")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth",
+		"--category", "authz",
+		"--priority", "high",
+		"--body-file", body,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first lead create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	firstID := strings.TrimSpace(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth",
+		"--category", "authz",
+		"--priority", "high",
+		"--body-file", body,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent lead create failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != firstID {
+		t.Fatalf("idempotent lead id = %q, want %q", got, firstID)
+	}
+	assertLeadCreatedEventCount(t, runDir, "task_recon", "evidence/lead-auth.md", 1)
+}
+
+func TestLeadCreateIsAtomicForParallelSameMetadata(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	body := writeRunFile(t, runDir, "evidence/lead-auth.md", "Investigate auth.")
+
+	const workers = 8
+	start := make(chan struct{})
+	ids := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			err := run([]string{
+				"lead", "create",
+				"--run-dir", runDir,
+				"--title", "Investigate auth",
+				"--category", "authz",
+				"--priority", "high",
+				"--body-file", body,
+			}, &stdout, &stderr)
+			if err != nil {
+				errs <- fmt.Errorf("%w: %s", err, stderr.String())
+				return
+			}
+			ids <- strings.TrimSpace(stdout.String())
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(ids)
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel lead create failed: %v", err)
+		}
+	}
+	firstID := ""
+	for id := range ids {
+		if firstID == "" {
+			firstID = id
+			continue
+		}
+		if id != firstID {
+			t.Fatalf("parallel lead create returned id %q, want %q", id, firstID)
+		}
+	}
+	if firstID == "" {
+		t.Fatal("expected at least one lead id")
+	}
+	assertLeadCreatedEventCount(t, runDir, "task_recon", "evidence/lead-auth.md", 1)
+}
+
+func TestLeadCreateRejectsConflictingMetadataForSameTaskBodyPath(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	body := writeRunFile(t, runDir, "evidence/lead-auth.md", "Investigate auth.")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth",
+		"--category", "authz",
+		"--priority", "high",
+		"--body-file", body,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first lead create failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err := run([]string{
+		"lead", "create",
+		"--run-dir", runDir,
+		"--title", "Investigate auth deeply",
+		"--category", "authz",
+		"--priority", "high",
+		"--body-file", body,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting lead metadata error")
+	}
+	if !strings.Contains(err.Error(), "already created lead from body path evidence/lead-auth.md with different metadata") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadCreatedEventCount(t, runDir, "task_recon", "evidence/lead-auth.md", 1)
+}
+
 func TestFindingCreateRejectsBlankCategoryAndEmptyBody(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	body := writeRunFile(t, runDir, "evidence/finding-auth.md", "Candidate finding.")
@@ -3311,6 +3458,23 @@ func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
 	}
 	if got != want {
 		t.Fatalf("lead.closed event count = %d, want %d", got, want)
+	}
+}
+
+func assertLeadCreatedEventCount(t *testing.T, runDir, taskID, bodyPath string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type == "lead.created" && event.TaskID == taskID && event.Data["body_path"] == bodyPath {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("lead.created event count for %s/%s = %d, want %d", taskID, bodyPath, got, want)
 	}
 }
 

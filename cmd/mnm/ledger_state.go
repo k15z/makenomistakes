@@ -67,6 +67,10 @@ func ledgerLeads(runDir string) ([]LeadRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	return leadsFromEvents(events)
+}
+
+func leadsFromEvents(events []LedgerEvent) ([]LeadRecord, error) {
 	leadsByID := map[string]LeadRecord{}
 	var order []string
 	for _, event := range events {
