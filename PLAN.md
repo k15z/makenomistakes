@@ -254,6 +254,8 @@ Finding statuses:
   match their review, deduplication, and validation verdicts in the ledger.
 - Final report validation rejects evidence paths that were not registered as
   ledger evidence for the reported finding.
+- Final report validation rejects affected paths that are empty, absolute,
+  unclean, use backslashes, or traverse outside the workspace.
 - Final report validation rejects proven findings that do not cite at least one
   registered evidence path.
 - Final report validation rejects report items whose ledger-backed title,
