@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -242,17 +244,7 @@ func runReconTask(runDir, runID, workspace string, cfg Config, opencodePath stri
 	if err := writeTaskFile(filepath.Join(runDir, currentTaskFile), task); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "task.started",
-		Object:   "task",
-		ObjectID: task.TaskID,
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"phase": task.Phase,
-			"title": task.Title,
-		},
-	}); err != nil {
+	if err := registerTaskStarted(runDir, task, nil); err != nil {
 		return err
 	}
 	taskWorkspace, cleanupWorkspace, err := prepareTaskWorkspace(workspace, runID, task.TaskID)
@@ -343,6 +335,80 @@ func validateReconOutputs(runDir, taskID string, cfg Config) error {
 		return fmt.Errorf("recon opencode task created %d leads, exceeding configured max_leads %d", leadCount, maxLeads)
 	}
 	return nil
+}
+
+func registerTaskStarted(runDir string, task TaskRecord, extraData map[string]any) error {
+	data := map[string]any{
+		"phase": task.Phase,
+		"title": task.Title,
+	}
+	for key, value := range extraData {
+		data[key] = value
+	}
+	event, err := prepareLedgerEvent(runDir, LedgerEvent{
+		RunID:    task.RunID,
+		Type:     "task.started",
+		Object:   "task",
+		ObjectID: task.TaskID,
+		TaskID:   task.TaskID,
+		Data:     data,
+	})
+	if err != nil {
+		return err
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	existing, exists, err := ledgerTaskStartedDataUnlocked(runDir, task.TaskID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		equal, err := ledgerDataEqual(existing, data)
+		if err != nil {
+			return err
+		}
+		if equal {
+			return nil
+		}
+		return fmt.Errorf("task %s already started with different metadata", task.TaskID)
+	}
+	return appendLedgerEventUnlocked(runDir, event)
+}
+
+func ledgerTaskStartedDataUnlocked(runDir, taskID string) (map[string]any, bool, error) {
+	events, err := readLedgerEventsUnlocked(runDir)
+	if err != nil {
+		return nil, false, err
+	}
+	data, exists := taskStartedDataFromEvents(events, taskID)
+	return data, exists, nil
+}
+
+func taskStartedDataFromEvents(events []LedgerEvent, taskID string) (map[string]any, bool) {
+	var data map[string]any
+	found := false
+	for _, event := range events {
+		if event.Type == "task.started" && event.Object == "task" && event.ObjectID == taskID {
+			data = event.Data
+			found = true
+		}
+	}
+	return data, found
+}
+
+func ledgerDataEqual(left, right map[string]any) (bool, error) {
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false, err
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(leftJSON, rightJSON), nil
 }
 
 type opencodeTask struct {

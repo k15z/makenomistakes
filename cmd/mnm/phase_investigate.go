@@ -173,17 +173,8 @@ func runInvestigateTask(runDir, runID, workspace string, cfg Config, opencodePat
 	if err := writeTaskFile(taskPath, task); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "task.started",
-		Object:   "task",
-		ObjectID: task.TaskID,
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"phase":   task.Phase,
-			"title":   task.Title,
-			"lead_id": lead.ID,
-		},
+	if err := registerTaskStarted(runDir, task, map[string]any{
+		"lead_id": lead.ID,
 	}); err != nil {
 		return err
 	}
