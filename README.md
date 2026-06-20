@@ -117,8 +117,20 @@ The script copies the fixture to a scratch workspace, runs `mnm analyze`, and
 fails unless the final structured report contains at least one proven
 file-access finding with evidence. See `docs/acceptance.md` for details.
 
+A second manual benchmark script runs the same real pipeline against a pinned
+OWASP NodeGoat revision:
+
+```sh
+OPENROUTER_API_KEY=... scripts/acceptance-nodegoat.sh
+```
+
+This benchmark fails unless the final structured report contains at least one
+proven NodeGoat security finding with registered evidence. It can take
+substantially longer than the small fixture and consumes model-provider quota.
+
 ## Status
 
-Implementation is in progress. The current stack is intentionally CLI-first and
-local-only while the audit pipeline is proven end to end; the runner
-architecture is being steered toward task-scoped VMs before the stack is merged.
+The current prototype is intentionally CLI-first and local-only while the audit
+pipeline is proven end to end. It runs the full Recon, Investigate, Review,
+Deduplicate, Validate, and Finalize flow through task-scoped Lima VMs, with the
+host responsible for orchestration, bundle validation, and report access.

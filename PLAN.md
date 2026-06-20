@@ -390,6 +390,9 @@ and pass GitHub Actions before later work builds on it.
    - Add a reusable vulnerable multi-repo fixture and a manual acceptance script
      that runs the real VM-backed pipeline and checks for a proven finding in
      `report.json`.
+   - Add a manual OWASP NodeGoat benchmark script that fetches a pinned real
+     vulnerable application, runs the real VM-backed pipeline, and checks for at
+     least one proven NodeGoat security finding with registered evidence.
 
 ## Deferred
 
