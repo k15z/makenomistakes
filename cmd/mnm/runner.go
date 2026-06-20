@@ -1018,6 +1018,9 @@ func taskBundlePromptForDirs(prompt, outputDir, ledgerDir string) string {
 Ledger snapshot directory: %[2]s
 
 Write new durable artifacts under the task output directory. The injected mnm CLI reads prior ledger state from the ledger snapshot and appends this task's events only to the task output directory.
+Treat any pre-existing evidence files in the task output directory as immutable prior context. Do not overwrite or re-register earlier evidence paths; write fresh task-specific artifacts for new proofs, logs, and notes.
+When passing free-form text to mnm flags such as --reason, --summary, or --title, keep the shell argument simple. Do not put Markdown backticks inside double-quoted shell arguments because the shell treats backticks as command substitution; prefer plain prose in CLI arguments and put detailed Markdown/code formatting in evidence files.
+For background services, capture process IDs and clean them up with kill "$pid"; wait "$pid" || true. Avoid broad pkill -f patterns because they can match the cleanup command itself.
 
 %[3]s`, outputDir, ledgerDir, prompt)
 }

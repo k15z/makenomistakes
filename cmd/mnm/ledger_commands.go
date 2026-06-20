@@ -858,6 +858,9 @@ func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) 
 		return "", err
 	}
 	defer unlock()
+	if err := requireNoRegisteredEvidenceContentConflictUnlocked(runDir, registration, contentSHA256); err != nil {
+		return "", err
+	}
 	existing, exists, err := ledgerTaskEvidenceRegistrationUnlocked(runDir, registration)
 	if err != nil {
 		return "", err
@@ -874,6 +877,25 @@ func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) 
 		return "", err
 	}
 	return evidenceID, nil
+}
+
+func requireNoRegisteredEvidenceContentConflictUnlocked(runDir string, registration taskEvidenceRegistration, contentSHA256 string) error {
+	if registration.AllowContentChange {
+		return nil
+	}
+	events, err := readLedgerEventsOverlayUnlocked(runDir)
+	if err != nil {
+		return err
+	}
+	for _, item := range evidenceFromEvents(events) {
+		if item.Path != registration.Path || item.ContentSHA256 == "" {
+			continue
+		}
+		if item.ContentSHA256 != contentSHA256 {
+			return fmt.Errorf("evidence path %s is already registered with different content; write a new task-specific artifact path instead", registration.Path)
+		}
+	}
+	return nil
 }
 
 func requiredTextFlag(name, value string) (string, error) {
