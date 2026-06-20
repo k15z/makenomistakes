@@ -194,6 +194,7 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	runDir := flags.String("run-dir", "", "task output bundle directory")
 	ledgerDir := flags.String("ledger-dir", "", "ledger snapshot directory")
 	workspace := flags.String("workspace", "", "workspace directory")
+	snapshot := flags.String("snapshot", "", "workspace snapshot")
 	taskFile := flags.String("task-file", "", "task JSON file")
 	promptFile := flags.String("prompt-file", "", "prompt markdown file")
 	model := flags.String("model", "", "opencode model")
@@ -203,8 +204,12 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *runDir == "" || *ledgerDir == "" || *workspace == "" || *taskFile == "" || *promptFile == "" || *model == "" {
-		return errors.New("runner task requires --run-dir, --ledger-dir, --workspace, --task-file, --prompt-file, and --model")
+	if *runDir == "" || *ledgerDir == "" || *taskFile == "" || *promptFile == "" || *model == "" {
+		return errors.New("runner task requires --run-dir, --ledger-dir, --task-file, --prompt-file, and --model")
+	}
+	workspaceDir := *workspace
+	if workspaceDir == "" && *snapshot == "" {
+		return errors.New("runner task requires --workspace unless --snapshot is provided")
 	}
 	if *timeoutMinutes <= 0 {
 		return errors.New("runner task --timeout-minutes must be positive")
@@ -252,11 +257,25 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(resolvedLogPath), dirPerm); err != nil {
 		return err
 	}
+	if *snapshot != "" {
+		tempWorkspace, err := os.MkdirTemp("", "mnm-task-workspace-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tempWorkspace)
+		workspaceDir = tempWorkspace
+		if err := extractWorkspaceSnapshot(*snapshot, workspaceDir); err != nil {
+			return err
+		}
+	}
+	if err := ensureWorkspaceToolchains(workspaceDir); err != nil {
+		return err
+	}
 
 	command := exec.Command(opencodePath,
 		"run",
 		"--format", "json",
-		"--dir", *workspace,
+		"--dir", workspaceDir,
 		"--model", *model,
 		"--title", "mnm "+task.Phase+" "+task.TaskID,
 		"--dangerously-skip-permissions",
