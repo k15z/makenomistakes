@@ -73,12 +73,11 @@ func TestLedgerCommandFlow(t *testing.T) {
 		RunID:       "run_test",
 		TaskID:      "task_review_" + safeFileID(findingID),
 		Phase:       "review",
-		Title:       "Review finding",
-		Instruction: "Review one finding.",
+		Title:       "Review: Missing authorization check",
+		Instruction: "Review finding.",
 	}); err != nil {
 		t.Fatal(err)
 	}
-
 	stdout.Reset()
 	stderr.Reset()
 	reviewNotesPath := writeRunFile(t, runDir, reviewNotesRelPath(findingID), "Review accepted with specific evidence.")
@@ -92,7 +91,6 @@ func TestLedgerCommandFlow(t *testing.T) {
 	}, &stdout, &stderr); err != nil {
 		t.Fatalf("review evidence add failed: %v\nstderr: %s", err, stderr.String())
 	}
-
 	stdout.Reset()
 	stderr.Reset()
 	if err := run([]string{
@@ -2903,6 +2901,28 @@ func TestVerdictRequiresReason(t *testing.T) {
 	}
 }
 
+func TestVerdictRecordRejectsWrongCurrentTaskPhase(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	findingID := createFindingForTest(t, runDir, "")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"verdict", "record",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--phase", "review",
+		"--value", "accepted",
+		"--reason", "Specific and supported.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected wrong task phase error")
+	}
+	if !strings.Contains(err.Error(), `current task phase "recon" cannot record "review" verdicts`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertVerdictEventCount(t, runDir, findingID, "review", 0)
+}
+
 func TestVerdictRecordIsIdempotentForSameDecision(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	findingID := createFindingForTest(t, runDir, "")
@@ -3253,7 +3273,7 @@ func TestVerdictRejectsMismatchedTaskPhase(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected mismatched task phase error")
 	}
-	if !strings.Contains(err.Error(), `current task phase "recon" cannot record review verdict`) {
+	if !strings.Contains(err.Error(), `current task phase "recon" cannot record "review" verdicts`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

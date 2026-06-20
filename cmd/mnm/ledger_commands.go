@@ -494,7 +494,7 @@ func verdictCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if task.Phase != *phase {
-		return fmt.Errorf("current task phase %q cannot record %s verdict", task.Phase, *phase)
+		return fmt.Errorf("current task phase %q cannot record %q verdicts", task.Phase, *phase)
 	}
 	if err := requireLedgerObject(runDir, "finding", *findingID); err != nil {
 		return err
