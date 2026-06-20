@@ -44,6 +44,9 @@ type RunnerRequest struct {
 }
 
 func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
+	if len(args) > 0 && args[0] == "task" {
+		return runnerTaskCommand(args[1:], stdout, stderr)
+	}
 	flags := flag.NewFlagSet("runner", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	runID := flags.String("run-id", "", "run id")
@@ -183,6 +186,196 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 
 	fmt.Fprintf(stdout, "runner completed for %s\n", *runID)
 	return nil
+}
+
+func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("runner task", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	runDir := flags.String("run-dir", "", "task output bundle directory")
+	ledgerDir := flags.String("ledger-dir", "", "ledger snapshot directory")
+	workspace := flags.String("workspace", "", "workspace directory")
+	taskFile := flags.String("task-file", "", "task JSON file")
+	promptFile := flags.String("prompt-file", "", "prompt markdown file")
+	model := flags.String("model", "", "opencode model")
+	opencodePathFlag := flags.String("opencode-path", "", "opencode executable path")
+	logPath := flags.String("log-path", "", "opencode transcript path")
+	timeoutMinutes := flags.Int("timeout-minutes", effectiveOpenCodeTaskTimeoutMinutes(Config{}), "opencode task timeout in minutes")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *runDir == "" || *ledgerDir == "" || *workspace == "" || *taskFile == "" || *promptFile == "" || *model == "" {
+		return errors.New("runner task requires --run-dir, --ledger-dir, --workspace, --task-file, --prompt-file, and --model")
+	}
+	if *timeoutMinutes <= 0 {
+		return errors.New("runner task --timeout-minutes must be positive")
+	}
+	task, err := readTaskFile(*taskFile)
+	if err != nil {
+		return err
+	}
+	prompt, err := os.ReadFile(*promptFile)
+	if err != nil {
+		return fmt.Errorf("read task prompt: %w", err)
+	}
+	opencodePath := *opencodePathFlag
+	if opencodePath == "" {
+		var versionOutput string
+		opencodePath, versionOutput, err = ensureOpenCode()
+		if err != nil {
+			return err
+		}
+		_ = versionOutput
+	}
+	resolvedLogPath, err := runnerTaskLogPath(*runDir, *logPath, task.TaskID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(*runDir, "evidence"), dirPerm); err != nil {
+		return err
+	}
+	sameLedger, err := sameDirectory(*runDir, *ledgerDir)
+	if err != nil {
+		return err
+	}
+	if sameLedger {
+		return errors.New("runner task --ledger-dir must differ from --run-dir")
+	}
+	taskFileInBundle, err := copyRunnerTaskFileIntoBundle(*runDir, *taskFile)
+	if err != nil {
+		return err
+	}
+	privateLedgerDir, cleanupLedgerDir, err := prepareRunnerTaskLedgerSnapshot(*ledgerDir)
+	if err != nil {
+		return err
+	}
+	defer cleanupLedgerDir()
+	if err := os.MkdirAll(filepath.Dir(resolvedLogPath), dirPerm); err != nil {
+		return err
+	}
+
+	command := exec.Command(opencodePath,
+		"run",
+		"--format", "json",
+		"--dir", *workspace,
+		"--model", *model,
+		"--title", "mnm "+task.Phase+" "+task.TaskID,
+		"--dangerously-skip-permissions",
+		string(prompt),
+	)
+	isolateCommandProcessGroup(command)
+	env := append(os.Environ(),
+		"MNM_RUN_DIR="+*runDir,
+		ledgerDirEnv+"="+privateLedgerDir,
+		"MNM_TASK_ID="+task.TaskID,
+		"MNM_PHASE="+task.Phase,
+		taskFileEnv+"="+taskFileInBundle,
+		"PATH=/tmp:"+os.Getenv("PATH"),
+	)
+	command.Env = env
+
+	logFile, err := os.OpenFile(resolvedLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, filePerm)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	command.Stdout = io.MultiWriter(stdout, logFile)
+	command.Stderr = io.MultiWriter(stderr, logFile)
+	taskTimeout := time.Duration(*timeoutMinutes) * time.Minute
+	err = runOpenCodeCommand(command, opencodeTask{
+		RunID:   task.RunID,
+		TaskID:  task.TaskID,
+		Phase:   task.Phase,
+		Timeout: taskTimeout,
+	})
+	if cleanupErr := cleanupCommandProcessGroup(command); cleanupErr != nil {
+		cleanupErr = fmt.Errorf("clean up opencode task process group: %w", cleanupErr)
+		if err != nil {
+			err = errors.Join(err, cleanupErr)
+		} else {
+			err = cleanupErr
+		}
+	}
+	if err != nil {
+		return err
+	}
+	_, cleanupVerifyRunDir, err := prepareTaskBundleVerificationRunDir(*ledgerDir, task, *runDir)
+	if err != nil {
+		return err
+	}
+	cleanupVerifyRunDir()
+	fmt.Fprintf(stdout, "runner task completed for %s\n", task.TaskID)
+	return nil
+}
+
+func readTaskFile(path string) (TaskRecord, error) {
+	var task TaskRecord
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return task, fmt.Errorf("read task file: %w", err)
+	}
+	if err := json.Unmarshal(b, &task); err != nil {
+		return task, fmt.Errorf("parse task file: %w", err)
+	}
+	if task.RunID == "" || task.TaskID == "" || task.Phase == "" {
+		return task, errors.New("task file must include run_id, task_id, and phase")
+	}
+	return task, nil
+}
+
+func runnerTaskLogPath(runDir, logPath, taskID string) (string, error) {
+	if strings.TrimSpace(logPath) == "" {
+		logPath = filepath.ToSlash(filepath.Join("evidence", "opencode-"+safeFileID(taskID)+".jsonl"))
+	}
+	if filepath.IsAbs(logPath) {
+		return "", errors.New("runner task --log-path must be relative to --run-dir")
+	}
+	relPath := filepath.ToSlash(filepath.Clean(filepath.FromSlash(logPath)))
+	if err := validateTaskBundleRelPath(relPath); err != nil {
+		return "", fmt.Errorf("runner task --log-path: %w", err)
+	}
+	return filepath.Join(runDir, filepath.FromSlash(relPath)), nil
+}
+
+func copyRunnerTaskFileIntoBundle(runDir, sourcePath string) (string, error) {
+	targetPath := filepath.Join(runDir, currentTaskFile)
+	absSource, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Clean(absSource) == filepath.Clean(absTarget) {
+		return targetPath, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), dirPerm); err != nil {
+		return "", err
+	}
+	if err := copyFile(sourcePath, targetPath); err != nil {
+		return "", fmt.Errorf("copy task file into bundle: %w", err)
+	}
+	return targetPath, nil
+}
+
+func prepareRunnerTaskLedgerSnapshot(ledgerDir string) (string, func(), error) {
+	info, err := os.Stat(ledgerDir)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("stat ledger snapshot: %w", err)
+	}
+	if !info.IsDir() {
+		return "", func() {}, fmt.Errorf("ledger snapshot path is not a directory: %s", ledgerDir)
+	}
+	privateDir, err := os.MkdirTemp("", "mnm-task-ledger-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(privateDir) }
+	if err := copyRunStateForTaskBundleVerification(ledgerDir, privateDir); err != nil {
+		cleanup()
+		return "", cleanup, err
+	}
+	return privateDir, cleanup, nil
 }
 
 func normalizeStopAfterPhase(value string) (string, error) {

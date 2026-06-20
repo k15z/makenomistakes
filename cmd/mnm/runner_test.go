@@ -457,6 +457,294 @@ func TestRunnerFailureEvidenceRegistrationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRunnerTaskCommandRunsSingleTaskIntoBundle(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	workspace := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_command",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(t.TempDir(), "task.json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("write recon bundle"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_LEDGER_DIR:?MNM_LEDGER_DIR is required}"
+: "${MNM_TASK_FILE:?MNM_TASK_FILE is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+: "${MNM_PHASE:?MNM_PHASE is required}"
+if [ "$MNM_RUN_DIR" = "$MNM_LEDGER_DIR" ]; then
+  echo "runner task should not write to ledger dir" >&2
+  exit 1
+fi
+if [ ! -f "$MNM_TASK_FILE" ]; then
+  echo "missing task file" >&2
+  exit 1
+fi
+if [ "$MNM_TASK_FILE" != "$MNM_RUN_DIR/current-task.json" ]; then
+  echo "task file was not copied into bundle: $MNM_TASK_FILE" >&2
+  exit 1
+fi
+printf 'attempted ledger mutation\n' > "$MNM_LEDGER_DIR/events.jsonl"
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/recon-notes.md" <<'EOF'
+# Recon notes
+
+Single task output.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_runner_task_notes","run_id":"run_task_command","type":"evidence.added","object":"evidence","object_id":"evidence_runner_task_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon notes","path":"evidence/recon-notes.md","content_sha256":"384e74d19a88a238531ca1314937407c830892deaf64ed6d62566245507f8238"}}
+{"id":"event_runner_task_done","run_id":"run_task_command","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", ledgerDir,
+		"--workspace", workspace,
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", opencodePath,
+		"--log-path", "evidence/opencode-task.jsonl",
+		"--timeout-minutes", "1",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runner task failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "runner task completed for task_recon") {
+		t.Fatalf("stdout missing completion:\n%s", stdout.String())
+	}
+	if got := readFile(t, filepath.Join(outputDir, "evidence", "recon-notes.md")); !strings.Contains(got, "Single task output.") {
+		t.Fatalf("missing task artifact:\n%s", got)
+	}
+	if got := readFile(t, filepath.Join(outputDir, "evidence", "opencode-task.jsonl")); !strings.Contains(got, `"type":"done"`) {
+		t.Fatalf("missing opencode log:\n%s", got)
+	}
+	if got := readFile(t, filepath.Join(outputDir, currentTaskFile)); !strings.Contains(got, "task_recon") {
+		t.Fatalf("task file was not copied into bundle:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(ledgerDir, eventsFile)); !os.IsNotExist(err) {
+		t.Fatalf("ledger snapshot should remain untouched, stat err=%v", err)
+	}
+	if _, err := validateTaskBundle(outputDir, task); err != nil {
+		t.Fatalf("task output should validate as bundle: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandRejectsMalformedBundle(t *testing.T) {
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_command",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(outputDir, currentTaskFile)
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("omit completion"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/recon-notes.md" <<'EOF'
+# Recon notes
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_runner_task_notes","run_id":"run_task_command","type":"evidence.added","object":"evidence","object_id":"evidence_runner_task_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon notes","path":"evidence/recon-notes.md","content_sha256":"5a609288c679e4d45d41ebea33b1183e64e6a66d9e10453dc8b95b20ad1d207f"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", t.TempDir(),
+		"--workspace", t.TempDir(),
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", opencodePath,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected malformed bundle error")
+	}
+	if !strings.Contains(err.Error(), "missing terminal task.completed event") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandRejectsLogPathOutsideBundle(t *testing.T) {
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_command",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(outputDir, currentTaskFile)
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("prompt"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", t.TempDir(),
+		"--workspace", t.TempDir(),
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", filepath.Join(t.TempDir(), "opencode"),
+		"--log-path", "../outside.jsonl",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected log path rejection")
+	}
+	if !strings.Contains(err.Error(), "runner task --log-path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandRejectsSameRunAndLedgerDir(t *testing.T) {
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_command",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(outputDir, currentTaskFile)
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("prompt"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", outputDir,
+		"--workspace", t.TempDir(),
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", filepath.Join(t.TempDir(), "opencode"),
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected same ledger/run dir rejection")
+	}
+	if !strings.Contains(err.Error(), "ledger-dir must differ") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandRejectsZeroTimeout(t *testing.T) {
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_command",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(outputDir, currentTaskFile)
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("prompt"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", t.TempDir(),
+		"--workspace", t.TempDir(),
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", filepath.Join(t.TempDir(), "opencode"),
+		"--timeout-minutes", "0",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected zero timeout rejection")
+	}
+	if !strings.Contains(err.Error(), "timeout-minutes must be positive") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandRejectsReportThatFailsTempIngest(t *testing.T) {
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_task_command",
+		TaskID: "task_finalize",
+		Phase:  "finalize",
+	}
+	taskPath := filepath.Join(outputDir, currentTaskFile)
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("finalize"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+cat > "$MNM_RUN_DIR/report.md" <<'EOF'
+# Report
+EOF
+cat > "$MNM_RUN_DIR/report.json" <<'EOF'
+{"findings":[]}
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_bad_report","run_id":"run_task_command","type":"report.finalized","object":"report","object_id":"report_bad","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"markdown_path":"report.md","json_path":"report.json"}}
+{"id":"event_bad_report_done","run_id":"run_task_command","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", t.TempDir(),
+		"--workspace", t.TempDir(),
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", opencodePath,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected temp-ingest report validation error")
+	}
+	if !strings.Contains(err.Error(), "validate task bundle report report_bad") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLimaRunnerCommandSequence(t *testing.T) {
 	runDir := t.TempDir()
 	payload := filepath.Join(runDir, "mnm-linux-test")
