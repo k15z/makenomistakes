@@ -42,6 +42,12 @@ generates a benchmark-specific `mnm.toml`, runs `mnm analyze` through the real
 Lima/OpenCode path, and checks the final structured report for at least one
 proven NodeGoat security finding with registered evidence.
 
+To re-check an existing benchmark run without launching new VMs, run:
+
+```sh
+python3 scripts/validate-nodegoat-report.py /path/to/.mnm/runs/RUN_ID
+```
+
 The default NodeGoat revision is pinned for reproducibility. Override it with
 `MNM_NODEGOAT_REF=<ref-or-sha>` or choose a different source repository with
 `MNM_NODEGOAT_REPO=<url>`.

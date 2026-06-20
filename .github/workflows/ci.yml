@@ -27,8 +27,15 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
 
+      - name: Check scripts
+        run: |
+          bash -n scripts/*.sh
+          python3 -m py_compile scripts/*.py
+
       - name: Test
-        run: go test ./...
+        run: |
+          go test ./...
+          python3 scripts/validate-nodegoat-report_test.py
 
       - name: Vet
         run: go vet ./...
