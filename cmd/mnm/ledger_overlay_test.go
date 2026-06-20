@@ -298,6 +298,59 @@ func TestLedgerOverlayEvidenceRegistrationSeesSnapshot(t *testing.T) {
 	}
 }
 
+func TestLedgerOverlayTaskCompleteIgnoresSnapshotCompletionForOutput(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	task := TaskRecord{
+		RunID:  "run_overlay",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	if err := writeTaskFile(filepath.Join(outputDir, currentTaskFile), task); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(ledgerDir, LedgerEvent{
+		ID:        "event_stale_done",
+		RunID:     task.RunID,
+		Type:      "task.completed",
+		Object:    "task",
+		ObjectID:  task.TaskID,
+		TaskID:    task.TaskID,
+		Timestamp: "2026-01-01T00:00:00Z",
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "stale completion from central ledger",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNM_RUN_DIR", outputDir)
+	t.Setenv(ledgerDirEnv, ledgerDir)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"task", "complete",
+		"--status", "completed",
+		"--summary", "fresh completion from VM output",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("task complete failed: %v\nstderr: %s", err, stderr.String())
+	}
+	outputEvents, err := readLedgerEventsFile(outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputEvents) != 1 {
+		t.Fatalf("output events = %#v, want one task completion", outputEvents)
+	}
+	event := outputEvents[0]
+	if event.Type != "task.completed" || event.ObjectID != task.TaskID {
+		t.Fatalf("output event = %#v, want task completion for %s", event, task.TaskID)
+	}
+	if got := stringData(event.Data, "summary"); got != "fresh completion from VM output" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
 func TestLedgerOverlayVerdictRecordSeesSnapshot(t *testing.T) {
 	ledgerDir := t.TempDir()
 	outputDir := t.TempDir()
