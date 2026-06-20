@@ -263,6 +263,8 @@ Finding statuses:
   unclean, use backslashes, or traverse outside the workspace.
 - Final report validation rejects proven findings that do not cite at least one
   registered evidence path.
+- Final report validation rejects proven findings that do not cite at least one
+  validation proof artifact registered by the finding's Validate task.
 - Final report validation rejects report items whose ledger-backed title,
   category, severity, confidence, source lead, or cited evidence contents do not
   match the validated ledger state.

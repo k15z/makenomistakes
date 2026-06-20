@@ -1445,10 +1445,10 @@ func prependFakeOpenCode(t *testing.T, version string) {
     cat > "$MNM_RUN_DIR/report.md" <<'EOF'
 # Report
 
-Fake final report for finding_fake_lead_fake_auth with evidence/finding-lead_fake_auth.md.
+Fake final report for finding_fake_lead_fake_auth with evidence/validate-finding_fake_lead_fake_auth-proof.log.
 EOF
     cat > "$MNM_RUN_DIR/report.json" <<'EOF'
-{"run_id":"run_test","counts":{"findings_proven":1,"findings_inconclusive":0,"findings_failed":0,"findings_rejected":0,"findings_duplicate":0,"findings_unvalidated":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[{"id":"finding_fake_lead_fake_auth","title":"Fake candidate finding","category":"authz","severity":"high","confidence":"medium","source_lead_id":"lead_fake_auth","status":"validation_proven","verdicts":["review accepted","deduplicate canonical","validation proven"],"evidence_paths":["evidence/finding-lead_fake_auth.md"],"summary":"Fake finding proven by fake validate.","affected_paths":["repo/app.go"]}],"inconclusive":[],"failed":[],"rejected":[],"duplicate":[],"unvalidated":[]}
+{"run_id":"run_test","counts":{"findings_proven":1,"findings_inconclusive":0,"findings_failed":0,"findings_rejected":0,"findings_duplicate":0,"findings_unvalidated":0},"report_paths":{"markdown":"report.md","json":"report.json"},"proven":[{"id":"finding_fake_lead_fake_auth","title":"Fake candidate finding","category":"authz","severity":"high","confidence":"medium","source_lead_id":"lead_fake_auth","status":"validation_proven","verdicts":["review accepted","deduplicate canonical","validation proven"],"evidence_paths":["evidence/validate-finding_fake_lead_fake_auth-proof.log"],"summary":"Fake finding proven by fake validate.","affected_paths":["repo/app.go"]}],"inconclusive":[],"failed":[],"rejected":[],"duplicate":[],"unvalidated":[]}
 EOF
     cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
 {"id":"event_fake_report","run_id":"run_test","type":"report.finalized","object":"report","object_id":"report_fake","task_id":"task_finalize","timestamp":"2026-01-01T00:00:13Z","data":{"markdown_path":"report.md","json_path":"report.json"}}

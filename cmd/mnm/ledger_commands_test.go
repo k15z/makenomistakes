@@ -689,8 +689,7 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 		t.Fatalf("finding create failed: %v\nstderr: %s", err, stderr.String())
 	}
 	findingID := strings.TrimSpace(stdout.String())
-	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
-	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
@@ -727,12 +726,101 @@ func TestReportFinalizeAcceptsTraceableFindingItems(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsProvenFindingWithoutValidationProofCitation(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	oldProofPath := writeRunFile(t, runDir, "evidence/investigation-proof.log", "investigation proof")
+	oldProofRel := addEvidenceForFindingForTest(t, runDir, findingID, oldProofPath)
+	addValidationProofForFindingForTest(t, runDir, findingID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\nEvidence: "+oldProofRel+"\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
+			"evidence_paths": []string{oldProofRel},
+			"summary":        "Proven finding that only cites pre-validation evidence.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing validation proof citation error")
+	}
+	if !strings.Contains(err.Error(), "evidence_paths must include at least one validation proof artifact for a proven finding") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report without validation proof citation should not be finalized")
+	}
+}
+
+func TestReportFinalizeRejectsLateValidationProofCitation(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\nEvidence: "+proofRel+"\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "report.md", "report.json", []map[string]any{
+		{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_proven",
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation proven"},
+			"evidence_paths": []string{proofRel},
+			"summary":        "Proven finding that cites proof registered after the verdict.",
+			"affected_paths": []string{"server/auth.go"},
+		},
+	}))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected late validation proof citation error")
+	}
+	if !strings.Contains(err.Error(), "evidence_paths must include at least one validation proof artifact for a proven finding") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with late validation proof citation should not be finalized")
+	}
+}
+
 func TestReportFinalizeRejectsMarkdownMissingFindingID(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
 	findingID := createFindingForTest(t, runDir, leadID)
-	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
-	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
@@ -776,8 +864,7 @@ func TestReportFinalizeRejectsMarkdownMissingEvidencePath(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
 	findingID := createFindingForTest(t, runDir, leadID)
-	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
-	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
@@ -821,8 +908,7 @@ func TestReportFinalizeRejectsMarkdownEvidencePathSubstring(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
 	findingID := createFindingForTest(t, runDir, leadID)
-	proofPath := writeRunFile(t, runDir, "evidence/proof.log", "proof")
-	proofRel := addEvidenceForFindingForTest(t, runDir, findingID, proofPath)
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
 	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
 	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
 	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
@@ -3185,6 +3271,30 @@ func addEvidenceForFindingForTest(t *testing.T, runDir, findingID, path string) 
 		t.Fatalf("expected evidence for finding %s", findingID)
 	}
 	return evidence[len(evidence)-1].Path
+}
+
+func addValidationProofForFindingForTest(t *testing.T, runDir, findingID string) string {
+	t.Helper()
+	relPath := filepath.ToSlash(filepath.Join("evidence", "validate-"+safeFileID(findingID)+"-proof.log"))
+	writeRunFile(t, runDir, relPath, "validation proof")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_test",
+		Type:     "evidence.added",
+		Object:   "evidence",
+		ObjectID: newLedgerID("evidence"),
+		TaskID:   "task_validate_" + safeFileID(findingID),
+		Data: map[string]any{
+			"kind":           "log",
+			"title":          "Validation proof",
+			"path":           relPath,
+			"content_sha256": runFileSHA256ForTest(t, runDir, relPath),
+			"lead_id":        "",
+			"finding_id":     findingID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return relPath
 }
 
 func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
