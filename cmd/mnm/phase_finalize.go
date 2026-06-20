@@ -208,6 +208,7 @@ Markdown report requirements:
 - For each finding, include ID, title, severity, confidence, status, affected paths when known, evidence paths, reproduction or validation summary, and limits of confidence.
 - Mention every ledger finding ID exactly as written in the final Markdown report.
 - Mention every cited evidence path exactly as written in the final Markdown report.
+- Every path listed in JSON "evidence_paths" must also appear literally in the Markdown report.
 - If there are no findings, say that clearly and summarize what phases ran.
 - Preserve nuance. A rejected, failed, duplicate, or inconclusive finding must not be presented as proven.
 
@@ -216,7 +217,7 @@ JSON report requirements:
 - Produce a single JSON object.
 - Include "run_id", "counts", "report_paths", and arrays named "proven", "inconclusive", "failed", "rejected", "duplicate", and "unvalidated".
 - "counts" must include integer fields "findings_proven", "findings_inconclusive", "findings_failed", "findings_rejected", "findings_duplicate", and "findings_unvalidated"; each count must match the corresponding array length.
-- "report_paths.markdown" and "report_paths.json" must point to the same files passed to "mnm report finalize".
+- "report_paths.markdown" must be exactly "report.md" and "report_paths.json" must be exactly "report.json". Do not use absolute VM paths such as "%[2]s/report.md" in the JSON; the reports must stay portable after the task bundle is copied back to the host.
 - For each finding object, include id, title, category, severity, confidence, source_lead_id, status, verdicts, evidence_paths, summary, and affected_paths when known.
 - For each duplicate finding object, also include canonical_finding_id matching the deduplication verdict.
 - "verdicts" must exactly match ledger verdicts in phase order using strings like "review accepted", "deduplicate canonical", and "validation proven".

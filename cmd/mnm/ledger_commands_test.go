@@ -352,6 +352,30 @@ func TestReportFinalizeRequiresExpectedBuckets(t *testing.T) {
 	}
 }
 
+func TestReportFinalizeRejectsAbsoluteReportPaths(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSON(t, "run_test", "/tmp/mnm-output/report.md", "/tmp/mnm-output/report.json", nil))
+
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected absolute report path error")
+	}
+	if !strings.Contains(err.Error(), `report_paths.markdown = "/tmp/mnm-output/report.md", want "report.md"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report with absolute report_paths should not be finalized")
+	}
+}
+
 func TestReportFinalizeRejectsNullScalarFields(t *testing.T) {
 	tests := []struct {
 		name       string

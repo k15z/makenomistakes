@@ -2681,6 +2681,14 @@ func (executor *recordingExecutor) Run(_ context.Context, name string, args ...s
 		if err := os.WriteFile(filepath.Join(outDir, "evidence", "task-output-marker.txt"), []byte("copied"), filePerm); err != nil {
 			return err
 		}
+		for _, name := range []string{
+			"opencode-review-auth.jsonl",
+			"opencode-task_recon.jsonl",
+		} {
+			if err := os.WriteFile(filepath.Join(outDir, "evidence", name), []byte("{\"type\":\"done\"}\n"), filePerm); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

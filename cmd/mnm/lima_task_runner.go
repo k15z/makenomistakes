@@ -12,6 +12,8 @@ import (
 )
 
 const (
+	maxLimaTaskInstanceNameLen = 48
+
 	guestTaskSnapshotPath = "/tmp/snapshot.tar.zst"
 	guestTaskLedgerDir    = "/tmp/mnm-ledger"
 	guestTaskOutputDir    = "/tmp/mnm-output"
@@ -69,7 +71,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		return result, err
 	}
 	defer cleanupLedgerDir()
-	err = runner.Runner.RunTask(ctx, LimaTaskRequest{
+	runErr := runner.Runner.RunTask(ctx, LimaTaskRequest{
 		RunID:        task.RunID,
 		Task:         task.taskRecord(),
 		Attempt:      attempt,
@@ -85,12 +87,12 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		SkipVerify:   true,
 	})
 	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath)
-	if err != nil {
+	if runErr != nil {
 		if logErr != nil {
-			err = errors.Join(err, logErr)
+			runErr = errors.Join(runErr, logErr)
 		}
 		return result, openCodeAttemptError{
-			err:            err,
+			err:            runErr,
 			logText:        logText,
 			ledgerModified: false,
 		}
@@ -136,10 +138,7 @@ func copyLimaAttemptLog(outputDir, logRelPath, hostLogPath string) (string, erro
 		return logText, nil
 	}
 	if _, err := os.Stat(attemptLogPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return logText, nil
-		}
-		return logText, err
+		return logText, fmt.Errorf("copy task transcript from bundle: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(hostLogPath), dirPerm); err != nil {
 		return logText, err
@@ -318,18 +317,23 @@ func (runner LimaRunner) copyTaskOutput(ctx context.Context, instanceName, outpu
 
 func limaTaskInstanceName(runID, taskID string, attempt int) string {
 	name := limaInstanceName(runID + "-task-" + taskID)
-	digest := sha256.Sum256([]byte(runID + "\x00" + taskID + "\x00" + strconv.Itoa(attempt)))
-	hash := fmt.Sprintf("%x", digest[:])[:10]
-	suffix := "-" + hash
 	if attempt > 0 {
-		suffix += "-a" + strconv.Itoa(attempt)
+		name += "-a" + strconv.Itoa(attempt)
 	}
-	budget := 63 - len(suffix)
-	if budget < len("mnm") {
-		budget = len("mnm")
+	digest := sha256.Sum256([]byte(runID + "\x00" + taskID + "\x00" + strconv.Itoa(attempt)))
+	hash := fmt.Sprintf("%x", digest[:])[:8]
+	return shortenLimaTaskInstanceName(name, hash)
+}
+
+func shortenLimaTaskInstanceName(name, hash string) string {
+	suffix := "-" + hash
+	if len(name)+len(suffix) <= maxLimaTaskInstanceNameLen {
+		return name + suffix
 	}
-	if len(name) > budget {
-		name = strings.TrimRight(name[:budget], "-")
+	keep := maxLimaTaskInstanceNameLen - len(suffix)
+	prefix := strings.TrimRight(name[:keep], "-")
+	if prefix == "" {
+		prefix = "mnm-task"
 	}
-	return name + suffix
+	return prefix + suffix
 }
