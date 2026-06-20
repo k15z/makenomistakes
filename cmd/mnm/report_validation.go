@@ -285,6 +285,9 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		if err != nil {
 			return fmt.Errorf("%s.evidence_paths contains invalid path %q: %w", prefix, evidencePath, err)
 		}
+		if evidenceRel != evidencePath {
+			return fmt.Errorf("%s.evidence_paths contains %q, want normalized registered path %q", prefix, evidencePath, evidenceRel)
+		}
 		evidence, ok := state.FindingEvidence[id][evidenceRel]
 		if !ok {
 			return fmt.Errorf("%s.evidence_paths contains %q, which is not registered ledger evidence for finding %s", prefix, evidencePath, id)
