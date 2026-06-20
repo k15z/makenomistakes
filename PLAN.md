@@ -238,6 +238,8 @@ Finding statuses:
   status and rejects conflicting task completion status rewrites.
 - VM-side `mnm report finalize` is idempotent for repeated identical report
   paths and rejects conflicting final report path rewrites for the same task.
+- Runner-owned lifecycle and failure evidence is idempotent for repeated
+  identical run/path registrations.
 - Ledger reads reject malformed event envelopes, unknown event types, event
   type/object mismatches, missing required event data fields, and invalid event
   data enum values before downstream phases consume state.

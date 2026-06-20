@@ -147,17 +147,7 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	if err := writeRunnerManifest(manifestPath, *runID, workspace, opencodePath, opencodeVersionOutput); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(*runDir, LedgerEvent{
-		RunID:    *runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		Data: map[string]any{
-			"kind":  "json",
-			"title": "Runner lifecycle manifest",
-			"path":  "evidence/runner-manifest.json",
-		},
-	}); err != nil {
+	if _, err := registerRunnerEvidence(*runDir, *runID, "json", "Runner lifecycle manifest", "evidence/runner-manifest.json", false); err != nil {
 		return err
 	}
 	failure.Stage = "runner_completed_event"
@@ -204,17 +194,7 @@ func (failure runnerFailureContext) Record(cause error) error {
 	}); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(failure.RunDir, LedgerEvent{
-		RunID:    failure.RunID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		Data: map[string]any{
-			"kind":  "json",
-			"title": "Runner failure manifest",
-			"path":  relPath,
-		},
-	}); err != nil {
+	if _, err := registerRunnerEvidence(failure.RunDir, failure.RunID, "json", "Runner failure manifest", relPath, true); err != nil {
 		return err
 	}
 	return appendLedgerEvent(failure.RunDir, LedgerEvent{
@@ -227,6 +207,16 @@ func (failure runnerFailureContext) Record(cause error) error {
 			"error": cause.Error(),
 			"path":  relPath,
 		},
+	})
+}
+
+func registerRunnerEvidence(runDir, runID, kind, title, relPath string, allowContentChange bool) (string, error) {
+	return registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              runID,
+		Kind:               kind,
+		Title:              title,
+		Path:               relPath,
+		AllowContentChange: allowContentChange,
 	})
 }
 

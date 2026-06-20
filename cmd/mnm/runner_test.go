@@ -338,6 +338,37 @@ exit 0
 	}
 }
 
+func TestRunnerFailureEvidenceRegistrationIsIdempotent(t *testing.T) {
+	runDir := t.TempDir()
+	failure := runnerFailureContext{
+		RunID:  "run_failure",
+		RunDir: runDir,
+		Stage:  "recon",
+	}
+
+	if err := failure.Record(errors.New("first failure")); err != nil {
+		t.Fatalf("first failure record failed: %v", err)
+	}
+	if err := failure.Record(errors.New("second failure")); err != nil {
+		t.Fatalf("second failure record failed: %v", err)
+	}
+
+	assertEvidenceEventCount(t, runDir, "", "evidence/runner-failure.json", 1)
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failures int
+	for _, event := range events {
+		if event.Type == "runner.failed" && event.ObjectID == "run_failure" {
+			failures++
+		}
+	}
+	if failures != 2 {
+		t.Fatalf("runner.failed event count = %d, want 2", failures)
+	}
+}
+
 func TestLimaRunnerCommandSequence(t *testing.T) {
 	runDir := t.TempDir()
 	payload := filepath.Join(runDir, "mnm-linux-test")
