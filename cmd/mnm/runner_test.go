@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1328,8 +1329,8 @@ printf '{"type":"done","attempt":%s}\n' "$count"
 		Model:   "openrouter/test",
 		Prompt:  "retry until the verdict exists",
 		LogPath: filepath.Join(runDir, "evidence", "opencode-postcondition-retry.jsonl"),
-		Verify: func() error {
-			count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count")))
+		Verify: func(verifyRunDir string) error {
+			count := strings.TrimSpace(readFile(t, filepath.Join(verifyRunDir, "attempt-count")))
 			if count != "2" {
 				return errors.New("validate opencode task did not record validation verdict for finding finding_retry")
 			}
@@ -1512,6 +1513,113 @@ printf '{"type":"done","attempt":2}\n'
 	}
 }
 
+func TestRunOpenCodeTaskDefersBundleIngestionUntilPostconditionsPass(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	task := TaskRecord{
+		RunID:  "run_postcondition_bundle",
+		TaskID: "task_postcondition_bundle",
+		Phase:  "deduplicate",
+	}
+	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_LEDGER_DIR:?MNM_LEDGER_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+count_file="$MNM_LEDGER_DIR/postcondition-attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/postcondition-$count.md" <<EOF
+# Attempt $count
+EOF
+case "$count" in
+  1) digest="16f6f9e9030a7b44ed95cd6c36949316d59117c2b80939aed881ebd0a0a7a0a0" ;;
+  2) digest="337b24e394c686f5444fe7cdc2e0d386da09d6eaffda73db423507f27f466ae0" ;;
+  *) echo "unexpected attempt $count" >&2; exit 1 ;;
+esac
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_postcondition_notes_$count","run_id":"run_postcondition_bundle","type":"evidence.added","object":"evidence","object_id":"evidence_postcondition_notes_$count","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:0${count}Z","data":{"kind":"markdown","title":"Postcondition notes $count","path":"evidence/postcondition-$count.md","content_sha256":"$digest"}}
+{"id":"event_postcondition_done_$count","run_id":"run_postcondition_bundle","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:1${count}Z","data":{"status":"completed","summary":"done $count"}}
+EOF
+printf '{"type":"done","attempt":%s}\n' "$count"
+`)
+
+	verifyAttempts := 0
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:    task.RunID,
+		TaskID:   task.TaskID,
+		Phase:    task.Phase,
+		Title:    "mnm postcondition bundle test",
+		Model:    "openrouter/test",
+		Prompt:   "write postcondition evidence",
+		LogPath:  filepath.Join(runDir, "evidence", "opencode-postcondition-bundle.jsonl"),
+		TaskFile: taskPath,
+		Verify: func(verifyRunDir string) error {
+			verifyAttempts++
+			centralEvents, err := readLedgerEventsFile(runDir)
+			if err != nil {
+				return err
+			}
+			if verifyAttempts == 1 {
+				if len(centralEvents) != 0 {
+					return fmt.Errorf("first attempt bundle was ingested before verification failed: %#v", centralEvents)
+				}
+				return errors.New("force retry after bundle verification")
+			}
+			if _, ok := ledgerTaskEvidence(verifyRunDir, task.TaskID, "evidence/postcondition-2.md"); !ok {
+				return errors.New("second attempt evidence missing from verification overlay")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected retry to recover after clean failed verification, got: %v", err)
+	}
+	if verifyAttempts != 2 {
+		t.Fatalf("verify attempt count = %d, want 2", verifyAttempts)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "evidence", "postcondition-1.md")); !os.IsNotExist(err) {
+		t.Fatalf("first failed attempt artifact should not be ingested, stat err=%v", err)
+	}
+	if got := readFile(t, filepath.Join(runDir, "evidence", "postcondition-2.md")); !strings.Contains(got, "Attempt 2") {
+		t.Fatalf("second attempt artifact was not ingested:\n%s", got)
+	}
+	events, err := readLedgerEventsFile(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawRetry, sawSecondEvidence bool
+	for _, event := range events {
+		if event.ID == "event_postcondition_notes_1" || event.ID == "event_postcondition_done_1" {
+			t.Fatalf("first failed attempt event was ingested: %#v", event)
+		}
+		if event.Type == "task.retrying" {
+			sawRetry = true
+		}
+		if event.ID == "event_postcondition_notes_2" {
+			sawSecondEvidence = true
+		}
+	}
+	if !sawRetry || !sawSecondEvidence {
+		t.Fatalf("expected retry and second evidence events, got %#v", eventTypes(events))
+	}
+}
+
 func TestTaskBundlePromptRewritesArtifactsButPreservesLedgerPath(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
 	outputDir := filepath.Join(runDir, taskBundlesDir, "task_one", "attempt-1")
@@ -1688,7 +1796,7 @@ printf '{"type":"done","attempt":%s}\n' "$count"
 		Model:   "openrouter/test",
 		Prompt:  "do not retry after partial ledger writes",
 		LogPath: filepath.Join(runDir, "evidence", "opencode-dirty-postcondition.jsonl"),
-		Verify: func() error {
+		Verify: func(string) error {
 			return errors.New("validate opencode task did not record validation verdict for finding finding_dirty")
 		},
 	})
