@@ -62,17 +62,13 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	if err := os.WriteFile(promptPath, []byte(prompt), filePerm); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":  "markdown",
-			"title": "Deduplicate prompt",
-			"path":  promptRel,
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              runID,
+		TaskID:             task.TaskID,
+		Kind:               "markdown",
+		Title:              "Deduplicate prompt",
+		Path:               promptRel,
+		AllowContentChange: true,
 	}); err != nil {
 		return err
 	}
@@ -124,17 +120,12 @@ func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePa
 	}); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":  "jsonl",
-			"title": "OpenCode Deduplicate transcript",
-			"path":  logRel,
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:  runID,
+		TaskID: task.TaskID,
+		Kind:   "jsonl",
+		Title:  "OpenCode Deduplicate transcript",
+		Path:   logRel,
 	}); err != nil {
 		return err
 	}

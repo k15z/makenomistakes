@@ -733,6 +733,63 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunReconTaskReregistersPromptEvidenceIdempotently(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := newLedgerTestRun(t)
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+count_file="$MNM_RUN_DIR/recon-attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$count" -le 3 ]; then
+  printf '{"type":"done","attempt":%s}\n' "$count"
+  exit 0
+fi
+cat > "$MNM_RUN_DIR/evidence/recon-codebase-map.md" <<'EOF'
+# Codebase map
+
+Map.
+EOF
+cat > "$MNM_RUN_DIR/evidence/recon-risk-register.md" <<'EOF'
+# Risk register
+
+Risks.
+EOF
+cat > "$MNM_RUN_DIR/evidence/lead-auth.md" <<'EOF'
+# Lead
+
+Investigate auth.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_recon_map_$count","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_map_$count","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon codebase map","path":"evidence/recon-codebase-map.md","content_sha256":"7ceb463d44eead4e12069f563210b74451e5c80d8db60ac9fcad006a1ce7d555"}}
+{"id":"event_recon_risk_$count","run_id":"run_recon","type":"evidence.added","object":"evidence","object_id":"evidence_recon_risk_$count","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"markdown","title":"Recon risk register","path":"evidence/recon-risk-register.md","content_sha256":"bae9973f8742bc2bb69737139307dc93c649cb06e5a3b2e0b4efc5f21d33c46c"}}
+{"id":"event_recon_lead_$count","run_id":"run_recon","type":"lead.created","object":"lead","object_id":"lead_auth","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"title":"Investigate auth","category":"authz","priority":"high","body_path":"evidence/lead-auth.md"}}
+{"id":"event_recon_done_$count","run_id":"run_recon","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done","attempt":%s}\n' "$count"
+`)
+
+	err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath)
+	if err == nil {
+		t.Fatal("expected first recon attempt to fail postconditions")
+	}
+	if err := runReconTask(runDir, "run_recon", t.TempDir(), Config{Runner: RunnerConfig{MaxLeads: 3}, Models: ModelConfig{Default: "fake/model"}}, opencodePath); err != nil {
+		t.Fatalf("second recon run failed: %v", err)
+	}
+
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-prompt.md", 1)
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/opencode-recon.jsonl", 1)
+}
+
 func TestRunReconTaskRequiresContextEvidenceFiles(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0

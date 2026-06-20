@@ -64,18 +64,14 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	if err := os.WriteFile(promptPath, []byte(prompt), filePerm); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":       "markdown",
-			"title":      "Validate prompt: " + finding.Title,
-			"path":       promptRel,
-			"finding_id": finding.ID,
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              runID,
+		TaskID:             task.TaskID,
+		Kind:               "markdown",
+		Title:              "Validate prompt: " + finding.Title,
+		Path:               promptRel,
+		FindingID:          finding.ID,
+		AllowContentChange: true,
 	}); err != nil {
 		return err
 	}
@@ -129,18 +125,13 @@ func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath s
 	}); err != nil {
 		return err
 	}
-	if err := appendLedgerEvent(runDir, LedgerEvent{
-		RunID:    runID,
-		Type:     "evidence.added",
-		Object:   "evidence",
-		ObjectID: newLedgerID("evidence"),
-		TaskID:   task.TaskID,
-		Data: map[string]any{
-			"kind":       "jsonl",
-			"title":      "OpenCode Validate transcript: " + finding.Title,
-			"path":       logRel,
-			"finding_id": finding.ID,
-		},
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:     runID,
+		TaskID:    task.TaskID,
+		Kind:      "jsonl",
+		Title:     "OpenCode Validate transcript: " + finding.Title,
+		Path:      logRel,
+		FindingID: finding.ID,
 	}); err != nil {
 		return err
 	}
