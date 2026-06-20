@@ -48,13 +48,13 @@ func TestInvestigateConfigDefaults(t *testing.T) {
 	if got := maxInvestigations(cfg); got != 7 {
 		t.Fatalf("maxInvestigations = %d, want 7", got)
 	}
-	if got := investigateParallelism(cfg); got != 1 {
-		t.Fatalf("investigateParallelism = %d, want 1", got)
+	if got := taskParallelism(cfg); got != 1 {
+		t.Fatalf("taskParallelism = %d, want 1", got)
 	}
 
 	cfg.Runner.CPUs = 4
-	if got := investigateParallelism(cfg); got != 2 {
-		t.Fatalf("investigateParallelism = %d, want 2", got)
+	if got := taskParallelism(cfg); got != 2 {
+		t.Fatalf("taskParallelism = %d, want 2", got)
 	}
 
 	cfg.Runner.MaxInvestigations = 11
@@ -62,8 +62,8 @@ func TestInvestigateConfigDefaults(t *testing.T) {
 	if got := maxInvestigations(cfg); got != 11 {
 		t.Fatalf("maxInvestigations = %d, want 11", got)
 	}
-	if got := investigateParallelism(cfg); got != 3 {
-		t.Fatalf("investigateParallelism = %d, want 3", got)
+	if got := taskParallelism(cfg); got != 3 {
+		t.Fatalf("taskParallelism = %d, want 3", got)
 	}
 }
 

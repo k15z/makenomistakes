@@ -131,7 +131,7 @@ func appendInvestigateLimitReached(runDir, runID string, limit, processed int) e
 }
 
 func runInvestigateBatch(runDir, runID, workspace string, cfg Config, opencodePath string, leads []LeadRecord) error {
-	parallelism := investigateParallelism(cfg)
+	parallelism := taskParallelism(cfg)
 	jobs := make(chan LeadRecord)
 	errs := make(chan error, len(leads))
 	var wg sync.WaitGroup
@@ -327,14 +327,8 @@ func maxInvestigations(cfg Config) int {
 	return cfg.Runner.MaxLeads
 }
 
-func investigateParallelism(cfg Config) int {
-	if cfg.Runner.ParallelTasks > 0 {
-		return cfg.Runner.ParallelTasks
-	}
-	if cfg.Runner.CPUs > 1 {
-		return 2
-	}
-	return 1
+func taskParallelism(cfg Config) int {
+	return effectiveParallelTasks(cfg.Runner)
 }
 
 func scopeText(cfg Config) string {

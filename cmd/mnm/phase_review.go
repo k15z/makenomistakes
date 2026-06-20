@@ -21,7 +21,7 @@ func runReviewPhase(runDir, runID, workspace string, cfg Config, opencodePath st
 }
 
 func runReviewBatch(runDir, runID, workspace string, cfg Config, opencodePath string, findings []FindingRecord) error {
-	parallelism := investigateParallelism(cfg)
+	parallelism := taskParallelism(cfg)
 	jobs := make(chan FindingRecord)
 	errs := make(chan error, len(findings))
 	var wg sync.WaitGroup
