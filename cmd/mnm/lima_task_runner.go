@@ -32,6 +32,119 @@ type LimaTaskRequest struct {
 	Model        string
 	ModelAPIKey  string
 	KeepVM       bool
+	SkipVerify   bool
+}
+
+type LimaTaskAttemptRunner struct {
+	Runner       LimaRunner
+	Config       RunnerConfig
+	SnapshotPath string
+	ModelAPIKey  string
+	KeepVM       bool
+}
+
+func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+	result := openCodeAttemptResult{TaskRunDir: runDir}
+	if !task.usesTaskBundle() {
+		return result, errors.New("Lima task attempts require task bundle metadata")
+	}
+	outputDir, _, err := prepareOpenCodeTaskBundleAttempt(runDir, task, attempt)
+	if err != nil {
+		return result, err
+	}
+	result = openCodeAttemptResult{TaskRunDir: outputDir, Bundle: true}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte(taskVMPrompt(task.Prompt, workspace, runDir)), filePerm); err != nil {
+		return result, err
+	}
+	logRelPath, err := taskLogRelPath(runDir, task)
+	if err != nil {
+		return result, err
+	}
+	ledgerDir, cleanupLedgerDir, err := prepareRunnerTaskLedgerSnapshot(runDir)
+	if err != nil {
+		return result, err
+	}
+	defer cleanupLedgerDir()
+	err = runner.Runner.RunTask(context.Background(), LimaTaskRequest{
+		RunID:        task.RunID,
+		Task:         task.taskRecord(),
+		Attempt:      attempt,
+		Config:       runner.Config,
+		SnapshotPath: runner.SnapshotPath,
+		LedgerDir:    ledgerDir,
+		OutputDir:    outputDir,
+		PromptPath:   promptPath,
+		LogRelPath:   logRelPath,
+		Model:        task.Model,
+		ModelAPIKey:  runner.ModelAPIKey,
+		KeepVM:       runner.KeepVM,
+		SkipVerify:   true,
+	})
+	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath)
+	if err != nil {
+		if logErr != nil {
+			err = errors.Join(err, logErr)
+		}
+		return result, openCodeAttemptError{
+			err:            err,
+			logText:        logText,
+			ledgerModified: false,
+		}
+	}
+	if logErr != nil {
+		return result, logErr
+	}
+	return result, nil
+}
+
+func taskVMPrompt(prompt, workspace, runDir string) string {
+	rebasedPrompt := strings.ReplaceAll(prompt, workspace, guestTaskWorkspaceDir)
+	rebasedPrompt = rewriteTaskBundlePromptPaths(rebasedPrompt, runDir, guestTaskOutputDir, guestTaskLedgerDir)
+	return taskBundlePromptForDirs(rebasedPrompt, guestTaskOutputDir, guestTaskLedgerDir)
+}
+
+func taskLogRelPath(runDir string, task opencodeTask) (string, error) {
+	if strings.TrimSpace(task.LogPath) == "" {
+		return filepath.ToSlash(filepath.Join("evidence", "opencode-"+safeFileID(task.TaskID)+".jsonl")), nil
+	}
+	absRunDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return "", err
+	}
+	absLogPath, err := filepath.Abs(task.LogPath)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRunDir, absLogPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("opencode log path must point inside run directory: %s", task.LogPath)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+func copyLimaAttemptLog(outputDir, logRelPath, hostLogPath string) (string, error) {
+	attemptLogPath := filepath.Join(outputDir, filepath.FromSlash(logRelPath))
+	logText := readLogSuffix(attemptLogPath, 0)
+	if hostLogPath == "" {
+		return logText, nil
+	}
+	if _, err := os.Stat(attemptLogPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return logText, nil
+		}
+		return logText, err
+	}
+	if err := os.MkdirAll(filepath.Dir(hostLogPath), dirPerm); err != nil {
+		return logText, err
+	}
+	if err := copyFileMode(attemptLogPath, hostLogPath, filePerm); err != nil {
+		return logText, err
+	}
+	return logText, nil
 }
 
 func (runner LimaRunner) RunTask(ctx context.Context, request LimaTaskRequest) error {
@@ -41,7 +154,12 @@ func (runner LimaRunner) RunTask(ctx context.Context, request LimaTaskRequest) e
 	if err := validateLimaTaskRequest(request); err != nil {
 		return err
 	}
-	payloadPath, cleanupPayload, err := buildLinuxRunnerPayload(request.LedgerDir)
+	payloadBuildDir, err := os.MkdirTemp("", "mnm-task-payload-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(payloadBuildDir)
+	payloadPath, cleanupPayload, err := buildLinuxRunnerPayload(payloadBuildDir)
 	if err != nil {
 		return err
 	}
@@ -160,6 +278,9 @@ func guestTaskRunnerCommand(request LimaTaskRequest) string {
 		shellQuote(logRelPath),
 		timeoutMinutes,
 	)
+	if request.SkipVerify {
+		runnerCommand += " --skip-bundle-verify"
+	}
 	return joinGuestTaskCommands(runnerCommand)
 }
 
