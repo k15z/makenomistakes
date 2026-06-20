@@ -194,6 +194,87 @@ func TestTaskCompleteRequiresSummary(t *testing.T) {
 	}
 }
 
+func TestTaskCompleteIsIdempotentForSameStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"task", "complete",
+		"--run-dir", runDir,
+		"--status", "completed",
+		"--summary", "Recon completed",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first task complete failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if err := run([]string{
+		"task", "complete",
+		"--run-dir", runDir,
+		"--status", "completed",
+		"--summary", "Retried completion",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("idempotent task complete failed: %v\nstderr: %s", err, stderr.String())
+	}
+	assertTaskCompletedEventCount(t, runDir, "task_recon", 1)
+}
+
+func TestTaskCompleteIsAtomicForParallelSameStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"task", "complete",
+				"--run-dir", runDir,
+				"--status", "completed",
+				"--summary", "Parallel completion",
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("parallel task complete failed: %v", err)
+		}
+	}
+	assertTaskCompletedEventCount(t, runDir, "task_recon", 1)
+}
+
+func TestTaskCompleteRejectsConflictingStatus(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"task", "complete",
+		"--run-dir", runDir,
+		"--status", "failed",
+		"--summary", "Recon failed",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("first task complete failed: %v\nstderr: %s", err, stderr.String())
+	}
+	err := run([]string{
+		"task", "complete",
+		"--run-dir", runDir,
+		"--status", "completed",
+		"--summary", "Retried as completed",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected conflicting completion status error")
+	}
+	if !strings.Contains(err.Error(), `task task_recon is already completed with status "failed"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertTaskCompletedEventCount(t, runDir, "task_recon", 1)
+}
+
 func TestReportFinalizeRejectsMalformedJSONWithoutLedgerEvent(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	reportMD := writeRunFile(t, runDir, "report.md", "# Report")
@@ -2727,6 +2808,23 @@ func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
 	}
 	if got != want {
 		t.Fatalf("lead.closed event count = %d, want %d", got, want)
+	}
+}
+
+func assertTaskCompletedEventCount(t *testing.T, runDir, taskID string, want int) {
+	t.Helper()
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for _, event := range events {
+		if event.Type == "task.completed" && event.ObjectID == taskID {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("task.completed event count for %s = %d, want %d", taskID, got, want)
 	}
 }
 
