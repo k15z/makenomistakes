@@ -152,6 +152,9 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if err := requireCurrentTaskPhase(task, "lead create", "recon", "investigate"); err != nil {
+			return err
+		}
 		bodyPath, err := requirePathInsideRunDir(runDir, *bodyFile)
 		if err != nil {
 			return err
@@ -215,6 +218,9 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		runDir, task, err := currentTaskForCommand(*runDirFlag)
 		if err != nil {
+			return err
+		}
+		if err := requireCurrentTaskPhase(task, "lead close", "investigate"); err != nil {
 			return err
 		}
 		event, err := prepareLedgerEvent(runDir, LedgerEvent{
@@ -356,6 +362,9 @@ func findingCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	runDir, task, err := currentTaskForCommand(*runDirFlag)
 	if err != nil {
+		return err
+	}
+	if err := requireCurrentTaskPhase(task, "finding create", "investigate"); err != nil {
 		return err
 	}
 	if *leadID != "" {
@@ -740,6 +749,13 @@ func currentTaskForCommand(runDirFlag string) (string, TaskRecord, error) {
 		return "", TaskRecord{}, err
 	}
 	return runDir, task, nil
+}
+
+func requireCurrentTaskPhase(task TaskRecord, command string, allowed ...string) error {
+	if oneOf(task.Phase, allowed...) {
+		return nil
+	}
+	return fmt.Errorf("current task phase %q cannot run %s; expected one of: %s", task.Phase, command, strings.Join(allowed, ", "))
 }
 
 func ledgerTaskEvidencePathUnlocked(runDir, taskID, relPath string) (EvidenceRecord, bool, error) {

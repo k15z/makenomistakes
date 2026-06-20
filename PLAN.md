@@ -217,6 +217,9 @@ Finding statuses:
   transitions, missing references, whitespace-only command fields, empty
   registered artifacts, ambiguous evidence ownership, and evidence paths outside
   the run directory after symlink resolution.
+- VM-side `mnm lead create`, `mnm lead close`, and `mnm finding create` reject
+  attempts from current task phases that are not allowed to perform that
+  lifecycle action.
 - VM-side `mnm verdict record` rejects attempts to record a Review,
   Deduplicate, or Validate verdict from any other current task phase.
 - VM-side `mnm verdict record` is idempotent for repeated identical decisions
