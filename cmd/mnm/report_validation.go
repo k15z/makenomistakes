@@ -81,6 +81,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 		{name: "unvalidated", countName: "findings_unvalidated"},
 	}
 	seenReportIDs := map[string]string{}
+	citedEvidencePaths := map[string]bool{}
 	for _, bucket := range buckets {
 		items, err := requiredArrayField(root, bucket.name)
 		if err != nil {
@@ -94,7 +95,7 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 			return fmt.Errorf("report JSON counts.%s = %d, want %d", bucket.countName, count, len(items))
 		}
 		for i, item := range items {
-			if err := validateReportFindingItem(runDir, bucket.name, i, item, state, seenReportIDs); err != nil {
+			if err := validateReportFindingItem(runDir, bucket.name, i, item, state, seenReportIDs, citedEvidencePaths); err != nil {
 				return err
 			}
 		}
@@ -103,6 +104,9 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 		return err
 	}
 	if err := validateMarkdownReportCoversAllFindings(markdown, state); err != nil {
+		return err
+	}
+	if err := validateMarkdownReportCoversEvidencePaths(markdown, citedEvidencePaths); err != nil {
 		return err
 	}
 	return nil
@@ -198,7 +202,7 @@ func validateReportPaths(runDir string, root map[string]json.RawMessage, markdow
 	return nil
 }
 
-func validateReportFindingItem(runDir, bucket string, index int, item map[string]json.RawMessage, state reportLedgerState, seenReportIDs map[string]string) error {
+func validateReportFindingItem(runDir, bucket string, index int, item map[string]json.RawMessage, state reportLedgerState, seenReportIDs map[string]string, citedEvidencePaths map[string]bool) error {
 	prefix := fmt.Sprintf("%s[%d]", bucket, index)
 	id, err := requiredStringField(item, "id")
 	if err != nil {
@@ -295,6 +299,7 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 		if err := registeredEvidenceFileError(runDir, evidenceRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 			return fmt.Errorf("%s.evidence_paths contains unusable evidence %q: %w", prefix, evidencePath, err)
 		}
+		citedEvidencePaths[evidenceRel] = true
 	}
 	return nil
 }
@@ -431,12 +436,67 @@ func markdownContainsFindingID(markdown []byte, id string) bool {
 	return false
 }
 
+func validateMarkdownReportCoversEvidencePaths(markdown []byte, evidencePaths map[string]bool) error {
+	paths := make([]string, 0, len(evidencePaths))
+	for path := range evidencePaths {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		if markdownContainsEvidencePath(markdown, path) {
+			continue
+		}
+		return fmt.Errorf("markdown report missing evidence path %s", path)
+	}
+	return nil
+}
+
+func markdownContainsEvidencePath(markdown []byte, path string) bool {
+	if path == "" {
+		return false
+	}
+	needle := []byte(path)
+	for start := 0; start < len(markdown); {
+		index := bytes.Index(markdown[start:], needle)
+		if index < 0 {
+			return false
+		}
+		index += start
+		end := index + len(needle)
+		if evidencePathHasStartBoundary(markdown, index) && evidencePathHasEndBoundary(markdown, end) {
+			return true
+		}
+		start = index + 1
+	}
+	return false
+}
+
+func evidencePathHasStartBoundary(markdown []byte, index int) bool {
+	return index == 0 || !isEvidencePathChar(markdown[index-1])
+}
+
+func evidencePathHasEndBoundary(markdown []byte, end int) bool {
+	if end == len(markdown) {
+		return true
+	}
+	if markdown[end] == '.' {
+		return end+1 == len(markdown) || !isFindingIDChar(markdown[end+1]) && markdown[end+1] != '/'
+	}
+	return !isEvidencePathChar(markdown[end])
+}
+
 func isFindingIDChar(value byte) bool {
 	return value >= 'a' && value <= 'z' ||
 		value >= 'A' && value <= 'Z' ||
 		value >= '0' && value <= '9' ||
 		value == '_' ||
 		value == '-'
+}
+
+func isEvidencePathChar(value byte) bool {
+	return isFindingIDChar(value) ||
+		value == '.' ||
+		value == '/'
 }
 
 func reportBucketForFinding(verdicts map[string]VerdictRecord) string {
