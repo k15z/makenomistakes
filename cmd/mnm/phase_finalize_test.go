@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +18,13 @@ func TestFinalizePromptIncludesRequiredReportCommands(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# makenomistakes Finalize",
+		filepath.ToSlash(filepath.Join(runDir, "evidence", "finalize-context.json")),
 		"Ledger path: " + filepath.ToSlash(filepath.Join(runDir, "events.jsonl")),
 		"Security and correctness only.",
+		"Read " + filepath.ToSlash(filepath.Join(runDir, "evidence", "finalize-context.json")) + " first",
+		"Do not read opencode-*.jsonl transcripts",
+		"treat validation notes and verdict details as higher authority",
+		"hardcoded session signing secret is not by itself proof of forged authenticated sessions",
 		"mnm report finalize --markdown",
 		filepath.ToSlash(filepath.Join(runDir, "report.md")),
 		filepath.ToSlash(filepath.Join(runDir, "report.json")),
@@ -30,6 +36,102 @@ func TestFinalizePromptIncludesRequiredReportCommands(t *testing.T) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
+}
+
+func TestBuildFinalizeContextIncludesCompactFindingData(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	manifestRel := "evidence/runner-manifest.json"
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(manifestRel)), map[string]any{
+		"workspace_files": []string{"NodeGoat/app/routes/profile.js"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registerRunnerEvidence(runDir, "run_test", "json", "Runner lifecycle manifest", manifestRel, false); err != nil {
+		t.Fatal(err)
+	}
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	findings, err := ledgerFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finding FindingRecord
+	for _, item := range findings {
+		if item.ID == findingID {
+			finding = item
+			break
+		}
+	}
+	if finding.ID == "" {
+		t.Fatalf("missing finding %s", findingID)
+	}
+	writeRunFile(t, runDir, finding.BodyPath, "Profile route issue at app/routes/profile.js:64.")
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	proofRel := addValidationProofForFindingForTest(t, runDir, findingID)
+	recordVerdictForTest(t, runDir, findingID, "validate", "proven", "")
+
+	data, err := buildFinalizeContext(runDir, "run_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var context finalizeContextFile
+	if err := json.Unmarshal(data, &context); err != nil {
+		t.Fatalf("context JSON did not parse: %v\n%s", err, data)
+	}
+	if got := context.Counts["findings_proven"]; got != 1 {
+		t.Fatalf("findings_proven = %d, want 1\n%s", got, data)
+	}
+	if len(context.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1\n%s", len(context.Findings), data)
+	}
+	got := context.Findings[0]
+	if got.ID != findingID || got.Status != "validation_proven" || got.Bucket != "proven" {
+		t.Fatalf("unexpected finding context: %#v", got)
+	}
+	if !containsString(got.ValidationProofEvidencePaths, proofRel) {
+		t.Fatalf("validation proof paths missing %s: %#v", proofRel, got.ValidationProofEvidencePaths)
+	}
+	if !containsString(got.RecommendedEvidencePaths, proofRel) {
+		t.Fatalf("recommended evidence paths missing %s: %#v", proofRel, got.RecommendedEvidencePaths)
+	}
+	if !containsString(got.AffectedPathCandidates, "NodeGoat/app/routes/profile.js") {
+		t.Fatalf("affected path candidates missing manifest path: %#v", got.AffectedPathCandidates)
+	}
+	if got.Verdicts == nil || strings.Join(got.Verdicts, ",") != "review accepted,deduplicate canonical,validation proven" {
+		t.Fatalf("unexpected verdict labels: %#v", got.Verdicts)
+	}
+}
+
+func TestAffectedPathCandidatesUsesUniqueBasenames(t *testing.T) {
+	workspaceFiles := []string{
+		"NodeGoat/app/routes/allocations.js",
+		"NodeGoat/app/routes/benefits.js",
+		"NodeGoat/app/routes/index.js",
+		"NodeGoat/artifacts/db-reset.js",
+		"NodeGoat/test/e2e/plugins/index.js",
+	}
+	got := affectedPathCandidates("See benefits.js:21 and allocations.js:16, plus index.js:55.", workspaceFiles)
+	for _, want := range []string{
+		"NodeGoat/app/routes/allocations.js",
+		"NodeGoat/app/routes/benefits.js",
+	} {
+		if !containsString(got, want) {
+			t.Fatalf("affected path candidates missing %s: %#v", want, got)
+		}
+	}
+	if containsString(got, "NodeGoat/app/routes/index.js") || containsString(got, "NodeGoat/test/e2e/plugins/index.js") {
+		t.Fatalf("ambiguous basename index.js should not be included from basename alone: %#v", got)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunFinalizeTaskRegistersReports(t *testing.T) {
