@@ -66,6 +66,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 	if err != nil {
 		return result, err
 	}
+	_ = os.Remove(filepath.Join(outputDir, filepath.FromSlash(logRelPath)))
 	ledgerDir, cleanupLedgerDir, err := prepareRunnerTaskLedgerSnapshot(runDir)
 	if err != nil {
 		return result, err
@@ -181,7 +182,7 @@ func (runner LimaRunner) RunTask(ctx context.Context, request LimaTaskRequest) e
 		"--cpus", cpus,
 		"--memory", memory,
 		"--disk", disk,
-		"template:docker",
+		"template:ubuntu-lts",
 	); err != nil {
 		return err
 	}
@@ -283,19 +284,56 @@ func guestTaskRunnerCommand(request LimaTaskRequest) string {
 	if request.SkipVerify {
 		runnerCommand += " --skip-bundle-verify"
 	}
-	return joinGuestTaskCommands(runnerCommand)
+	return joinGuestTaskCommands(request.Task.Phase, runnerCommand)
 }
 
-func joinGuestTaskCommands(runnerCommand string) string {
+func joinGuestTaskCommands(phase, runnerCommand string) string {
 	return strings.Join([]string{
 		"set -euo pipefail",
 		"chmod +x /tmp/mnm",
 		bootstrapAuditToolbeltCommand(),
+		bootstrapTaskToolbeltCommand(phase),
 		"mkdir -p \"$HOME/.local/share/opencode\"",
 		"if [ -f /tmp/opencode-auth.json ]; then mv /tmp/opencode-auth.json \"$HOME/.local/share/opencode/auth.json\"; chmod 600 \"$HOME/.local/share/opencode/auth.json\"; fi",
 		"mkdir -p /tmp/mnm-output /tmp/mnm-ledger /tmp/mnm-workspace",
 		"rm -f /tmp/mnm-output/.events.lock /tmp/mnm-ledger/.events.lock",
 		runnerCommand,
+	}, "\n")
+}
+
+func bootstrapTaskToolbeltCommand(phase string) string {
+	if phase != "validate" {
+		return ":"
+	}
+	return strings.Join([]string{
+		"if ! command -v docker >/dev/null 2>&1; then",
+		"  if ! command -v apt-get >/dev/null 2>&1; then",
+		"    echo \"mnm: docker is required for validation VMs but apt-get is unavailable\" >&2",
+		"    exit 1",
+		"  fi",
+		"  apt_install_prefix=\"\"",
+		"  if command -v sudo >/dev/null 2>&1; then apt_install_prefix=\"sudo\"; fi",
+		"  $apt_install_prefix env DEBIAN_FRONTEND=noninteractive apt-get update",
+		"  docker_packages=\"docker.io\"",
+		"  if apt-cache show docker-compose-v2 >/dev/null 2>&1; then",
+		"    docker_packages=\"$docker_packages docker-compose-v2\"",
+		"  elif apt-cache show docker-compose >/dev/null 2>&1; then",
+		"    docker_packages=\"$docker_packages docker-compose\"",
+		"  fi",
+		"  $apt_install_prefix env DEBIAN_FRONTEND=noninteractive apt-get install -y $docker_packages",
+		"fi",
+		"if command -v docker >/dev/null 2>&1; then",
+		"  if command -v sudo >/dev/null 2>&1; then",
+		"    sudo systemctl enable --now docker >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || true",
+		"    sudo chmod 666 /var/run/docker.sock >/dev/null 2>&1 || true",
+		"  else",
+		"    systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true",
+		"  fi",
+		"fi",
+		"if ! docker info >/dev/null 2>&1; then",
+		"  echo \"mnm: docker daemon is required for validation VMs but is not reachable\" >&2",
+		"  exit 1",
+		"fi",
 	}, "\n")
 }
 
