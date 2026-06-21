@@ -32,7 +32,7 @@ func TestLoadConfigRejectsUnsupportedVersion(t *testing.T) {
 func TestConfigUsesReconModelWhenSet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mnm.toml")
-	config := strings.Replace(defaultConfig(), `recon = "openrouter/z-ai/glm-5.2"`, `recon = "openrouter/test-recon"`, 1)
+	config := strings.Replace(defaultConfig(), `recon = "openrouter/deepseek/deepseek-v4-pro"`, `recon = "openrouter/test-recon"`, 1)
 	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
 		t.Fatal(err)
 	}

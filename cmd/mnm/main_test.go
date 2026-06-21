@@ -20,7 +20,7 @@ func TestInitCreatesConfigAndIgnore(t *testing.T) {
 	if !strings.Contains(config, `version = 1`) {
 		t.Fatalf("config missing version:\n%s", config)
 	}
-	if !strings.Contains(config, `default = "openrouter/z-ai/glm-5.2"`) {
+	if !strings.Contains(config, `default = "openrouter/deepseek/deepseek-v4-pro"`) {
 		t.Fatalf("config missing default model:\n%s", config)
 	}
 

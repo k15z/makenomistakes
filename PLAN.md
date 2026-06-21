@@ -151,13 +151,13 @@ exclude = []
 
 [models]
 api_key_env = "OPENROUTER_API_KEY"
-default = "openrouter/z-ai/glm-5.2"
-recon = "openrouter/z-ai/glm-5.2"
-investigate = "openrouter/z-ai/glm-5.2"
-review = "openrouter/z-ai/glm-5.2"
-deduplicate = "openrouter/z-ai/glm-5.2"
-validate = "openrouter/z-ai/glm-5.2"
-finalize = "openrouter/z-ai/glm-5.2"
+default = "openrouter/deepseek/deepseek-v4-pro"
+recon = "openrouter/deepseek/deepseek-v4-pro"
+investigate = "openrouter/deepseek/deepseek-v4-pro"
+review = "openrouter/deepseek/deepseek-v4-pro"
+deduplicate = "openrouter/deepseek/deepseek-v4-pro"
+validate = "openrouter/deepseek/deepseek-v4-pro"
+finalize = "openrouter/deepseek/deepseek-v4-pro"
 
 [runner]
 cpus = 4

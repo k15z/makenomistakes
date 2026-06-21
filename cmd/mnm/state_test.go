@@ -25,7 +25,7 @@ func TestStoreCreatesAndReadsRun(t *testing.T) {
 		ConfigSnapshotPath: filepath.Join(dir, ".mnm", "runs", "run_test", "mnm.toml"),
 		SnapshotPath:       filepath.Join(dir, ".mnm", "runs", "run_test", "snapshot.tar.zst"),
 		RunDir:             filepath.Join(dir, ".mnm", "runs", "run_test"),
-		Model:              "openrouter/z-ai/glm-5.2",
+		Model:              "openrouter/deepseek/deepseek-v4-pro",
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -159,7 +159,7 @@ func TestStoreMigratesSnapshotColumns(t *testing.T) {
 		dir,
 		filepath.Join(dir, "mnm.toml"),
 		filepath.Join(dir, ".mnm", "runs", "run_old"),
-		"openrouter/z-ai/glm-5.2",
+		"openrouter/deepseek/deepseek-v4-pro",
 		now,
 		now,
 	)
@@ -198,7 +198,7 @@ func testRunRecord(workspace, id, status string, timestamp time.Time) RunRecord 
 		ConfigSnapshotPath: filepath.Join(workspace, ".mnm", "runs", id, "mnm.toml"),
 		SnapshotPath:       filepath.Join(workspace, ".mnm", "runs", id, "snapshot.tar.zst"),
 		RunDir:             filepath.Join(workspace, ".mnm", "runs", id),
-		Model:              "openrouter/z-ai/glm-5.2",
+		Model:              "openrouter/deepseek/deepseek-v4-pro",
 		CreatedAt:          timestamp,
 		UpdatedAt:          timestamp,
 	}
