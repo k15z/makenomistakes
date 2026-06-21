@@ -226,6 +226,31 @@ func validateLimaTaskRequest(request LimaTaskRequest) error {
 	if request.Config.CPUs <= 0 || request.Config.MemoryGB <= 0 || request.Config.DiskGB <= 0 {
 		return errors.New("task VM request runner cpus, memory_gb, and disk_gb must be greater than zero")
 	}
+	if err := validateLimaTaskSetupConfig(request.Config.Setup); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLimaTaskSetupConfig(setup RunnerSetupConfig) error {
+	if strings.TrimSpace(setup.Script) == "" {
+		if setup.TimeoutMinutes < 0 {
+			return errors.New("task VM request runner setup timeout_minutes must not be negative")
+		}
+		if mode := strings.TrimSpace(setup.Mode); mode != "" && !oneOf(mode, "fail", "warn") {
+			return errors.New(`task VM request runner setup mode must be "fail" or "warn"`)
+		}
+		return nil
+	}
+	if _, err := cleanWorkspaceRelativePath(setup.Script); err != nil {
+		return fmt.Errorf("task VM request runner setup script: %w", err)
+	}
+	if setup.TimeoutMinutes < 0 {
+		return errors.New("task VM request runner setup timeout_minutes must not be negative")
+	}
+	if mode := runnerSetupMode(setup); !oneOf(mode, "fail", "warn") {
+		return errors.New(`task VM request runner setup mode must be "fail" or "warn"`)
+	}
 	return nil
 }
 
@@ -281,6 +306,14 @@ func guestTaskRunnerCommand(request LimaTaskRequest) string {
 		shellQuote(logRelPath),
 		timeoutMinutes,
 	)
+	if strings.TrimSpace(request.Config.Setup.Script) != "" {
+		runnerCommand += fmt.Sprintf(
+			" --setup-script %s --setup-timeout-minutes %d --setup-mode %s",
+			shellQuote(request.Config.Setup.Script),
+			int(effectiveRunnerSetupTimeout(request.Config.Setup).Minutes()),
+			shellQuote(runnerSetupMode(request.Config.Setup)),
+		)
+	}
 	if request.SkipVerify {
 		runnerCommand += " --skip-bundle-verify"
 	}

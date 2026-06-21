@@ -13,6 +13,7 @@ import (
 
 const configVersion = 1
 const defaultOpenCodeTaskTimeoutMinutes = 30
+const defaultRunnerSetupTimeoutMinutes = 15
 
 type Config struct {
 	Version      int               `toml:"version"`
@@ -43,14 +44,21 @@ type ModelConfig struct {
 }
 
 type RunnerConfig struct {
-	CPUs                       int `toml:"cpus"`
-	MemoryGB                   int `toml:"memory_gb"`
-	DiskGB                     int `toml:"disk_gb"`
-	TimeoutMinutes             int `toml:"timeout_minutes"`
-	OpenCodeTaskTimeoutMinutes int `toml:"opencode_task_timeout_minutes"`
-	MaxLeads                   int `toml:"max_leads"`
-	MaxInvestigations          int `toml:"max_investigations"`
-	ParallelTasks              int `toml:"parallel_tasks"`
+	CPUs                       int               `toml:"cpus"`
+	MemoryGB                   int               `toml:"memory_gb"`
+	DiskGB                     int               `toml:"disk_gb"`
+	TimeoutMinutes             int               `toml:"timeout_minutes"`
+	OpenCodeTaskTimeoutMinutes int               `toml:"opencode_task_timeout_minutes"`
+	MaxLeads                   int               `toml:"max_leads"`
+	MaxInvestigations          int               `toml:"max_investigations"`
+	ParallelTasks              int               `toml:"parallel_tasks"`
+	Setup                      RunnerSetupConfig `toml:"setup"`
+}
+
+type RunnerSetupConfig struct {
+	Script         string `toml:"script"`
+	TimeoutMinutes int    `toml:"timeout_minutes"`
+	Mode           string `toml:"mode"`
 }
 
 type ResolvedConfig struct {
@@ -147,6 +155,9 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 	if cfg.Runner.ParallelTasks < 0 {
 		return ResolvedConfig{}, errors.New("runner.parallel_tasks must not be negative")
 	}
+	if err := validateRunnerSetupConfig(cfg.Runner.Setup); err != nil {
+		return ResolvedConfig{}, err
+	}
 
 	return ResolvedConfig{
 		ConfigPath:    filepath.Join(workspaceDir, "mnm.toml"),
@@ -155,6 +166,53 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 		Model:         model,
 		Timeout:       time.Duration(cfg.Runner.TimeoutMinutes) * time.Minute,
 	}, nil
+}
+
+func validateRunnerSetupConfig(setup RunnerSetupConfig) error {
+	return validateRunnerSetupSyntax(setup)
+}
+
+func validateRunnerSetupSyntax(setup RunnerSetupConfig) error {
+	if strings.TrimSpace(setup.Script) == "" {
+		if setup.TimeoutMinutes < 0 {
+			return errors.New("runner.setup.timeout_minutes must not be negative")
+		}
+		if mode := strings.TrimSpace(setup.Mode); mode != "" && !oneOf(mode, "fail", "warn") {
+			return errors.New(`runner.setup.mode must be "fail" or "warn"`)
+		}
+		return nil
+	}
+	if _, err := cleanWorkspaceRelativePath(setup.Script); err != nil {
+		return fmt.Errorf("runner.setup.script: %w", err)
+	}
+	if setup.TimeoutMinutes < 0 {
+		return errors.New("runner.setup.timeout_minutes must not be negative")
+	}
+	if mode := strings.TrimSpace(setup.Mode); mode != "" && !oneOf(mode, "fail", "warn") {
+		return errors.New(`runner.setup.mode must be "fail" or "warn"`)
+	}
+	return nil
+}
+
+func cleanWorkspaceRelativePath(value string) (string, error) {
+	relPath := strings.TrimSpace(filepath.ToSlash(value))
+	if relPath == "" {
+		return "", errors.New("path must not be empty")
+	}
+	if strings.Contains(relPath, `\`) {
+		return "", errors.New("path must use slash-separated relative paths")
+	}
+	if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "/") {
+		return "", errors.New("path must be relative to the workspace root")
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(relPath)))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", errors.New("path must stay inside the workspace root")
+	}
+	if clean != relPath {
+		return "", fmt.Errorf("path = %q, want clean relative path %q", relPath, clean)
+	}
+	return clean, nil
 }
 
 func effectiveOpenCodeTaskTimeoutMinutes(cfg Config) int {
@@ -169,6 +227,22 @@ func effectiveOpenCodeTaskTimeoutMinutes(cfg Config) int {
 
 func openCodeTaskTimeout(cfg Config) time.Duration {
 	return time.Duration(effectiveOpenCodeTaskTimeoutMinutes(cfg)) * time.Minute
+}
+
+func effectiveRunnerSetupTimeout(setup RunnerSetupConfig) time.Duration {
+	minutes := setup.TimeoutMinutes
+	if minutes == 0 {
+		minutes = defaultRunnerSetupTimeoutMinutes
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func runnerSetupMode(setup RunnerSetupConfig) string {
+	mode := strings.TrimSpace(setup.Mode)
+	if mode == "" {
+		return "fail"
+	}
+	return mode
 }
 
 func effectiveParallelTasks(runner RunnerConfig) int {

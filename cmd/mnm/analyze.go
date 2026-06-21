@@ -143,6 +143,9 @@ func analyzeWorkspace(ctx context.Context, options AnalyzeOptions, runner Analyz
 	}); err != nil {
 		return err
 	}
+	if err := validateRunnerSetupInSnapshot(run.SnapshotPath, cfg.Runner.Setup); err != nil {
+		return err
+	}
 	if err := store.UpdateRunStatus(runID, RunStatusPrepared); err != nil {
 		return err
 	}
@@ -195,6 +198,9 @@ func resumeAnalyzeRun(ctx context.Context, options AnalyzeOptions, runner Analyz
 	}
 	resolved, err := cfg.validate(workspaceDir)
 	if err != nil {
+		return err
+	}
+	if err := validateRunnerSetupInSnapshot(run.SnapshotPath, cfg.Runner.Setup); err != nil {
 		return err
 	}
 	if err := preflightAnalyzeRunner(ctx, runner, RunnerPreflightRequest{

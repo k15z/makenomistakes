@@ -148,6 +148,7 @@ func runReviewTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, w
 		LogPath:   logPath,
 		TaskFile:  taskPath,
 		Timeout:   openCodeTaskTimeout(cfg),
+		Setup:     cfg.Runner.Setup,
 		Verify: func(verifyRunDir string) error {
 			if !ledgerFindingHasTaskEvidencePath(verifyRunDir, finding.ID, task.TaskID, notesRel) {
 				return fmt.Errorf("review opencode task did not register review evidence %s for finding %s", notesRel, finding.ID)

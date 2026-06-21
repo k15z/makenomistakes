@@ -87,6 +87,7 @@ func runDeduplicatePhaseWithAttemptRunnerContext(ctx context.Context, runDir, ru
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Timeout:  openCodeTaskTimeout(cfg),
+		Setup:    cfg.Runner.Setup,
 		Verify: func(verifyRunDir string) error {
 			evidence, ok := ledgerTaskEvidence(verifyRunDir, task.TaskID, notesRel)
 			if !ok {

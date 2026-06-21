@@ -57,6 +57,23 @@ evidence context needed for its task. Build artifacts, package installs, dev
 servers, containers, and repro files disappear with that VM after the host has
 collected and validated its output bundle.
 
+Projects can declare a first-class per-task setup hook in `mnm.toml`:
+
+```toml
+[runner.setup]
+script = "audit/setup-vm.sh"
+timeout_minutes = 15
+mode = "fail" # or "warn"
+```
+
+The script path is relative to the workspace root and must be included in the
+snapshot. The runner sources it inside every task workspace after snapshot
+extraction and before `opencode` starts, so exported environment variables are
+passed to the task process. The hook also receives `MNM_RUN_DIR`,
+`MNM_TASK_ID`, `MNM_PHASE`, `MNM_WORKSPACE`, and `MNM_SETUP_LOG`. Setup stdout
+and stderr are captured under each task output bundle as
+`evidence/setup-TASK-attempt-N.log`.
+
 ## Audit Pipeline
 
 Every stage of the audit pipeline runs inside task VMs through non-interactive

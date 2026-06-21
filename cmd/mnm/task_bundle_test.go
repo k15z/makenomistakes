@@ -409,6 +409,83 @@ func TestValidateTaskBundleRejectsUnownedEvidenceOutsideAllowedPhases(t *testing
 	}
 }
 
+func TestValidateTaskBundleAllowsSetupLogEvidenceForFinalize(t *testing.T) {
+	bundleDir := t.TempDir()
+	task := TaskRecord{RunID: "run_bundle", TaskID: "task_finalize", Phase: "finalize"}
+	setupLogRelPath := "evidence/setup-task_finalize-attempt-1.log"
+	writeTaskBundleFile(t, bundleDir, setupLogRelPath, "setup ok\n")
+	writeTaskBundleFile(t, bundleDir, "report.md", "# Report\n")
+	writeTaskBundleFile(t, bundleDir, "report.json", `{"run_id":"run_bundle"}`)
+	writeTaskBundleEvents(t, bundleDir,
+		LedgerEvent{
+			ID:        "event_setup",
+			RunID:     task.RunID,
+			Type:      "evidence.added",
+			Object:    "evidence",
+			ObjectID:  "evidence_task_finalize_setup_1",
+			TaskID:    task.TaskID,
+			Timestamp: "2026-01-01T00:00:00Z",
+			Data: map[string]any{
+				"kind":           "log",
+				"title":          "Task setup log",
+				"path":           setupLogRelPath,
+				"content_sha256": taskBundleFileSHA256ForTest(t, bundleDir, setupLogRelPath),
+			},
+		},
+		LedgerEvent{
+			ID:        "event_report",
+			RunID:     task.RunID,
+			Type:      "report.finalized",
+			Object:    "report",
+			ObjectID:  "report_finalize",
+			TaskID:    task.TaskID,
+			Timestamp: "2026-01-01T00:00:01Z",
+			Data: map[string]any{
+				"markdown_path": "report.md",
+				"json_path":     "report.json",
+			},
+		},
+		taskCompletedEvent(task),
+	)
+
+	if _, err := validateTaskBundle(bundleDir, task); err != nil {
+		t.Fatalf("setup log evidence should validate for finalize: %v", err)
+	}
+}
+
+func TestValidateTaskBundleRejectsSetupLogEvidenceForOtherTask(t *testing.T) {
+	bundleDir := t.TempDir()
+	task := TaskRecord{RunID: "run_bundle", TaskID: "task_review_finding", Phase: "review"}
+	setupLogRelPath := "evidence/setup-other_task-attempt-1.log"
+	writeTaskBundleFile(t, bundleDir, setupLogRelPath, "spoofed setup log\n")
+	writeTaskBundleEvents(t, bundleDir,
+		LedgerEvent{
+			ID:        "event_setup",
+			RunID:     task.RunID,
+			Type:      "evidence.added",
+			Object:    "evidence",
+			ObjectID:  "evidence_task_review_setup_1",
+			TaskID:    task.TaskID,
+			Timestamp: "2026-01-01T00:00:00Z",
+			Data: map[string]any{
+				"kind":           "log",
+				"title":          "Task setup log",
+				"path":           setupLogRelPath,
+				"content_sha256": taskBundleFileSHA256ForTest(t, bundleDir, setupLogRelPath),
+			},
+		},
+		taskCompletedEvent(task),
+	)
+
+	_, err := validateTaskBundle(bundleDir, task)
+	if err == nil {
+		t.Fatal("expected setup log path ownership error")
+	}
+	if !strings.Contains(err.Error(), `phase "review" cannot register unowned evidence`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestIngestTaskBundleRejectsDivergentExistingArtifactBeforeAppendingEvents(t *testing.T) {
 	runDir := t.TempDir()
 	bundleDir := t.TempDir()

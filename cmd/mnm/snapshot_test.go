@@ -70,6 +70,75 @@ func TestCreateWorkspaceSnapshotAppliesConfigExcludes(t *testing.T) {
 	}
 }
 
+func TestValidateRunnerSetupInSnapshotRequiresIncludedScript(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "audit/setup.sh", "#!/usr/bin/env bash\n")
+	writeWorkspaceFile(t, workspace, "src/app.go", "package main\n")
+	output := filepath.Join(t.TempDir(), "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: workspace,
+		WorkspaceDir:  workspace,
+		OutputPath:    output,
+	}); err != nil {
+		t.Fatalf("create snapshot failed: %v", err)
+	}
+
+	if err := validateRunnerSetupInSnapshot(output, RunnerSetupConfig{Script: "audit/setup.sh"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateRunnerSetupInSnapshotRejectsExcludedScript(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "audit/setup.sh", "#!/usr/bin/env bash\n")
+	writeWorkspaceFile(t, workspace, "src/app.go", "package main\n")
+	output := filepath.Join(t.TempDir(), "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: workspace,
+		WorkspaceDir:  workspace,
+		OutputPath:    output,
+		ConfigExclude: []string{"audit/setup.sh"},
+	}); err != nil {
+		t.Fatalf("create snapshot failed: %v", err)
+	}
+
+	err := validateRunnerSetupInSnapshot(output, RunnerSetupConfig{Script: "audit/setup.sh"})
+	if err == nil {
+		t.Fatal("expected missing setup script error")
+	}
+	if !strings.Contains(err.Error(), "workspace snapshot does not contain setup script audit/setup.sh") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRunnerSetupInSnapshotRejectsExcludedSymlinkTarget(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "audit"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceFile(t, workspace, "generated/setup-target.sh", "#!/usr/bin/env bash\n")
+	if err := os.Symlink("../generated/setup-target.sh", filepath.Join(workspace, "audit", "setup.sh")); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: workspace,
+		WorkspaceDir:  workspace,
+		OutputPath:    output,
+		ConfigExclude: []string{"generated/"},
+	}); err != nil {
+		t.Fatalf("create snapshot failed: %v", err)
+	}
+
+	err := validateRunnerSetupInSnapshot(output, RunnerSetupConfig{Script: "audit/setup.sh"})
+	if err == nil {
+		t.Fatal("expected missing setup symlink target error")
+	}
+	if !strings.Contains(err.Error(), "workspace snapshot does not contain setup script generated/setup-target.sh") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCreateWorkspaceSnapshotSkipsSymlinkEscape(t *testing.T) {
 	workspace := t.TempDir()
 	outsideDir := t.TempDir()

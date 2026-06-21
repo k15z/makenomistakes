@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -210,6 +211,45 @@ func TestRunnerCommandRejectsUnsafeRunID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid run id") {
 		t.Fatalf("expected invalid run id error, got %v", err)
+	}
+}
+
+func TestRunnerCommandCancelsReconSetupWithCallerContext(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "setup.sh", "echo setup should not run >&2\nexit 42\n")
+	snapshot := filepath.Join(runDir, "snapshot.tar.zst")
+	if err := createWorkspaceSnapshot(SnapshotOptions{
+		WorkspaceRoot: workspace,
+		WorkspaceDir:  workspace,
+		OutputPath:    snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(runDir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), `script = ""`, `script = "setup.sh"`, 1)
+	if err := os.WriteFile(configPath, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+echo should not run >&2
+exit 1
+`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout, stderr bytes.Buffer
+	err := runnerCommandContext(ctx, []string{
+		"--run-id", "run_cancel",
+		"--run-dir", runDir,
+		"--snapshot", snapshot,
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(runDir, "evidence", "opencode-task_recon.jsonl")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("opencode should not run, stat err=%v", statErr)
 	}
 }
 
@@ -540,6 +580,170 @@ printf '{"type":"done"}\n'
 	}
 	if _, err := validateTaskBundle(outputDir, task); err != nil {
 		t.Fatalf("task output should validate as bundle: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandSourcesSetupHookAndPassesExportedEnv(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "audit"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "audit", "setup.sh"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+echo "setup running for $MNM_TASK_ID in $MNM_PHASE"
+printf 'generated\n' > generated-by-setup.txt
+export MNM_SETUP_TOKEN="from-setup"
+export MNM_SETUP_GENERATED_FILE="$MNM_WORKSPACE/generated-by-setup.txt"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	task := TaskRecord{
+		RunID:  "run_task_setup",
+		TaskID: "task_recon",
+		Phase:  "recon",
+	}
+	taskPath := filepath.Join(t.TempDir(), "task.json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("write recon bundle"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+if [ "$MNM_SETUP_TOKEN" != "from-setup" ]; then
+  echo "missing exported setup env" >&2
+  exit 1
+fi
+if [ "$(cat "$MNM_SETUP_GENERATED_FILE")" != "generated" ]; then
+  echo "missing setup-generated file" >&2
+  exit 1
+fi
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/recon-notes.md" <<'EOF'
+# Recon notes
+
+Setup hook output was visible.
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_runner_task_setup_notes","run_id":"run_task_setup","type":"evidence.added","object":"evidence","object_id":"evidence_runner_task_setup_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon notes","path":"evidence/recon-notes.md","content_sha256":"a8e3219a23ad8b167f9857274739e8829cef19605a726d2535086065a19562b6"}}
+{"id":"event_runner_task_setup_done","run_id":"run_task_setup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", ledgerDir,
+		"--workspace", workspace,
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", opencodePath,
+		"--log-path", "evidence/opencode-task.jsonl",
+		"--timeout-minutes", "1",
+		"--setup-script", "audit/setup.sh",
+		"--setup-timeout-minutes", "1",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runner task failed: %v\nstderr: %s", err, stderr.String())
+	}
+	setupLog := readFile(t, filepath.Join(outputDir, "evidence", "setup-task_recon-attempt-1.log"))
+	for _, want := range []string{"mnm setup hook started", "setup running for task_recon in recon", "mnm setup hook completed"} {
+		if !strings.Contains(setupLog, want) {
+			t.Fatalf("setup log missing %q:\n%s", want, setupLog)
+		}
+	}
+	if _, err := validateTaskBundle(outputDir, task); err != nil {
+		t.Fatalf("task output should validate as bundle: %v", err)
+	}
+}
+
+func TestRunnerTaskCommandPreparesToolchainsBeforeSetupHook(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("runner task toolchain bootstrap is Linux-specific")
+	}
+	platform, err := nodeArchivePlatform(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installDir := filepath.Join(os.TempDir(), "mnm-tools", "node-v"+nodeToolchainVersion+"-"+platform)
+	binDir := filepath.Join(installDir, "bin")
+	if err := os.MkdirAll(binDir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	nodePath := filepath.Join(binDir, "node")
+	if _, err := os.Stat(nodePath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(nodePath, []byte("#!/bin/sh\nprintf 'v"+nodeToolchainVersion+"\\n'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	npmPath := filepath.Join(binDir, "npm")
+	if _, err := os.Stat(npmPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(npmPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ledgerDir := t.TempDir()
+	outputDir := t.TempDir()
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "package.json", "{}\n")
+	writeWorkspaceFile(t, workspace, "audit/setup.sh", strings.Join([]string{
+		`if [ "$(node --version)" != "v` + nodeToolchainVersion + `" ]; then`,
+		`  echo "missing pinned node before setup" >&2`,
+		`  exit 1`,
+		`fi`,
+		`export MNM_SETUP_TOKEN=toolchain-ready`,
+	}, "\n"))
+	task := TaskRecord{RunID: "run_toolchain_setup", TaskID: "task_recon", Phase: "recon"}
+	taskPath := filepath.Join(t.TempDir(), "task.json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(outputDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("write recon bundle"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+if [ "$MNM_SETUP_TOKEN" != "toolchain-ready" ]; then
+  echo "missing setup token" >&2
+  exit 1
+fi
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/recon-notes.md" <<'EOF'
+# Recon notes
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_runner_task_toolchain_notes","run_id":"run_toolchain_setup","type":"evidence.added","object":"evidence","object_id":"evidence_runner_task_toolchain_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Recon notes","path":"evidence/recon-notes.md","content_sha256":"5a609288c679e4d45d41ebea33b1183e64e6a66d9e10453dc8b95b20ad1d207f"}}
+{"id":"event_runner_task_toolchain_done","run_id":"run_toolchain_setup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{
+		"runner", "task",
+		"--run-dir", outputDir,
+		"--ledger-dir", ledgerDir,
+		"--workspace", workspace,
+		"--task-file", taskPath,
+		"--prompt-file", promptPath,
+		"--model", "openrouter/test",
+		"--opencode-path", opencodePath,
+		"--log-path", "evidence/opencode-task.jsonl",
+		"--timeout-minutes", "1",
+		"--setup-script", "audit/setup.sh",
+		"--setup-timeout-minutes", "1",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runner task failed: %v\nstderr: %s", err, stderr.String())
 	}
 }
 
@@ -1988,6 +2192,69 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunOpenCodeTaskRegistersSetupLogFromTaskBundleOutput(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "audit/setup.sh", "echo setup ran for $MNM_TASK_ID\n")
+	task := TaskRecord{
+		RunID:  "run_task_bundle_setup",
+		TaskID: "task_bundle_setup",
+		Phase:  "deduplicate",
+	}
+	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+: "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
+: "${MNM_TASK_ID:?MNM_TASK_ID is required}"
+mkdir -p "$MNM_RUN_DIR/evidence"
+cat > "$MNM_RUN_DIR/evidence/opencode-task-bundle-notes.md" <<'EOF'
+# Notes
+EOF
+cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
+{"id":"event_task_bundle_notes","run_id":"run_task_bundle_setup","type":"evidence.added","object":"evidence","object_id":"evidence_task_bundle_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Bundle notes","path":"evidence/opencode-task-bundle-notes.md","content_sha256":"365d0b84ae63c2afc293dedd2b00bdf0dc8d6ef70c9297d90f9e5682ab0d72ee"}}
+{"id":"event_task_bundle_done","run_id":"run_task_bundle_setup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
+EOF
+printf '{"type":"done"}\n'
+`)
+
+	err := runOpenCodeTask(opencodePath, workspace, runDir, opencodeTask{
+		RunID:    task.RunID,
+		TaskID:   task.TaskID,
+		Phase:    task.Phase,
+		Title:    "mnm task bundle setup test",
+		Model:    "openrouter/test",
+		Prompt:   "write notes",
+		LogPath:  filepath.Join(runDir, "evidence", "opencode-task-bundle-setup.jsonl"),
+		TaskFile: taskPath,
+		Setup: RunnerSetupConfig{
+			Script: "audit/setup.sh",
+			Mode:   "fail",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected task bundle run to succeed, got: %v", err)
+	}
+
+	setupRelPath := "evidence/setup-task_bundle_setup-attempt-1.log"
+	setupLog := readFile(t, filepath.Join(runDir, filepath.FromSlash(setupRelPath)))
+	if !strings.Contains(setupLog, "setup ran for task_bundle_setup") {
+		t.Fatalf("central setup log missing setup output:\n%s", setupLog)
+	}
+	evidence, ok := ledgerTaskEvidence(runDir, task.TaskID, setupRelPath)
+	if !ok {
+		t.Fatalf("setup log was not registered as task evidence")
+	}
+	if evidence.Kind != "log" || evidence.Title != "Task setup log" {
+		t.Fatalf("unexpected setup evidence: %#v", evidence)
+	}
+}
+
 func TestRunOpenCodeTaskRetriesTaskBundleWithNoEvents(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
@@ -2321,6 +2588,37 @@ sleep 5
 		if event.Type == "task.retrying" {
 			t.Fatalf("unexpected retry event after task timeout: %#v", event)
 		}
+	}
+}
+
+func TestRunDirectOpenCodeTaskAttemptCancelsSetupWithCallerContext(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "setup.sh", "sleep 10\n")
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+echo should not run >&2
+exit 1
+`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := runDirectOpenCodeTaskAttempt(ctx, opencodePath, workspace, runDir, opencodeTask{
+		RunID:   "run_canceled_setup",
+		TaskID:  "task_canceled_setup",
+		Phase:   "recon",
+		Title:   "mnm canceled setup test",
+		Model:   "openrouter/test",
+		Prompt:  "should not reach opencode",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-canceled.jsonl"),
+		Timeout: time.Second,
+		Setup: RunnerSetupConfig{
+			Script:         "setup.sh",
+			TimeoutMinutes: 1,
+			Mode:           "fail",
+		},
+	}, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 )
 
 const (
@@ -15,13 +18,19 @@ const (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runContext(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "mnm:", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
+	return runContext(context.Background(), args, stdout, stderr)
+}
+
+func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		printUsage(stdout)
 		return nil
@@ -50,7 +59,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "report":
 		return reportCommand(args[1:], stdout, stderr)
 	case "runner":
-		return runnerCommand(args[1:], stdout, stderr)
+		return runnerCommandContext(ctx, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -160,6 +169,11 @@ opencode_task_timeout_minutes = 30
 max_leads = 24
 max_investigations = 24
 parallel_tasks = 2
+
+[runner.setup]
+script = ""
+timeout_minutes = 15
+mode = "fail"
 `
 }
 

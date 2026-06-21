@@ -44,10 +44,20 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 	executor := &recordingExecutor{}
 	runner := LimaRunner{Executor: executor, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 	err := runner.RunTask(context.Background(), LimaTaskRequest{
-		RunID:        "run_abc",
-		Task:         task,
-		Attempt:      2,
-		Config:       RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20, OpenCodeTaskTimeoutMinutes: 7},
+		RunID:   "run_abc",
+		Task:    task,
+		Attempt: 2,
+		Config: RunnerConfig{
+			CPUs:                       2,
+			MemoryGB:                   4,
+			DiskGB:                     20,
+			OpenCodeTaskTimeoutMinutes: 7,
+			Setup: RunnerSetupConfig{
+				Script:         "audit/setup.sh",
+				TimeoutMinutes: 3,
+				Mode:           "warn",
+			},
+		},
 		SnapshotPath: snapshot,
 		LedgerDir:    ledgerDir,
 		OutputDir:    outputDir,
@@ -76,6 +86,7 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 		"--model 'openrouter/test'",
 		"--log-path 'evidence/opencode-task_recon.jsonl'",
 		"--timeout-minutes 7",
+		"--setup-script 'audit/setup.sh' --setup-timeout-minutes 3 --setup-mode 'warn'",
 		"limactl copy --backend=scp -r " + instanceName + ":/tmp/mnm-output",
 		"limactl stop --tty=false " + instanceName,
 		"limactl delete --force --tty=false " + instanceName,
@@ -92,6 +103,43 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(outputDir, "evidence", "task-output-marker.txt")); !strings.Contains(got, "copied") {
 		t.Fatalf("task output was not copied back:\n%s", got)
+	}
+}
+
+func TestLimaTaskRunnerRejectsInvalidSetupBeforeVMWork(t *testing.T) {
+	executor := &recordingExecutor{}
+	runner := LimaRunner{Executor: executor, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	err := runner.RunTask(context.Background(), LimaTaskRequest{
+		RunID: "run_bad_setup",
+		Task: TaskRecord{
+			RunID:  "run_bad_setup",
+			TaskID: "task_recon",
+			Phase:  "recon",
+		},
+		Attempt: 1,
+		Config: RunnerConfig{
+			CPUs:     2,
+			MemoryGB: 4,
+			DiskGB:   20,
+			Setup: RunnerSetupConfig{
+				Script: "../setup.sh",
+				Mode:   "fail",
+			},
+		},
+		SnapshotPath: "snapshot.tar.zst",
+		LedgerDir:    "ledger",
+		OutputDir:    "output",
+		PromptPath:   "prompt.md",
+		Model:        "openrouter/test",
+	})
+	if err == nil {
+		t.Fatal("expected invalid setup request error")
+	}
+	if !strings.Contains(err.Error(), "task VM request runner setup script") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(executor.commands) != 0 {
+		t.Fatalf("invalid setup should fail before VM commands, got: %#v", executor.commands)
 	}
 }
 
