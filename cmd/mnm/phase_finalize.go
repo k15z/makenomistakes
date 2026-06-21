@@ -67,13 +67,18 @@ func runFinalizeTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 		return err
 	}
 
+	handoffRel, err := preparePhaseHandoffContext(runDir, runID, task, "", "")
+	if err != nil {
+		return err
+	}
+
 	taskWorkspace, cleanupWorkspace, err := prepareTaskWorkspace(workspace, runID, task.TaskID)
 	if err != nil {
 		return err
 	}
 	defer cleanupWorkspace()
 
-	prompt, err := finalizePrompt(runDir, taskWorkspace, cfg)
+	prompt, err := finalizePrompt(runDir, taskWorkspace, cfg, handoffRel)
 	if err != nil {
 		return err
 	}
@@ -179,7 +184,7 @@ func removeIncompleteFinalizeArtifacts(runDir string, report ReportRecord) error
 	return nil
 }
 
-func finalizePrompt(runDir, workspace string, cfg Config) (string, error) {
+func finalizePrompt(runDir, workspace string, cfg Config, handoffRel string) (string, error) {
 	leads, err := ledgerLeads(runDir)
 	if err != nil {
 		return "", err
@@ -213,6 +218,7 @@ Scope instructions:
 Important context files:
 
 - %[2]s/evidence/finalize-context.json
+- %[2]s/%[7]s
 - %[2]s/evidence/recon-codebase-map.md
 - %[2]s/evidence/recon-risk-register.md
 - %[2]s/events.jsonl
@@ -221,12 +227,13 @@ Required actions:
 
 1. Run: mnm task current
 2. Read %[2]s/evidence/finalize-context.json first. It is a compact, host-generated view of the ledger containing every finding, its bucket/status, exact verdict labels, recommended evidence paths, validation proof paths, and affected path candidates that pass the workspace manifest check.
-3. Use the compact context as the source of truth for JSON shape, buckets, statuses, verdict labels, evidence paths, and affected paths. For prose, treat validation notes and verdict details as higher authority than the original finding body because review and validation may narrow or retract earlier claims.
-4. Do not read opencode-*.jsonl transcripts or the full raw events.jsonl unless report validation fails and the compact context is insufficient to debug it. These transcript files are large and not needed for the final report.
-5. Write a human-readable Markdown report to %[2]s/report.md.
-6. Write a structured JSON report to %[2]s/report.json.
-7. Register both reports with: mnm report finalize --markdown %[2]s/report.md --json %[2]s/report.json
-8. Complete the task with: mnm task complete --status completed --summary "Finalized report"
+3. Read %[2]s/%[7]s for structured phase handoff context including setup logs, task handoffs, confirmed dead ends, open leads, and blockers. Use it to preserve nuance about blocked validation and plausible-but-unproven areas.
+4. Use the compact context as the source of truth for JSON shape, buckets, statuses, verdict labels, evidence paths, and affected paths. For prose, treat validation notes and verdict details as higher authority than the original finding body because review and validation may narrow or retract earlier claims.
+5. Do not read opencode-*.jsonl transcripts or the full raw events.jsonl unless report validation fails and the compact context is insufficient to debug it. These transcript files are large and not needed for the final report.
+6. Write a human-readable Markdown report to %[2]s/report.md.
+7. Write a structured JSON report to %[2]s/report.json.
+8. Register both reports with: mnm report finalize --markdown %[2]s/report.md --json %[2]s/report.json
+9. Complete the task with: mnm task complete --status completed --summary "Finalized report"
 
 Markdown report requirements:
 
@@ -258,7 +265,7 @@ JSON report requirements:
 - Place each finding in the bucket proven by the ledger verdicts. A finding with validation failed belongs in "failed", not "proven"; a review-rejected finding belongs in "rejected"; a deduplicate duplicate belongs in "duplicate".
 - If %[2]s/evidence/runner-manifest.json is present, every affected_paths entry must exist in its workspace_files list.
 - Every ledger finding must appear in exactly one report bucket.
-`, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg)), nil
+`, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg), handoffRel), nil
 }
 
 type finalizeContextFile struct {
@@ -426,7 +433,7 @@ func buildFinalizeFindingContext(runDir string, finding FindingRecord, verdicts 
 		if hasValidateVerdict &&
 			evidenceItem.TaskID == validateVerdict.TaskID &&
 			evidenceItem.eventIndex < validateVerdict.eventIndex &&
-			isValidationProofArtifact(finding.ID, evidenceItem.Path) {
+			isValidationProofArtifact(finding.ID, evidenceItem) {
 			item.ValidationProofEvidencePaths = append(item.ValidationProofEvidencePaths, evidenceItem.Path)
 			recommended[evidenceItem.Path] = true
 		}

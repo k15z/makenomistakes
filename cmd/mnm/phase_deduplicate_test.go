@@ -12,9 +12,10 @@ func TestDeduplicatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 	first := addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")
 	second := addReviewedFindingForTest(t, runDir, "finding_two", "evidence/finding-two.md", "Second candidate body.")
 
+	handoffRel := "evidence/phase-handoff-task_deduplicate.json"
 	prompt, err := deduplicatePrompt(runDir, "/workspace", Config{
 		Instructions: InstructionConfig{Scope: "Security and correctness only."},
-	}, []FindingRecord{first, second}, []FindingRecord{first, second})
+	}, []FindingRecord{first, second}, []FindingRecord{first, second}, handoffRel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,11 +24,14 @@ func TestDeduplicatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Review-accepted finding count: 2",
 		"Findings requiring deduplicate verdicts: finding_one, finding_two",
 		"Security and correctness only.",
+		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"## finding_one",
 		"Deduplicate status: Pending deduplicate verdict",
 		"First candidate body.",
 		"mnm evidence add --kind markdown --title \"Deduplication notes\"",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "deduplicate-notes.md")),
+		filepath.ToSlash(filepath.Join(runDir, "evidence", "handoff-deduplicate.json")),
+		"attempted_commands",
 		"mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical",
 		"mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID",
 		"mnm task complete --status completed",
@@ -44,7 +48,7 @@ func TestDeduplicatePromptIncludesExistingCanonicalContext(t *testing.T) {
 	second := addReviewedFindingForTest(t, runDir, "finding_two", "evidence/finding-two.md", "Second candidate body.")
 	addCompletedDeduplicateVerdictForTest(t, runDir, "finding_one", "canonical", "")
 
-	prompt, err := deduplicatePrompt(runDir, "/workspace", Config{}, []FindingRecord{first, second}, []FindingRecord{second})
+	prompt, err := deduplicatePrompt(runDir, "/workspace", Config{}, []FindingRecord{first, second}, []FindingRecord{second}, "evidence/phase-handoff-task_deduplicate.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +81,13 @@ cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
 
 Finding two duplicates finding one.
 EOF
+cat > "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" <<EOF
+{"version":1,"phase":"deduplicate","task_id":"$MNM_TASK_ID","attempted_commands":["fake deduplicate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":["finding_two duplicates finding_one"]}
+EOF
+handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-deduplicate.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_dedup_evidence","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"4315de7bd86fbd899b39ee7a407da54e55722cf1fc5af0c3d3de426d40c791d6"}}
+{"id":"event_dedup_handoff","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_handoff","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: Deduplication","path":"evidence/handoff-deduplicate.json","content_sha256":"$handoff_sha"}}
 {"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
 {"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_one"}}
 {"id":"event_done_dedup","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}
@@ -188,8 +197,13 @@ if [ "$count" -eq 1 ]; then
 
 First pass.
 EOF
+  cat > "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" <<EOF
+{"version":1,"phase":"deduplicate","task_id":"$MNM_TASK_ID","attempted_commands":["fake deduplicate attempt 1"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+  handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-deduplicate.json") | awk '{print $1}')"
   cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_dedup_evidence_1","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_1","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"b0b3b30141ac6d1c99517813a66f0cda5fbf07332cb6ebfdd173209a525dd9a8"}}
+{"id":"event_dedup_handoff_1","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_handoff_1","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: Deduplication","path":"evidence/handoff-deduplicate.json","content_sha256":"$handoff_sha"}}
 {"id":"event_dedup_one_partial","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_partial","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
 {"id":"event_done_dedup_1","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"partial dedup"}}
 EOF
@@ -201,8 +215,13 @@ cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
 
 First pass.
 EOF
+cat > "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" <<EOF
+{"version":1,"phase":"deduplicate","task_id":"$MNM_TASK_ID","attempted_commands":["fake deduplicate attempt 2"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-deduplicate.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_dedup_evidence_2","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes_2","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"b0b3b30141ac6d1c99517813a66f0cda5fbf07332cb6ebfdd173209a525dd9a8"}}
+{"id":"event_dedup_handoff_2","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_handoff_2","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"kind":"json","title":"Task handoff: Deduplication","path":"evidence/handoff-deduplicate.json","content_sha256":"$handoff_sha"}}
 {"id":"event_dedup_one_complete","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one_complete","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
 {"id":"event_dedup_two_complete","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two_complete","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"canonical","reason":"unique issue","canonical_finding_id":""}}
 {"id":"event_done_dedup_2","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"status":"completed","summary":"done"}}
@@ -375,8 +394,13 @@ cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
 
 Duplicate graph is invalid.
 EOF
+cat > "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" <<EOF
+{"version":1,"phase":"deduplicate","task_id":"$MNM_TASK_ID","attempted_commands":["fake deduplicate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-deduplicate.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_dedup_evidence","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_notes","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"a70e55557e64a822f69d8781af3e6849c9d4901cab9d9f0f43fdb3ffb7429a9a"}}
+{"id":"event_dedup_handoff","run_id":"run_dedup","type":"evidence.added","object":"evidence","object_id":"evidence_dedup_handoff","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: Deduplication","path":"evidence/handoff-deduplicate.json","content_sha256":"$handoff_sha"}}
 {"id":"event_dedup_one","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_one","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"finding_one","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_two"}}
 {"id":"event_dedup_two","run_id":"run_dedup","type":"verdict.recorded","object":"verdict","object_id":"verdict_dedup_two","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"finding_id":"finding_two","phase":"deduplicate","value":"duplicate","reason":"same root issue","canonical_finding_id":"finding_one"}}
 {"id":"event_done_dedup","run_id":"run_dedup","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:03Z","data":{"status":"completed","summary":"done"}}

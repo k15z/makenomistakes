@@ -108,6 +108,12 @@ end-to-end reproduction or exploit attempt in a task VM for each canonical
 finding and records `proven`, `failed`, or `inconclusive`. Finalize renders
 `report.md` and `report.json` from the ledger and evidence.
 
+Each post-recon task also receives a compact `phase-handoff-*.json` context
+artifact. It summarizes open leads, confirmed dead ends, findings and verdicts,
+setup logs, and task-authored handoff JSON so later phases can reuse prior
+commands, setup discoveries, blockers, and likely follow-up areas instead of
+rediscovering them in a fresh VM.
+
 ## Reports
 
 The planned output is:

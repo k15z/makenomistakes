@@ -46,6 +46,7 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 	err := runner.RunTask(context.Background(), LimaTaskRequest{
 		RunID:   "run_abc",
 		Task:    task,
+		LeadID:  "lead_recon",
 		Attempt: 2,
 		Config: RunnerConfig{
 			CPUs:                       2,
@@ -87,6 +88,7 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 		"--log-path 'evidence/opencode-task_recon.jsonl'",
 		"--timeout-minutes 7",
 		"--setup-script 'audit/setup.sh' --setup-timeout-minutes 3 --setup-mode 'warn'",
+		"--lead-id 'lead_recon'",
 		"limactl copy --backend=scp -r " + instanceName + ":/tmp/mnm-output",
 		"limactl stop --tty=false " + instanceName,
 		"limactl delete --force --tty=false " + instanceName,
@@ -306,14 +308,15 @@ func TestLimaTaskAttemptRunnerRunsTaskVMBundle(t *testing.T) {
 		SnapshotPath: snapshot,
 	}
 	result, err := attemptRunner.RunOpenCodeTaskAttempt(context.Background(), workspace, runDir, opencodeTask{
-		RunID:    task.RunID,
-		TaskID:   task.TaskID,
-		Phase:    task.Phase,
-		Title:    "mnm review auth",
-		Model:    "openrouter/test",
-		Prompt:   "Workspace: " + workspace + "\nRun directory: " + runDir + "\nLedger path: " + filepath.Join(runDir, eventsFile),
-		LogPath:  filepath.Join(runDir, "evidence", "opencode-review-auth.jsonl"),
-		TaskFile: taskPath,
+		RunID:     task.RunID,
+		TaskID:    task.TaskID,
+		Phase:     task.Phase,
+		FindingID: "finding_auth",
+		Title:     "mnm review auth",
+		Model:     "openrouter/test",
+		Prompt:    "Workspace: " + workspace + "\nRun directory: " + runDir + "\nLedger path: " + filepath.Join(runDir, eventsFile),
+		LogPath:   filepath.Join(runDir, "evidence", "opencode-review-auth.jsonl"),
+		TaskFile:  taskPath,
 	}, 3)
 	if err != nil {
 		t.Fatalf("attempt runner failed: %v", err)
@@ -350,6 +353,7 @@ func TestLimaTaskAttemptRunnerRunsTaskVMBundle(t *testing.T) {
 		"--model 'openrouter/test'",
 		"--log-path 'evidence/opencode-review-auth.jsonl'",
 		"--timeout-minutes 9",
+		"--finding-id 'finding_auth'",
 		"--skip-bundle-verify",
 	} {
 		if !strings.Contains(joined, want) {

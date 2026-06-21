@@ -178,7 +178,7 @@ func validateTaskBundlePhaseEvent(task TaskRecord, event LedgerEvent) error {
 
 func isTaskSetupLogEvidence(task TaskRecord, event LedgerEvent) bool {
 	return stringData(event.Data, "kind") == "log" &&
-		stringData(event.Data, "title") == "Task setup log" &&
+		strings.HasPrefix(stringData(event.Data, "title"), "Setup hook log: ") &&
 		isTaskSetupLogPath(task.TaskID, stringData(event.Data, "path"))
 }
 

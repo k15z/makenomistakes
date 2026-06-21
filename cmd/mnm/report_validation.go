@@ -345,7 +345,7 @@ func citesValidationProofEvidence(findingID string, verdict VerdictRecord, evide
 		if item.TaskID != verdict.TaskID || item.eventIndex >= verdict.eventIndex {
 			continue
 		}
-		if isValidationProofArtifact(findingID, item.Path) {
+		if isValidationProofArtifact(findingID, item) {
 			return true
 		}
 	}
