@@ -35,6 +35,11 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"Task handoff:",
 		"attempted_commands",
+		"--negative-boundary",
+		"--negative-enforcement",
+		"--negative-exposure",
+		"--negative-edge-cases",
+		"--status inconclusive",
 		"mnm finding create --lead lead_auth",
 		"mnm lead close --id lead_auth",
 		"mnm task complete --status completed",
@@ -111,13 +116,13 @@ cat > "$MNM_RUN_DIR/evidence/investigate-$MNM_LEAD_ID-notes.md" <<'EOF'
 Lead closed by fake opencode.
 EOF
 cat > "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" <<EOF
-{"version":1,"phase":"investigate","task_id":"$MNM_TASK_ID","lead_id":"$MNM_LEAD_ID","attempted_commands":["fake investigate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":["closed by fake opencode"]}
+{"version":1,"phase":"investigate","task_id":"$MNM_TASK_ID","lead_id":"$MNM_LEAD_ID","attempted_commands":["fake investigate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[{"summary":"closed by fake opencode","negative_proof_boundary":"fake route boundary","negative_proof_enforcement":"fake auth middleware","negative_proof_exposure":"internal-only fake endpoint","negative_proof_edge_cases":"checked anonymous and alternate fake route"}]}
 EOF
 handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_investigate_evidence_$MNM_LEAD_ID","run_id":"run_limit","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","content_sha256":"d1bbbd1e106e0c495f8dccdf753163e3ae58f2a3428ce125bc1c520bd697caa6","lead_id":"$MNM_LEAD_ID","finding_id":""}}
 {"id":"event_investigate_handoff_$MNM_LEAD_ID","run_id":"run_limit","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_handoff_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: Lead $MNM_LEAD_ID","path":"evidence/handoff-investigate-$MNM_LEAD_ID.json","content_sha256":"$handoff_sha","lead_id":"$MNM_LEAD_ID","finding_id":""}}
-{"id":"event_close_$MNM_LEAD_ID","run_id":"run_limit","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode"}}
+{"id":"event_close_$MNM_LEAD_ID","run_id":"run_limit","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode","negative_proof_boundary":"fake route boundary","negative_proof_enforcement":"fake auth middleware","negative_proof_exposure":"internal-only fake endpoint","negative_proof_edge_cases":"checked anonymous and alternate fake route"}}
 {"id":"event_done_$MNM_LEAD_ID","run_id":"run_limit","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
@@ -337,6 +342,74 @@ func TestRunInvestigatePhaseFailsOnIncompleteClosedInvestigationOnResume(t *test
 	}
 }
 
+func TestCompletedInvestigationLeadsTreatsInconclusiveAsProcessed(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := "lead_blocked"
+	taskID := "task_investigate_" + leadID
+	addOpenLeadForInvestigateTest(t, runDir, leadID, "evidence/lead-blocked.md")
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_inconclusive",
+		Type:     "task.started",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"phase":   "investigate",
+			"title":   "Investigate: blocked lead",
+			"lead_id": leadID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	notesRel := investigationNotesRelPath(leadID)
+	writeRunFile(t, runDir, notesRel, "Investigation blocked by missing deployment exposure data.\n")
+	appendInvestigationEvidenceForTest(t, runDir, "run_inconclusive", taskID, leadID, notesRel)
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_inconclusive",
+		Type:     "lead.closed",
+		Object:   "lead",
+		ObjectID: leadID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status": "inconclusive",
+			"reason": "deployment exposure could not be confirmed",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerEvent(runDir, LedgerEvent{
+		RunID:    "run_inconclusive",
+		Type:     "task.completed",
+		Object:   "task",
+		ObjectID: taskID,
+		TaskID:   taskID,
+		Data: map[string]any{
+			"status":  "completed",
+			"summary": "marked inconclusive",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	processed, invalidClosed, err := completedInvestigationLeads(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !processed[leadID] {
+		t.Fatalf("processed leads = %#v, want %s", processed, leadID)
+	}
+	if len(invalidClosed) != 0 {
+		t.Fatalf("invalid closed leads = %#v", invalidClosed)
+	}
+	open, err := openLedgerLeads(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("unexpected open leads: %#v", open)
+	}
+}
+
 func TestLedgerTaskCompletedUsesLatestCompletionStatus(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	for _, event := range []LedgerEvent{
@@ -403,7 +476,7 @@ set -eu
 printf ' \n' > "$MNM_RUN_DIR/evidence/investigate-$MNM_LEAD_ID-notes.md"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_investigate_evidence_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_${MNM_LEAD_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","content_sha256":"e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700","lead_id":"$MNM_LEAD_ID","finding_id":""}}
-{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode"}}
+{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode","negative_proof_boundary":"fake route boundary","negative_proof_enforcement":"fake auth middleware","negative_proof_exposure":"internal-only fake endpoint","negative_proof_edge_cases":"checked anonymous and alternate fake route"}}
 {"id":"event_done_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
@@ -446,7 +519,7 @@ Lead closed by fake opencode.
 EOF
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_investigate_evidence_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_${MNM_LEAD_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","lead_id":"$MNM_LEAD_ID","finding_id":""}}
-{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode"}}
+{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode","negative_proof_boundary":"fake route boundary","negative_proof_enforcement":"fake auth middleware","negative_proof_exposure":"internal-only fake endpoint","negative_proof_edge_cases":"checked anonymous and alternate fake route"}}
 {"id":"event_done_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
@@ -483,7 +556,7 @@ set -eu
 : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
 : "${MNM_LEAD_ID:?MNM_LEAD_ID is required}"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
-{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode"}}
+{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode","negative_proof_boundary":"fake route boundary","negative_proof_enforcement":"fake auth middleware","negative_proof_exposure":"internal-only fake endpoint","negative_proof_edge_cases":"checked anonymous and alternate fake route"}}
 {"id":"event_done_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'
@@ -521,7 +594,7 @@ set -eu
 : "${MNM_LEAD_ID:?MNM_LEAD_ID is required}"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_investigate_evidence_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_${MNM_LEAD_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","lead_id":"$MNM_LEAD_ID","finding_id":""}}
-{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode"}}
+{"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode","negative_proof_boundary":"fake route boundary","negative_proof_enforcement":"fake auth middleware","negative_proof_exposure":"internal-only fake endpoint","negative_proof_edge_cases":"checked anonymous and alternate fake route"}}
 {"id":"event_done_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
 printf '{"type":"done"}\n'

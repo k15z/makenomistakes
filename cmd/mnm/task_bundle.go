@@ -140,6 +140,9 @@ func validateTaskBundlePhaseEvent(task TaskRecord, event LedgerEvent) error {
 		if task.Phase != "investigate" {
 			return fmt.Errorf("phase %q cannot close leads", task.Phase)
 		}
+		if err := validateClosedNoFindingNegativeProof(event); err != nil {
+			return err
+		}
 	case "finding.created":
 		if task.Phase != "investigate" {
 			return fmt.Errorf("phase %q cannot create findings", task.Phase)

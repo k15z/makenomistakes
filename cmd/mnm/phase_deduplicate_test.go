@@ -82,7 +82,7 @@ cat > "$MNM_RUN_DIR/evidence/deduplicate-notes.md" <<'EOF'
 Finding two duplicates finding one.
 EOF
 cat > "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" <<EOF
-{"version":1,"phase":"deduplicate","task_id":"$MNM_TASK_ID","attempted_commands":["fake deduplicate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":["finding_two duplicates finding_one"]}
+{"version":1,"phase":"deduplicate","task_id":"$MNM_TASK_ID","attempted_commands":["fake deduplicate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[{"summary":"finding_two duplicates finding_one","negative_proof_boundary":"same reviewed finding cluster","negative_proof_enforcement":"deduplicate canonical mapping","negative_proof_exposure":"same affected deployment path","negative_proof_edge_cases":"compared root cause, affected file, and fix scope"}]}
 EOF
 handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-deduplicate.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF

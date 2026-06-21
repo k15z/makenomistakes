@@ -213,15 +213,19 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		flags.SetOutput(stderr)
 		runDirFlag := flags.String("run-dir", "", "run directory")
 		id := flags.String("id", "", "lead id")
-		status := flags.String("status", "", "closed_no_finding|promoted_to_finding|superseded")
+		status := flags.String("status", "", "closed_no_finding|promoted_to_finding|superseded|inconclusive")
 		reason := flags.String("reason", "", "reason")
+		negativeBoundary := flags.String("negative-boundary", "", "exact trust, network, auth, data-flow, or deployment boundary that makes the lead unreachable or non-impacting")
+		negativeEnforcement := flags.String("negative-enforcement", "", "specific enforcement point, guard, policy, or code path that blocks the issue")
+		negativeExposure := flags.String("negative-exposure", "", "deployment exposure conclusion, including whether the path is external, internal-only, disabled, or unreachable")
+		negativeEdgeCases := flags.String("negative-edge-cases", "", "relevant bypasses, role variants, alternate routes, or edge cases checked")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if *id == "" || *status == "" {
 			return errors.New("lead close requires --id and --status")
 		}
-		if !oneOf(*status, "closed_no_finding", "promoted_to_finding", "superseded") {
+		if !oneOf(*status, "closed_no_finding", "promoted_to_finding", "superseded", "inconclusive") {
 			return fmt.Errorf("invalid lead close status %q", *status)
 		}
 		runDir, task, err := currentTaskForCommand(*runDirFlag)
@@ -260,6 +264,15 @@ func leadCommand(args []string, stdout, stderr io.Writer) error {
 		reasonText, err := requiredTextFlag("--reason", *reason)
 		if err != nil {
 			return err
+		}
+		if *status == "closed_no_finding" {
+			negativeProof, err := requiredNegativeProofData(*negativeBoundary, *negativeEnforcement, *negativeExposure, *negativeEdgeCases)
+			if err != nil {
+				return err
+			}
+			for key, value := range negativeProof {
+				event.Data[key] = value
+			}
 		}
 		if currentStatus != "open" {
 			if currentStatus == *status {
@@ -315,6 +328,44 @@ func leadStatusFromEvents(events []LedgerEvent, leadID string) (string, bool, er
 		}
 	}
 	return status, exists, nil
+}
+
+func requiredNegativeProofData(boundary, enforcement, exposure, edgeCases string) (map[string]any, error) {
+	values := []struct {
+		key   string
+		flag  string
+		value string
+	}{
+		{key: "negative_proof_boundary", flag: "--negative-boundary", value: strings.TrimSpace(boundary)},
+		{key: "negative_proof_enforcement", flag: "--negative-enforcement", value: strings.TrimSpace(enforcement)},
+		{key: "negative_proof_exposure", flag: "--negative-exposure", value: strings.TrimSpace(exposure)},
+		{key: "negative_proof_edge_cases", flag: "--negative-edge-cases", value: strings.TrimSpace(edgeCases)},
+	}
+	data := make(map[string]any, len(values))
+	for _, item := range values {
+		if item.value == "" {
+			return nil, fmt.Errorf("closed_no_finding requires %s", item.flag)
+		}
+		data[item.key] = item.value
+	}
+	return data, nil
+}
+
+func validateClosedNoFindingNegativeProof(event LedgerEvent) error {
+	if stringData(event.Data, "status") != "closed_no_finding" {
+		return nil
+	}
+	for _, key := range []string{
+		"negative_proof_boundary",
+		"negative_proof_enforcement",
+		"negative_proof_exposure",
+		"negative_proof_edge_cases",
+	} {
+		if strings.TrimSpace(stringData(event.Data, key)) == "" {
+			return fmt.Errorf("closed_no_finding lead close requires data.%s", key)
+		}
+	}
+	return nil
 }
 
 func ledgerTaskLeadBodyPath(runDir, taskID, bodyPath string) (LeadRecord, bool, error) {

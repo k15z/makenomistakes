@@ -360,15 +360,21 @@ Required actions:
 %[11]s
 
 Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --lead %[3]s --path %[2]s/evidence/handoff-investigate-%[10]s.json
-8. If the lead is not a real issue, close the lead with: mnm lead close --id %[3]s --status closed_no_finding --reason "..."
-9. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
-10. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
-11. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, or superseded.
-12. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
+8. If the lead is not a real issue because it is unreachable, internal-only, protected by auth, gated by deployment boundaries, or otherwise non-impacting, close it as closed_no_finding only after recording concrete negative proof:
+
+mnm lead close --id %[3]s --status closed_no_finding --reason "..." --negative-boundary "exact trust/network/auth/data-flow/deployment boundary" --negative-enforcement "specific guard, policy, middleware, check, or code path" --negative-exposure "deployment exposure conclusion" --negative-edge-cases "bypasses, roles, alternate routes, and edge cases checked"
+
+9. If the lead still looks plausible but you cannot prove the exact boundary, enforcement point, deployment exposure, or relevant edge cases, close it as inconclusive instead: mnm lead close --id %[3]s --status inconclusive --reason "missing negative proof: ..."
+10. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
+11. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
+12. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, inconclusive, or superseded.
+13. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
 
 Finding quality bar:
 
 - Create a finding only when you have concrete code references and a plausible failure or exploit path.
+- Do not use closed_no_finding for a dismissal unless the notes and close command identify the exact boundary, enforcement point, deployment exposure, and edge cases checked.
+- Use inconclusive when a lead is plausible but the environment, missing context, or time prevents a confident positive finding or negative proof.
 - Do not promote vague risk, missing best practices, or style concerns to findings.
 - Prefer proof commands and short reproduction notes over speculation.
 - Record uncertainty in the finding body rather than overstating the result.

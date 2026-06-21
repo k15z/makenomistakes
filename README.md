@@ -114,6 +114,13 @@ setup logs, and task-authored handoff JSON so later phases can reuse prior
 commands, setup discoveries, blockers, and likely follow-up areas instead of
 rediscovering them in a fresh VM.
 
+Leads dismissed as not real issues must carry structured negative proof when
+they are closed as `closed_no_finding`: the exact boundary, enforcement point,
+deployment exposure, and edge cases checked. Leads that remain plausible but
+lack enough positive evidence or negative proof should be closed as
+`inconclusive`, preserving uncertainty instead of turning it into a confirmed
+dead end.
+
 ## Reports
 
 The planned output is:

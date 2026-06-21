@@ -3114,25 +3114,25 @@ func TestLeadCloseIsIdempotentForSameStatus(t *testing.T) {
 	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{
+	if err := run(append([]string{
 		"lead", "close",
 		"--run-dir", runDir,
 		"--id", leadID,
 		"--status", "closed_no_finding",
 		"--reason", "First close.",
-	}, &stdout, &stderr); err != nil {
+	}, negativeProofCLIArgs()...), &stdout, &stderr); err != nil {
 		t.Fatalf("first lead close failed: %v\nstderr: %s", err, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := run([]string{
+	if err := run(append([]string{
 		"lead", "close",
 		"--run-dir", runDir,
 		"--id", leadID,
 		"--status", "closed_no_finding",
 		"--reason", "Retry after checking state.",
-	}, &stdout, &stderr); err != nil {
+	}, negativeProofCLIArgs()...), &stdout, &stderr); err != nil {
 		t.Fatalf("idempotent lead close failed: %v\nstderr: %s", err, stderr.String())
 	}
 
@@ -3159,13 +3159,13 @@ func TestLeadCloseIsAtomicForParallelSameStatus(t *testing.T) {
 			defer wg.Done()
 			<-start
 			var stdout, stderr bytes.Buffer
-			errs <- run([]string{
+			errs <- run(append([]string{
 				"lead", "close",
 				"--run-dir", runDir,
 				"--id", leadID,
 				"--status", "closed_no_finding",
 				"--reason", "Parallel close.",
-			}, &stdout, &stderr)
+			}, negativeProofCLIArgs()...), &stdout, &stderr)
 		}()
 	}
 	close(start)
@@ -3186,13 +3186,13 @@ func TestLeadCloseRejectsDifferentTerminalStatus(t *testing.T) {
 	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{
+	if err := run(append([]string{
 		"lead", "close",
 		"--run-dir", runDir,
 		"--id", leadID,
 		"--status", "closed_no_finding",
 		"--reason", "First close.",
-	}, &stdout, &stderr); err != nil {
+	}, negativeProofCLIArgs()...), &stdout, &stderr); err != nil {
 		t.Fatalf("first lead close failed: %v\nstderr: %s", err, stderr.String())
 	}
 
@@ -3220,13 +3220,13 @@ func TestLeadCloseRequiresReasonForIdempotentClose(t *testing.T) {
 	setCurrentTaskPhaseForTest(t, runDir, "investigate")
 
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{
+	if err := run(append([]string{
 		"lead", "close",
 		"--run-dir", runDir,
 		"--id", leadID,
 		"--status", "closed_no_finding",
 		"--reason", "First close.",
-	}, &stdout, &stderr); err != nil {
+	}, negativeProofCLIArgs()...), &stdout, &stderr); err != nil {
 		t.Fatalf("first lead close failed: %v\nstderr: %s", err, stderr.String())
 	}
 
@@ -3266,6 +3266,52 @@ func TestLeadCloseRequiresReason(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertLeadClosedEventCount(t, runDir, leadID, 0)
+}
+
+func TestLeadCloseRequiresNegativeProofForClosedNoFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "closed_no_finding",
+		"--reason", "Auth blocks this route.",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing negative proof error")
+	}
+	if !strings.Contains(err.Error(), "closed_no_finding requires --negative-boundary") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertLeadClosedEventCount(t, runDir, leadID, 0)
+}
+
+func TestLeadCloseAllowsInconclusiveWithoutNegativeProof(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	setCurrentTaskPhaseForTest(t, runDir, "investigate")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"lead", "close",
+		"--run-dir", runDir,
+		"--id", leadID,
+		"--status", "inconclusive",
+		"--reason", "Could not confirm deployment exposure.",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("inconclusive lead close failed: %v\nstderr: %s", err, stderr.String())
+	}
+	status, exists, err := ledgerLeadStatus(runDir, leadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || status != "inconclusive" {
+		t.Fatalf("status = %q exists=%v, want inconclusive", status, exists)
+	}
 }
 
 func TestVerdictRejectsInvalidPhaseValue(t *testing.T) {
@@ -3998,6 +4044,15 @@ func assertLeadClosedEventCount(t *testing.T, runDir, leadID string, want int) {
 	}
 	if got != want {
 		t.Fatalf("lead.closed event count = %d, want %d", got, want)
+	}
+}
+
+func negativeProofCLIArgs() []string {
+	return []string{
+		"--negative-boundary", "admin route requires authenticated operator role",
+		"--negative-enforcement", "server/auth.go RequireRole(\"operator\") middleware",
+		"--negative-exposure", "route is mounted only on the internal admin listener",
+		"--negative-edge-cases", "checked anonymous, user role, operator role, and alternate /api path",
 	}
 }
 

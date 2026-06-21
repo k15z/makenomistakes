@@ -423,7 +423,7 @@ func validateLedgerEventData(event LedgerEvent) error {
 		}
 		return requireEventOneOf(event, "priority", "high", "medium", "low")
 	case "lead.closed":
-		if err := requireEventOneOf(event, "status", "closed_no_finding", "promoted_to_finding", "superseded"); err != nil {
+		if err := requireEventOneOf(event, "status", "closed_no_finding", "promoted_to_finding", "superseded", "inconclusive"); err != nil {
 			return err
 		}
 		_, err := requireEventStringValue(event, "reason")
