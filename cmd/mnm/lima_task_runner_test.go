@@ -62,7 +62,7 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 	joined := strings.Join(executor.commands, "\n")
 	for _, want := range []string{
 		"limactl delete --force --tty=false " + instanceName,
-		"limactl create --tty=false --name " + instanceName + " --cpus 2 --memory 4 --disk 20 template:docker",
+		"limactl create --tty=false --name " + instanceName + " --cpus 2 --memory 4 --disk 20 template:ubuntu-lts",
 		"limactl start --tty=false " + instanceName,
 		"limactl shell " + instanceName + " bash -lc rm -rf /tmp/mnm-ledger /tmp/mnm-output /tmp/mnm-workspace",
 		"limactl copy --backend=scp -r " + payload + " " + instanceName + ":/tmp/mnm",
@@ -84,11 +84,44 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 			t.Fatalf("missing command %q in:\n%s", want, joined)
 		}
 	}
+	if strings.Contains(joined, "docker.io") {
+		t.Fatalf("recon task command should not install Docker:\n%s", joined)
+	}
 	if _, err := os.Stat(filepath.Join(outputDir, ".events.lock")); !os.IsNotExist(err) {
 		t.Fatalf("stale copied task lock should be dropped, stat err=%v", err)
 	}
 	if got := readFile(t, filepath.Join(outputDir, "evidence", "task-output-marker.txt")); !strings.Contains(got, "copied") {
 		t.Fatalf("task output was not copied back:\n%s", got)
+	}
+}
+
+func TestValidateTaskRunnerCommandBootstrapsDocker(t *testing.T) {
+	command := guestTaskRunnerCommand(LimaTaskRequest{
+		RunID: "run_validate",
+		Task: TaskRecord{
+			RunID:  "run_validate",
+			TaskID: "task_validate_finding",
+			Phase:  "validate",
+		},
+		Attempt:      1,
+		Config:       RunnerConfig{OpenCodeTaskTimeoutMinutes: 7},
+		SnapshotPath: "snapshot.tar.zst",
+		LedgerDir:    "ledger",
+		OutputDir:    "output",
+		PromptPath:   "prompt.md",
+		Model:        "openrouter/test",
+	})
+	for _, want := range []string{
+		"docker.io",
+		"docker-compose-v2",
+		"systemctl enable --now docker",
+		"chmod 666 /var/run/docker.sock",
+		"docker info",
+		"/tmp/mnm runner task",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("validate task command missing %q:\n%s", want, command)
+		}
 	}
 }
 
