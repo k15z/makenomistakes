@@ -320,6 +320,25 @@ func TestReportKnownStateIgnoresValidateVerdictWithoutValidationEvidence(t *test
 	}
 }
 
+func TestReportKnownStateIgnoresValidationBlockersWithoutCompletedInconclusiveVerdict(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	addValidationHandoffForFindingForTest(t, runDir, findingID, []taskHandoffBlocker{{
+		Summary:         "database service was unavailable",
+		RequiredService: "postgres",
+		NextCommand:     "docker compose up -d postgres && go test ./...",
+	}})
+
+	state, err := reportKnownState(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.ValidationBlockers[findingID]; len(got) != 0 {
+		t.Fatalf("validation blockers = %#v, want none without completed inconclusive verdict", got)
+	}
+}
+
 func TestReportStatusForFinding(t *testing.T) {
 	tests := []struct {
 		name     string

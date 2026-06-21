@@ -106,6 +106,53 @@ func TestBuildFinalizeContextIncludesCompactFindingData(t *testing.T) {
 	}
 }
 
+func TestBuildFinalizeContextIncludesValidationBlockers(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	handoffRel := addValidationHandoffForFindingForTest(t, runDir, findingID, []taskHandoffBlocker{{
+		Summary:            "database service was unavailable",
+		MissingDependency:  "docker compose",
+		FailedCommand:      "go test ./cmd/mnm",
+		RequiredService:    "postgres",
+		SuspectedConfigGap: "DATABASE_URL was unset",
+		NextCommand:        "docker compose up -d postgres && go test ./cmd/mnm",
+	}})
+	recordVerdictForTest(t, runDir, findingID, "validate", "inconclusive", "")
+
+	data, err := buildFinalizeContext(runDir, "run_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var context finalizeContextFile
+	if err := json.Unmarshal(data, &context); err != nil {
+		t.Fatalf("context JSON did not parse: %v\n%s", err, data)
+	}
+	if got := context.Counts["findings_inconclusive"]; got != 1 {
+		t.Fatalf("findings_inconclusive = %d, want 1\n%s", got, data)
+	}
+	if len(context.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1\n%s", len(context.Findings), data)
+	}
+	got := context.Findings[0]
+	if got.ID != findingID || got.Status != "validation_inconclusive" || got.Bucket != "inconclusive" {
+		t.Fatalf("unexpected finding context: %#v", got)
+	}
+	if len(got.ValidationBlockers) != 1 {
+		t.Fatalf("validation blockers = %#v, want one", got.ValidationBlockers)
+	}
+	blocker := got.ValidationBlockers[0]
+	if blocker.SourcePath != handoffRel ||
+		blocker.MissingDependency != "docker compose" ||
+		blocker.RequiredService != "postgres" ||
+		blocker.SuspectedConfigGap != "DATABASE_URL was unset" ||
+		!strings.Contains(blocker.NextCommand, "docker compose up") {
+		t.Fatalf("unexpected validation blocker: %#v", blocker)
+	}
+}
+
 func TestAffectedPathCandidatesUsesUniqueBasenames(t *testing.T) {
 	workspaceFiles := []string{
 		"NodeGoat/app/routes/allocations.js",

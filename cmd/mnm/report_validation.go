@@ -106,6 +106,9 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 	if err := validateMarkdownReportCoversAllFindings(markdown, state); err != nil {
 		return err
 	}
+	if err := validateMarkdownReportCoversValidationBlockers(markdown, state); err != nil {
+		return err
+	}
 	if err := validateMarkdownReportCoversEvidencePaths(markdown, citedEvidencePaths); err != nil {
 		return err
 	}
@@ -113,11 +116,12 @@ func validateReportArtifacts(runDir string, task TaskRecord, markdownRel, jsonRe
 }
 
 type reportLedgerState struct {
-	Findings        map[string]FindingRecord
-	Leads           map[string]bool
-	Verdicts        map[string]map[string]VerdictRecord
-	FindingEvidence map[string]map[string]EvidenceRecord
-	WorkspaceFiles  map[string]bool
+	Findings           map[string]FindingRecord
+	Leads              map[string]bool
+	Verdicts           map[string]map[string]VerdictRecord
+	FindingEvidence    map[string]map[string]EvidenceRecord
+	ValidationBlockers map[string][]validationBlockerContext
+	WorkspaceFiles     map[string]bool
 }
 
 func reportKnownState(runDir string) (reportLedgerState, error) {
@@ -142,11 +146,12 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 		return reportLedgerState{}, err
 	}
 	state := reportLedgerState{
-		Findings:        map[string]FindingRecord{},
-		Leads:           map[string]bool{},
-		Verdicts:        map[string]map[string]VerdictRecord{},
-		FindingEvidence: map[string]map[string]EvidenceRecord{},
-		WorkspaceFiles:  workspaceFiles,
+		Findings:           map[string]FindingRecord{},
+		Leads:              map[string]bool{},
+		Verdicts:           map[string]map[string]VerdictRecord{},
+		FindingEvidence:    map[string]map[string]EvidenceRecord{},
+		ValidationBlockers: map[string][]validationBlockerContext{},
+		WorkspaceFiles:     workspaceFiles,
 	}
 	for _, lead := range leads {
 		state.Leads[lead.ID] = true
@@ -166,6 +171,11 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 		}
 		state.Verdicts[verdict.FindingID][verdict.Phase] = verdict
 	}
+	validationBlockers, err := validationBlockersFromTaskHandoffs(runDir, evidence, state.Verdicts)
+	if err != nil {
+		return reportLedgerState{}, err
+	}
+	state.ValidationBlockers = validationBlockers
 	for _, item := range evidence {
 		if item.FindingID == "" || item.Path == "" {
 			continue
@@ -176,6 +186,38 @@ func reportKnownState(runDir string) (reportLedgerState, error) {
 		state.FindingEvidence[item.FindingID][item.Path] = item
 	}
 	return state, nil
+}
+
+func validationBlockersFromTaskHandoffs(runDir string, evidence []EvidenceRecord, verdicts map[string]map[string]VerdictRecord) (map[string][]validationBlockerContext, error) {
+	handoffs, err := taskHandoffsFromEvidence(runDir, evidence)
+	if err != nil {
+		return nil, err
+	}
+	blockersByFinding := map[string][]validationBlockerContext{}
+	for _, handoff := range handoffs {
+		if handoff.Phase != "validate" || handoff.FindingID == "" {
+			continue
+		}
+		verdict, ok := verdicts[handoff.FindingID]["validate"]
+		if !ok || verdict.Value != "inconclusive" || verdict.TaskID != handoff.TaskID {
+			continue
+		}
+		for _, blocker := range handoff.Blockers {
+			blockersByFinding[handoff.FindingID] = append(blockersByFinding[handoff.FindingID], validationBlockerContext{
+				Summary:            blocker.Summary,
+				MissingDependency:  blocker.MissingDependency,
+				FailedCommand:      blocker.FailedCommand,
+				RequiredService:    blocker.RequiredService,
+				SuspectedConfigGap: blocker.SuspectedConfigGap,
+				NextCommand:        blocker.NextCommand,
+				SourcePath:         handoff.SourcePath,
+			})
+		}
+	}
+	for findingID, blockers := range blockersByFinding {
+		blockersByFinding[findingID] = sortedValidationBlockers(blockers)
+	}
+	return blockersByFinding, nil
 }
 
 func reportWorkspaceFiles(runDir string) (map[string]bool, error) {
@@ -336,6 +378,110 @@ func validateReportFindingItem(runDir, bucket string, index int, item map[string
 	}
 	if bucket == "proven" && !citesValidationProofEvidence(id, state.Verdicts[id]["validate"], citedEvidence) {
 		return fmt.Errorf("%s.evidence_paths must include at least one validation proof artifact for a proven finding", prefix)
+	}
+	if bucket == "inconclusive" && len(state.ValidationBlockers[id]) == 0 {
+		return fmt.Errorf("%s.validation_blockers must include at least one blocker from the inconclusive validation handoff", prefix)
+	}
+	if err := validateReportValidationBlockers(prefix, item, state.ValidationBlockers[id]); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateReportValidationBlockers(prefix string, item map[string]json.RawMessage, expected []validationBlockerContext) error {
+	if len(expected) == 0 {
+		raw, ok := item["validation_blockers"]
+		if !ok {
+			return nil
+		}
+		var blockers []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &blockers); err != nil {
+			return fmt.Errorf("%s.validation_blockers must be an array when present: %w", prefix, err)
+		}
+		if len(blockers) > 0 {
+			return fmt.Errorf("%s.validation_blockers must be empty or omitted because no validation handoff blockers were recorded", prefix)
+		}
+		return nil
+	}
+	rawBlockers, err := requiredArrayField(item, "validation_blockers")
+	if err != nil {
+		return fmt.Errorf("%s.%w", prefix, err)
+	}
+	if len(rawBlockers) != len(expected) {
+		return fmt.Errorf("%s.validation_blockers length = %d, want %d", prefix, len(rawBlockers), len(expected))
+	}
+	got := make([]validationBlockerContext, 0, len(rawBlockers))
+	for i, raw := range rawBlockers {
+		blocker, err := reportValidationBlockerFromJSON(raw)
+		if err != nil {
+			return fmt.Errorf("%s.validation_blockers[%d].%w", prefix, i, err)
+		}
+		got = append(got, blocker)
+	}
+	got = sortedValidationBlockers(got)
+	expected = sortedValidationBlockers(expected)
+	for i := range expected {
+		if got[i] != expected[i] {
+			return fmt.Errorf("%s.validation_blockers[%d] = %#v, want %#v from validation handoff", prefix, i, got[i], expected[i])
+		}
+	}
+	return nil
+}
+
+func reportValidationBlockerFromJSON(item map[string]json.RawMessage) (validationBlockerContext, error) {
+	var blocker validationBlockerContext
+	var err error
+	if blocker.Summary, err = requiredNonEmptyStringField(item, "summary"); err != nil {
+		return blocker, err
+	}
+	if blocker.MissingDependency, err = requiredStringField(item, "missing_dependency"); err != nil {
+		return blocker, err
+	}
+	if blocker.FailedCommand, err = requiredStringField(item, "failed_command"); err != nil {
+		return blocker, err
+	}
+	if blocker.RequiredService, err = requiredStringField(item, "required_service"); err != nil {
+		return blocker, err
+	}
+	if blocker.SuspectedConfigGap, err = requiredStringField(item, "suspected_config_gap"); err != nil {
+		return blocker, err
+	}
+	if blocker.NextCommand, err = requiredNonEmptyStringField(item, "next_command"); err != nil {
+		return blocker, err
+	}
+	if blocker.SourcePath, err = requiredNonEmptyStringField(item, "source_path"); err != nil {
+		return blocker, err
+	}
+	return blocker, nil
+}
+
+func validateMarkdownReportCoversValidationBlockers(markdown []byte, state reportLedgerState) error {
+	findingIDs := make([]string, 0, len(state.ValidationBlockers))
+	for findingID := range state.ValidationBlockers {
+		findingIDs = append(findingIDs, findingID)
+	}
+	sort.Strings(findingIDs)
+	for _, findingID := range findingIDs {
+		for _, blocker := range sortedValidationBlockers(state.ValidationBlockers[findingID]) {
+			for _, item := range []struct {
+				name  string
+				value string
+			}{
+				{name: "summary", value: blocker.Summary},
+				{name: "missing_dependency", value: blocker.MissingDependency},
+				{name: "failed_command", value: blocker.FailedCommand},
+				{name: "required_service", value: blocker.RequiredService},
+				{name: "suspected_config_gap", value: blocker.SuspectedConfigGap},
+				{name: "next_command", value: blocker.NextCommand},
+			} {
+				if strings.TrimSpace(item.value) == "" {
+					continue
+				}
+				if !bytes.Contains(markdown, []byte(item.value)) {
+					return fmt.Errorf("markdown report missing validation blocker %s %q for finding %s", item.name, item.value, findingID)
+				}
+			}
+		}
 	}
 	return nil
 }

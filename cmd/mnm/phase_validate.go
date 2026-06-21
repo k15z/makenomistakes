@@ -126,6 +126,11 @@ func runValidateTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 			if !ok {
 				return fmt.Errorf("validate opencode task did not record validation verdict for finding %s", finding.ID)
 			}
+			if verdict.Value == "inconclusive" {
+				if err := validateBlockedValidationHandoff(verifyRunDir, finding.ID); err != nil {
+					return err
+				}
+			}
 			if verdict.Value == "proven" {
 				proofEvidence, err := validationProofEvidence(verifyRunDir, finding.ID, task.TaskID, verdict.eventIndex, promptRel, notesRel)
 				if err != nil {

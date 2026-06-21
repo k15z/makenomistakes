@@ -163,6 +163,32 @@ func validateRequiredTaskHandoff(runDir, phase, taskID, leadID, findingID string
 	return nil
 }
 
+func validateBlockedValidationHandoff(runDir, findingID string) error {
+	relPath := taskHandoffRelPath("validate", findingID)
+	handoff, err := readTaskHandoffFile(runDir, relPath)
+	if err != nil {
+		return err
+	}
+	if len(handoff.Blockers) == 0 {
+		return fmt.Errorf("inconclusive validation for finding %s requires at least one task handoff blocker", findingID)
+	}
+	for i, blocker := range handoff.Blockers {
+		if strings.TrimSpace(blocker.Summary) == "" {
+			return fmt.Errorf("validate task handoff %s blockers[%d].summary is required", relPath, i)
+		}
+		if strings.TrimSpace(blocker.NextCommand) == "" {
+			return fmt.Errorf("validate task handoff %s blockers[%d].next_command is required for inconclusive validation", relPath, i)
+		}
+		if strings.TrimSpace(blocker.MissingDependency) == "" &&
+			strings.TrimSpace(blocker.FailedCommand) == "" &&
+			strings.TrimSpace(blocker.RequiredService) == "" &&
+			strings.TrimSpace(blocker.SuspectedConfigGap) == "" {
+			return fmt.Errorf("validate task handoff %s blockers[%d] must include a missing dependency, failed command, required service, or suspected config gap", relPath, i)
+		}
+	}
+	return nil
+}
+
 func requiredTaskHandoffEvidence(runDir, taskID, leadID, findingID, relPath string) (EvidenceRecord, bool) {
 	switch {
 	case leadID != "":
@@ -335,7 +361,7 @@ func taskHandoffsFromEvidence(runDir string, evidence []EvidenceRecord) ([]taskH
 			continue
 		}
 		if err := registeredEvidenceFileError(runDir, item.Path, item.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("validate task handoff %s: %w", item.Path, err)
 		}
 		handoff, err := readTaskHandoffFile(runDir, item.Path)
 		if err != nil {

@@ -105,8 +105,10 @@ one skeptical task VM per candidate finding and records an `accepted` or
 `rejected` review verdict. Deduplicate compares review-accepted findings and
 records each one as `canonical` or `duplicate`. Validate makes a heavier
 end-to-end reproduction or exploit attempt in a task VM for each canonical
-finding and records `proven`, `failed`, or `inconclusive`. Finalize renders
-`report.md` and `report.json` from the ledger and evidence.
+finding and records `proven`, `failed`, or `inconclusive`. Inconclusive
+validation must include an actionable blocker: missing dependency, failed
+command, required service, suspected config gap, and next command where known.
+Finalize renders `report.md` and `report.json` from the ledger and evidence.
 
 Each post-recon task also receives a compact `phase-handoff-*.json` context
 artifact. It summarizes open leads, confirmed dead ends, findings and verdicts,
@@ -131,7 +133,9 @@ The planned output is:
   response captures, and validation notes.
 
 Reports should distinguish proven findings from inconclusive, failed, rejected,
-and duplicate findings.
+and duplicate findings. When validation is blocked, structured reports must
+preserve the remediation checklist as `validation_blockers` so a later run can
+resume from the precise missing setup step instead of rediscovering it.
 
 ## Manual Acceptance
 
