@@ -251,6 +251,7 @@ func executePreparedRun(ctx context.Context, options AnalyzeOptions, store *Stor
 		Run:            run,
 		Config:         cfg,
 		ModelAPIKey:    os.Getenv(resolved.APIKeyEnv),
+		ModelAuth:      resolved.ModelAuth,
 		KeepVM:         options.KeepVM,
 		Resume:         options.ResumeRunID != "",
 		StopAfterPhase: options.StopAfterPhase,

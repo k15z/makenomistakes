@@ -151,7 +151,9 @@ root = "."
 exclude = []
 
 [models]
-api_key_env = "OPENROUTER_API_KEY"
+openrouter_api_key_env = "OPENROUTER_API_KEY"
+openai_api_key_env = "OPENAI_API_KEY"
+anthropic_api_key_env = "ANTHROPIC_API_KEY"
 default = "openrouter/deepseek/deepseek-v4-pro"
 recon = "openrouter/deepseek/deepseek-v4-pro"
 investigate = "openrouter/deepseek/deepseek-v4-pro"

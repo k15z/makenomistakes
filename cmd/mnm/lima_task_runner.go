@@ -35,6 +35,7 @@ type LimaTaskRequest struct {
 	FindingID    string
 	Model        string
 	ModelAPIKey  string
+	ModelAuth    map[string]string
 	KeepVM       bool
 	SkipVerify   bool
 }
@@ -44,6 +45,7 @@ type LimaTaskAttemptRunner struct {
 	Config       RunnerConfig
 	SnapshotPath string
 	ModelAPIKey  string
+	ModelAuth    map[string]string
 	KeepVM       bool
 }
 
@@ -88,6 +90,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		FindingID:    task.FindingID,
 		Model:        task.Model,
 		ModelAPIKey:  runner.ModelAPIKey,
+		ModelAuth:    runner.ModelAuth,
 		KeepVM:       runner.KeepVM,
 		SkipVerify:   true,
 	})
@@ -274,8 +277,12 @@ func (runner LimaRunner) copyTaskInputs(ctx context.Context, instanceName, paylo
 			return err
 		}
 	}
-	if request.ModelAPIKey != "" {
-		authPath, cleanup, err := writeOpenCodeAuthFile(request.ModelAPIKey)
+	modelAuth := request.ModelAuth
+	if len(modelAuth) == 0 && request.ModelAPIKey != "" {
+		modelAuth = map[string]string{"openrouter": request.ModelAPIKey}
+	}
+	if len(modelAuth) != 0 {
+		authPath, cleanup, err := writeOpenCodeAuthFile(modelAuth)
 		if err != nil {
 			return err
 		}

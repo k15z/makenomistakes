@@ -33,14 +33,18 @@ type WorkspaceConfig struct {
 }
 
 type ModelConfig struct {
-	APIKeyEnv   string `toml:"api_key_env"`
-	Default     string `toml:"default"`
-	Recon       string `toml:"recon"`
-	Investigate string `toml:"investigate"`
-	Review      string `toml:"review"`
-	Deduplicate string `toml:"deduplicate"`
-	Validate    string `toml:"validate"`
-	Finalize    string `toml:"finalize"`
+	Provider         string `toml:"provider"`
+	APIKeyEnv        string `toml:"api_key_env"`
+	OpenRouterKeyEnv string `toml:"openrouter_api_key_env"`
+	OpenAIKeyEnv     string `toml:"openai_api_key_env"`
+	AnthropicKeyEnv  string `toml:"anthropic_api_key_env"`
+	Default          string `toml:"default"`
+	Recon            string `toml:"recon"`
+	Investigate      string `toml:"investigate"`
+	Review           string `toml:"review"`
+	Deduplicate      string `toml:"deduplicate"`
+	Validate         string `toml:"validate"`
+	Finalize         string `toml:"finalize"`
 }
 
 type RunnerConfig struct {
@@ -65,8 +69,16 @@ type ResolvedConfig struct {
 	ConfigPath    string
 	WorkspaceRoot string
 	APIKeyEnv     string
+	ModelProvider string
+	ModelAuth     map[string]string
 	Model         string
 	Timeout       time.Duration
+}
+
+var supportedModelProviders = map[string]string{
+	"openrouter": "OPENROUTER_API_KEY",
+	"openai":     "OPENAI_API_KEY",
+	"anthropic":  "ANTHROPIC_API_KEY",
 }
 
 func loadConfig(path string) (Config, error) {
@@ -112,20 +124,13 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 		return ResolvedConfig{}, fmt.Errorf("workspace.root must be a directory: %s", workspaceRoot)
 	}
 
-	apiKeyEnv := strings.TrimSpace(cfg.Models.APIKeyEnv)
-	if apiKeyEnv == "" {
-		apiKeyEnv = "OPENROUTER_API_KEY"
-	}
-	if os.Getenv(apiKeyEnv) == "" {
-		return ResolvedConfig{}, fmt.Errorf("model API key environment variable %s is not set", apiKeyEnv)
-	}
-
-	model := strings.TrimSpace(cfg.Models.Recon)
-	if model == "" {
-		model = strings.TrimSpace(cfg.Models.Default)
-	}
+	model := phaseModel(cfg, "recon")
 	if model == "" {
 		return ResolvedConfig{}, errors.New("models.default or models.recon must be set")
+	}
+	modelAuth, primaryProvider, primaryAPIKeyEnv, err := resolveModelAuth(cfg.Models, model)
+	if err != nil {
+		return ResolvedConfig{}, err
 	}
 
 	if cfg.Runner.CPUs <= 0 {
@@ -162,10 +167,137 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 	return ResolvedConfig{
 		ConfigPath:    filepath.Join(workspaceDir, "mnm.toml"),
 		WorkspaceRoot: workspaceRoot,
-		APIKeyEnv:     apiKeyEnv,
+		APIKeyEnv:     primaryAPIKeyEnv,
+		ModelProvider: primaryProvider,
+		ModelAuth:     modelAuth,
 		Model:         model,
 		Timeout:       time.Duration(cfg.Runner.TimeoutMinutes) * time.Minute,
 	}, nil
+}
+
+func resolveModelAuth(models ModelConfig, primaryModel string) (map[string]string, string, string, error) {
+	providers, err := configuredModelProviders(models)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if len(providers) == 0 {
+		return nil, "", "", errors.New("models.default or models.recon must be set")
+	}
+	auth := map[string]string{}
+	for _, provider := range providers {
+		envName := modelProviderAPIKeyEnv(models, provider, len(providers) == 1)
+		if os.Getenv(envName) == "" {
+			return nil, "", "", fmt.Errorf("model provider %s API key environment variable %s is not set", provider, envName)
+		}
+		auth[provider] = os.Getenv(envName)
+	}
+	primaryProvider, err := modelProvider(models.Provider, primaryModel)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return auth, primaryProvider, modelProviderAPIKeyEnv(models, primaryProvider, len(providers) == 1), nil
+}
+
+func configuredModelProviders(models ModelConfig) ([]string, error) {
+	cfg := Config{Models: models}
+	modelsToCheck := []string{
+		phaseModel(cfg, "recon"),
+		phaseModel(cfg, "investigate"),
+		phaseModel(cfg, "review"),
+		phaseModel(cfg, "deduplicate"),
+		phaseModel(cfg, "validate"),
+		phaseModel(cfg, "finalize"),
+	}
+	seen := map[string]bool{}
+	var providers []string
+	for _, model := range modelsToCheck {
+		if strings.TrimSpace(model) == "" {
+			continue
+		}
+		provider, err := modelProvider(models.Provider, model)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[provider] {
+			seen[provider] = true
+			providers = append(providers, provider)
+		}
+	}
+	return providers, nil
+}
+
+func modelProvider(explicitProvider, model string) (string, error) {
+	explicitProvider = strings.ToLower(strings.TrimSpace(explicitProvider))
+	if explicitProvider != "" {
+		if _, ok := supportedModelProviders[explicitProvider]; !ok {
+			return "", fmt.Errorf("models.provider = %q, want one of %s", explicitProvider, supportedProviderList())
+		}
+	}
+	model = strings.TrimSpace(model)
+	prefix := model
+	if slash := strings.Index(prefix, "/"); slash >= 0 {
+		prefix = prefix[:slash]
+	} else {
+		prefix = ""
+	}
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		if explicitProvider == "" {
+			return "", fmt.Errorf("model %q must use a supported provider prefix or set models.provider to one of %s", model, supportedProviderList())
+		}
+		return explicitProvider, nil
+	}
+	if _, ok := supportedModelProviders[prefix]; !ok {
+		if explicitProvider != "" {
+			return explicitProvider, nil
+		}
+		return "", fmt.Errorf("model %q uses unsupported provider prefix %q; supported providers: %s", model, prefix, supportedProviderList())
+	}
+	if explicitProvider != "" && prefix != explicitProvider {
+		return "", fmt.Errorf("model %q uses provider %q but models.provider = %q", model, prefix, explicitProvider)
+	}
+	return prefix, nil
+}
+
+func normalizeModelForOpenCode(explicitProvider, model string) (string, error) {
+	model = strings.TrimSpace(model)
+	provider, err := modelProvider(explicitProvider, model)
+	if err != nil {
+		return "", err
+	}
+	prefix := ""
+	if slash := strings.Index(model, "/"); slash >= 0 {
+		prefix = strings.ToLower(strings.TrimSpace(model[:slash]))
+	}
+	if prefix == provider {
+		return model, nil
+	}
+	return provider + "/" + model, nil
+}
+
+func modelProviderAPIKeyEnv(models ModelConfig, provider string, allowLegacy bool) string {
+	switch provider {
+	case "openrouter":
+		if strings.TrimSpace(models.OpenRouterKeyEnv) != "" {
+			return strings.TrimSpace(models.OpenRouterKeyEnv)
+		}
+	case "openai":
+		if strings.TrimSpace(models.OpenAIKeyEnv) != "" {
+			return strings.TrimSpace(models.OpenAIKeyEnv)
+		}
+	case "anthropic":
+		if strings.TrimSpace(models.AnthropicKeyEnv) != "" {
+			return strings.TrimSpace(models.AnthropicKeyEnv)
+		}
+	}
+	if allowLegacy && strings.TrimSpace(models.APIKeyEnv) != "" {
+		return strings.TrimSpace(models.APIKeyEnv)
+	}
+	return supportedModelProviders[provider]
+}
+
+func supportedProviderList() string {
+	return "anthropic, openai, openrouter"
 }
 
 func validateRunnerSetupConfig(setup RunnerSetupConfig) error {
