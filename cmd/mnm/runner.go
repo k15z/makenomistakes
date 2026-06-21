@@ -669,7 +669,7 @@ func validateReconTaskComplete(runDir, taskID string, cfg Config) error {
 	if err := validateReconOutputs(runDir, taskID, cfg); err != nil {
 		return err
 	}
-	return validateReconLedgerOutputs(runDir, taskID)
+	return validateReconLedgerOutputs(runDir, taskID, cfg)
 }
 
 func validateReconOutputs(runDir, taskID string, cfg Config) error {
@@ -1401,7 +1401,7 @@ func phaseModel(cfg Config, phase string) string {
 	return model
 }
 
-func validateReconLedgerOutputs(runDir, taskID string) error {
+func validateReconLedgerOutputs(runDir, taskID string, cfg Config) error {
 	events, err := readLedgerEvents(runDir)
 	if err != nil {
 		return err
@@ -1409,6 +1409,7 @@ func validateReconLedgerOutputs(runDir, taskID string) error {
 	hasMap := false
 	hasRiskRegister := false
 	hasLead := false
+	allowedRiskAreas := riskAreaSet(cfg.Instructions.RiskAreas)
 	for _, event := range events {
 		if event.TaskID != taskID {
 			continue
@@ -1424,6 +1425,12 @@ func validateReconLedgerOutputs(runDir, taskID string) error {
 		}
 		if event.Type == "lead.created" && event.Object == "lead" {
 			hasLead = true
+			if len(allowedRiskAreas) != 0 {
+				category := strings.ToLower(strings.TrimSpace(stringData(event.Data, "category")))
+				if !allowedRiskAreas[category] {
+					return fmt.Errorf("recon lead %s category %q is outside configured risk areas", event.ObjectID, stringData(event.Data, "category"))
+				}
+			}
 		}
 	}
 	if !ledgerTaskCompleted(runDir, taskID) {
@@ -1456,10 +1463,8 @@ func ledgerTaskCompleted(runDir, taskID string) bool {
 }
 
 func reconPrompt(runDir, workspace string, cfg Config) string {
-	scope := strings.TrimSpace(cfg.Instructions.Scope)
-	if scope == "" {
-		scope = "No additional scope instructions were provided."
-	}
+	scope := scopeText(cfg)
+	categoryExample, categoryGuidance := reconLeadCategoryGuidance(cfg)
 	return fmt.Sprintf(`# makenomistakes Recon
 
 You are running inside an isolated VM. Your job is to inspect the workspace and create durable Recon outputs through the injected mnm CLI.
@@ -1482,7 +1487,7 @@ Required actions:
 6. Register it with: mnm evidence add --kind markdown --title "Recon codebase map" --path %[2]s/evidence/recon-codebase-map.md
 7. Write a risk register to: %[2]s/evidence/recon-risk-register.md
 8. Register it with: mnm evidence add --kind markdown --title "Recon risk register" --path %[2]s/evidence/recon-risk-register.md
-9. Create focused leads. For each lead, write a body file under %[2]s/evidence/, then run: mnm lead create --title "Specific lead title" --category security --priority medium --body-file %[2]s/evidence/lead-specific-name.md
+9. Create focused leads. For each lead, write a body file under %[2]s/evidence/, then run: mnm lead create --title "Specific lead title" --category %[5]s --priority medium --body-file %[2]s/evidence/lead-specific-name.md
 10. Create no more than %[3]d leads.
 11. Complete the task with: mnm task complete --status completed --summary "Recon completed"
 
@@ -1490,6 +1495,7 @@ Recon discipline:
 
 - Recon maps the workspace and schedules focused work; Investigate and Validate prove, exploit, or falsify issues.
 - If scope instructions ask for tests or proofs, treat them as requirements for later Investigate or Validate unless a cheap smoke command materially improves lead quality.
+- If focused risk areas are configured, create leads inside those areas and avoid broad unrelated audit passes.
 - Run only bounded inspection commands such as find, rg, package metadata reads, and quick tests when needed to understand the workspace.
 - Do not build end-to-end proof scripts, start long-lived services, fuzz, install heavy dependencies, or keep exploring after you have enough context for focused leads.
 - Register the codebase map and risk register as soon as they are useful, then create leads promptly. Unregistered files are scratch and may be lost.
@@ -1497,10 +1503,28 @@ Recon discipline:
 Lead quality bar:
 
 - A lead is a focused question or risk area, not a final finding.
+- %[6]s
 - Prefer specific components, files, flows, trust boundaries, data flows, parsers, auth paths, dependency risks, or runtime setup concerns.
 - Include enough context that a later Investigate task can start without redoing Recon.
 - Avoid generic leads like "review security" or "check code quality".
-`, workspace, runDir, cfg.Runner.MaxLeads, scope)
+`, workspace, runDir, cfg.Runner.MaxLeads, scope, shellQuote(categoryExample), categoryGuidance)
+}
+
+func reconLeadCategoryGuidance(cfg Config) (string, string) {
+	riskAreas, _ := normalizedRiskAreas(cfg.Instructions.RiskAreas)
+	if len(riskAreas) == 0 {
+		return "security", `Use a concise category such as "authorization", "data exposure", "input parsing", or "deployment boundaries" when it better describes the lead than "security".`
+	}
+	return riskAreas[0], "Use one configured risk area as each lead category. Allowed categories: " + strings.Join(riskAreas, ", ") + "."
+}
+
+func riskAreaSet(items []string) map[string]bool {
+	riskAreas, _ := normalizedRiskAreas(items)
+	out := map[string]bool{}
+	for _, item := range riskAreas {
+		out[strings.ToLower(item)] = true
+	}
+	return out
 }
 
 func writeAndRegisterRunnerManifest(runDir, runID, workspace, opencodePath, opencodeVersionOutput string) error {

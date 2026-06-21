@@ -365,7 +365,7 @@ Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --l
 mnm lead close --id %[3]s --status closed_no_finding --reason "..." --negative-boundary "exact trust/network/auth/data-flow/deployment boundary" --negative-enforcement "specific guard, policy, middleware, check, or code path" --negative-exposure "deployment exposure conclusion" --negative-edge-cases "bypasses, roles, alternate routes, and edge cases checked"
 
 9. If the lead still looks plausible but you cannot prove the exact boundary, enforcement point, deployment exposure, or relevant edge cases, close it as inconclusive instead: mnm lead close --id %[3]s --status inconclusive --reason "missing negative proof: ..."
-10. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
+10. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category %[12]s --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
 11. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
 12. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, inconclusive, or superseded.
 13. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
@@ -378,7 +378,7 @@ Finding quality bar:
 - Do not promote vague risk, missing best practices, or style concerns to findings.
 - Prefer proof commands and short reproduction notes over speculation.
 - Record uncertainty in the finding body rather than overstating the result.
-`, workspace, runDir, lead.ID, lead.Title, lead.Category, lead.Priority, scopeText(cfg), handoffRel, string(body), safeLeadID, taskHandoffSchemaText()), nil
+`, workspace, runDir, lead.ID, lead.Title, lead.Category, lead.Priority, scopeText(cfg), handoffRel, string(body), safeLeadID, taskHandoffSchemaText(), shellQuote(lead.Category)), nil
 }
 
 func maxInvestigations(cfg Config) int {
@@ -393,8 +393,56 @@ func taskParallelism(cfg Config) int {
 }
 
 func scopeText(cfg Config) string {
-	if cfg.Instructions.Scope == "" {
-		return "No additional scope instructions were provided."
+	var b strings.Builder
+	if strings.TrimSpace(cfg.Instructions.Scope) == "" {
+		b.WriteString("No additional scope instructions were provided.")
+	} else {
+		b.WriteString(strings.TrimSpace(cfg.Instructions.Scope))
 	}
-	return cfg.Instructions.Scope
+	riskAreas, _ := normalizedRiskAreas(cfg.Instructions.RiskAreas)
+	if len(riskAreas) > 0 {
+		b.WriteString("\n\nFocused risk areas:\n")
+		for _, area := range riskAreas {
+			b.WriteString("- ")
+			b.WriteString(area)
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func normalizedRiskAreas(items []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for i, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil, fmt.Errorf("instructions.risk_areas[%d] must not be empty", i)
+		}
+		if !riskAreaCategorySafe(item) {
+			return nil, fmt.Errorf("instructions.risk_areas[%d] contains unsupported category characters", i)
+		}
+		key := strings.ToLower(item)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func riskAreaCategorySafe(value string) bool {
+	for _, ch := range value {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' {
+			continue
+		}
+		switch ch {
+		case ' ', '-', '_', '/':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }

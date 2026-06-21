@@ -355,6 +355,50 @@ func TestConfigAcceptsRunnerSetupHook(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsBlankRiskArea(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), `risk_areas = []`, `risk_areas = ["authorization", "  "]`, 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cfg.validate(dir)
+	if err == nil {
+		t.Fatal("expected blank risk area error")
+	}
+	if !strings.Contains(err.Error(), "instructions.risk_areas[1] must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigRejectsUnsafeRiskAreaCategory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), `risk_areas = []`, `risk_areas = ["authorization $(bad)"]`, 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cfg.validate(dir)
+	if err == nil {
+		t.Fatal("expected unsafe risk area error")
+	}
+	if !strings.Contains(err.Error(), "contains unsupported category characters") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestConfigRejectsInvalidRunnerSetupHook(t *testing.T) {
 	tests := []struct {
 		name     string

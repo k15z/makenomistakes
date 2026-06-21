@@ -33,6 +33,10 @@ failed run from its saved snapshot and ledger. Use `mnm runs` to rediscover run
 IDs, statuses, resumability, update times, and run directories.
 Use `mnm analyze --stop-after recon` to checkpoint after Recon while iterating
 on audit setup or reviewing generated leads before resuming.
+Set `instructions.risk_areas` in `mnm.toml` for narrower campaigns such as
+authorization, data exposure, state consistency, transaction validation, input
+parsing, or deployment boundaries. Recon uses those areas to create focused
+leads instead of spreading effort across a generic audit pass.
 Use `mnm report show RUN_ID` to print the latest finalized Markdown report, or
 `mnm report show --json RUN_ID` for the structured report.
 If a task VM or host orchestration fails before Finalize, `mnm runs` shows the
