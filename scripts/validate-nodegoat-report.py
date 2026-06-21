@@ -22,6 +22,31 @@ SECURITY_KEYWORDS = (
     "xss",
 )
 
+FORBIDDEN_REPORT_CLAIMS = (
+    "enabling session forgery",
+    "session forgery on any nodegoat deployment",
+    "forged authenticated session",
+    "forge an authenticated session",
+    "steal document.cookie",
+    "document.cookie theft",
+    "node 12 implicit",
+    "res.write(object) exploitation",
+)
+
+BENCHMARK_EXPECTATIONS = (
+    {
+        "name": "benefits authorization and allocations IDOR",
+        "required_terms": (
+            "/benefits",
+            "/allocations/:userid",
+        ),
+        "affected_paths": {
+            "NodeGoat/app/routes/allocations.js",
+            "NodeGoat/app/routes/benefits.js",
+        },
+    },
+)
+
 
 def strings(value):
     if isinstance(value, str):
@@ -72,12 +97,33 @@ def is_nodegoat_security_finding(item):
     return any(keyword in structured_text for keyword in SECURITY_KEYWORDS)
 
 
+def structured_item_text(item):
+    return "\n".join(strings({
+        "title": item.get("title"),
+        "category": item.get("category"),
+        "summary": item.get("summary"),
+        "verdicts": item.get("verdicts"),
+    })).lower()
+
+
+def matched_benchmark_expectations(item):
+    item_text = structured_item_text(item)
+    for expectation in BENCHMARK_EXPECTATIONS:
+        if all(term in item_text for term in expectation["required_terms"]):
+            yield expectation
+
+
 def validate_nodegoat_report(run_dir):
     report_json = run_dir / "report.json"
     report_md = run_dir / "report.md"
 
     with report_json.open() as fh:
         report = json.load(fh)
+    markdown_text = report_md.read_text()
+    combined_text = json.dumps(report, sort_keys=True).lower() + "\n" + markdown_text.lower()
+    for phrase in FORBIDDEN_REPORT_CLAIMS:
+        if phrase in combined_text:
+            raise SystemExit(f"report contains overclaim: {phrase!r}")
 
     proven = report.get("proven")
     if not isinstance(proven, list):
@@ -86,6 +132,7 @@ def validate_nodegoat_report(run_dir):
         raise SystemExit(f"{report_json} contains no proven findings")
 
     matched_nodegoat_security_finding = False
+    matched_expectations = set()
     for index, item in enumerate(proven):
         verify_evidence_paths(run_dir, item, index)
         if item.get("status") != "validation_proven":
@@ -94,11 +141,31 @@ def validate_nodegoat_report(run_dir):
             )
         if is_nodegoat_security_finding(item):
             matched_nodegoat_security_finding = True
+        for expectation in matched_benchmark_expectations(item):
+            matched_expectations.add(expectation["name"])
+            expected_paths = expectation["affected_paths"]
+            affected_paths = set(item.get("affected_paths", []))
+            missing = sorted(expected_paths - affected_paths)
+            if missing:
+                raise SystemExit(
+                    f"{expectation['name']} finding is missing expected affected path(s): "
+                    f"{', '.join(missing)}"
+                )
 
     if not matched_nodegoat_security_finding:
         raise SystemExit(
             "no proven finding appeared to describe a concrete NodeGoat security issue; "
             f"inspect {report_json}"
+        )
+    missing_expectations = sorted(
+        expectation["name"]
+        for expectation in BENCHMARK_EXPECTATIONS
+        if expectation["name"] not in matched_expectations
+    )
+    if missing_expectations:
+        raise SystemExit(
+            "no proven finding matched expected benchmark check(s): "
+            + ", ".join(missing_expectations)
         )
 
     print(f"benchmark passed: {len(proven)} proven finding(s)")

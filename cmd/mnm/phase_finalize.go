@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -41,6 +44,26 @@ func runFinalizeTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 		return err
 	}
 	if err := registerTaskStarted(runDir, task, nil); err != nil {
+		return err
+	}
+
+	contextRel := filepath.ToSlash(filepath.Join("evidence", "finalize-context.json"))
+	contextPath := filepath.Join(runDir, filepath.FromSlash(contextRel))
+	contextJSON, err := buildFinalizeContext(runDir, runID)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(contextPath, contextJSON, filePerm); err != nil {
+		return err
+	}
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              runID,
+		TaskID:             task.TaskID,
+		Kind:               "json",
+		Title:              "Finalize compact context",
+		Path:               contextRel,
+		AllowContentChange: true,
+	}); err != nil {
 		return err
 	}
 
@@ -188,6 +211,7 @@ Scope instructions:
 
 Important context files:
 
+- %[2]s/evidence/finalize-context.json
 - %[2]s/evidence/recon-codebase-map.md
 - %[2]s/evidence/recon-risk-register.md
 - %[2]s/events.jsonl
@@ -195,11 +219,13 @@ Important context files:
 Required actions:
 
 1. Run: mnm task current
-2. Read the ledger and the evidence files needed to explain findings accurately. Do not invent evidence, commands, files, or impact that is not present in the run directory.
-3. Write a human-readable Markdown report to %[2]s/report.md.
-4. Write a structured JSON report to %[2]s/report.json.
-5. Register both reports with: mnm report finalize --markdown %[2]s/report.md --json %[2]s/report.json
-6. Complete the task with: mnm task complete --status completed --summary "Finalized report"
+2. Read %[2]s/evidence/finalize-context.json first. It is a compact, host-generated view of the ledger containing every finding, its bucket/status, exact verdict labels, recommended evidence paths, validation proof paths, and affected path candidates that pass the workspace manifest check.
+3. Use the compact context as the source of truth for JSON shape, buckets, statuses, verdict labels, evidence paths, and affected paths. For prose, treat validation notes and verdict details as higher authority than the original finding body because review and validation may narrow or retract earlier claims.
+4. Do not read opencode-*.jsonl transcripts or the full raw events.jsonl unless report validation fails and the compact context is insufficient to debug it. These transcript files are large and not needed for the final report.
+5. Write a human-readable Markdown report to %[2]s/report.md.
+6. Write a structured JSON report to %[2]s/report.json.
+7. Register both reports with: mnm report finalize --markdown %[2]s/report.md --json %[2]s/report.json
+8. Complete the task with: mnm task complete --status completed --summary "Finalized report"
 
 Markdown report requirements:
 
@@ -211,6 +237,7 @@ Markdown report requirements:
 - Every path listed in JSON "evidence_paths" must also appear literally in the Markdown report.
 - If there are no findings, say that clearly and summarize what phases ran.
 - Preserve nuance. A rejected, failed, duplicate, or inconclusive finding must not be presented as proven.
+- Do not upgrade a configuration weakness into a stronger exploit claim unless the validation evidence proves that exact exploit. For example, a hardcoded session signing secret is not by itself proof of forged authenticated sessions when the application uses a server-side session store.
 
 JSON report requirements:
 
@@ -231,4 +258,298 @@ JSON report requirements:
 - If %[2]s/evidence/runner-manifest.json is present, every affected_paths entry must exist in its workspace_files list.
 - Every ledger finding must appear in exactly one report bucket.
 `, workspace, runDir, len(leads), len(findings), len(verdicts), scopeText(cfg)), nil
+}
+
+type finalizeContextFile struct {
+	RunID      string                    `json:"run_id"`
+	ReportPath finalizeContextReportPath `json:"report_paths"`
+	Counts     map[string]int            `json:"counts"`
+	Buckets    map[string][]string       `json:"buckets"`
+	Findings   []finalizeFindingContext  `json:"findings"`
+}
+
+type finalizeContextReportPath struct {
+	Markdown string `json:"markdown"`
+	JSON     string `json:"json"`
+}
+
+type finalizeFindingContext struct {
+	ID                           string                    `json:"id"`
+	Title                        string                    `json:"title"`
+	Category                     string                    `json:"category"`
+	Severity                     string                    `json:"severity"`
+	Confidence                   string                    `json:"confidence"`
+	SourceLeadID                 string                    `json:"source_lead_id"`
+	Status                       string                    `json:"status"`
+	Bucket                       string                    `json:"bucket"`
+	CanonicalFindingID           string                    `json:"canonical_finding_id,omitempty"`
+	FindingBodyPath              string                    `json:"finding_body_path"`
+	FindingBodyExcerpt           string                    `json:"finding_body_excerpt,omitempty"`
+	ValidationNotesPath          string                    `json:"validation_notes_path,omitempty"`
+	ValidationNotesExcerpt       string                    `json:"validation_notes_excerpt,omitempty"`
+	Verdicts                     []string                  `json:"verdicts"`
+	VerdictDetails               []finalizeVerdictContext  `json:"verdict_details"`
+	RecommendedEvidencePaths     []string                  `json:"recommended_evidence_paths"`
+	ValidationProofEvidencePaths []string                  `json:"validation_proof_evidence_paths"`
+	RegisteredEvidence           []finalizeEvidenceContext `json:"registered_evidence"`
+	AffectedPathCandidates       []string                  `json:"affected_path_candidates"`
+}
+
+type finalizeVerdictContext struct {
+	Phase              string `json:"phase"`
+	Value              string `json:"value"`
+	Reason             string `json:"reason"`
+	CanonicalFindingID string `json:"canonical_finding_id,omitempty"`
+}
+
+type finalizeEvidenceContext struct {
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	TaskID string `json:"task_id"`
+}
+
+func buildFinalizeContext(runDir, runID string) ([]byte, error) {
+	state, err := reportKnownState(runDir)
+	if err != nil {
+		return nil, err
+	}
+	findings, err := ledgerFindings(runDir)
+	if err != nil {
+		return nil, err
+	}
+	workspaceFiles := sortedMapKeys(state.WorkspaceFiles)
+	context := finalizeContextFile{
+		RunID: runID,
+		ReportPath: finalizeContextReportPath{
+			Markdown: "report.md",
+			JSON:     "report.json",
+		},
+		Counts: map[string]int{
+			"findings_proven":       0,
+			"findings_inconclusive": 0,
+			"findings_failed":       0,
+			"findings_rejected":     0,
+			"findings_duplicate":    0,
+			"findings_unvalidated":  0,
+		},
+		Buckets: map[string][]string{
+			"proven":       {},
+			"inconclusive": {},
+			"failed":       {},
+			"rejected":     {},
+			"duplicate":    {},
+			"unvalidated":  {},
+		},
+	}
+
+	for _, finding := range findings {
+		verdicts := state.Verdicts[finding.ID]
+		bucket := reportBucketForFinding(verdicts)
+		status := reportStatusForFinding(verdicts)
+		context.Counts["findings_"+bucket]++
+		context.Buckets[bucket] = append(context.Buckets[bucket], finding.ID)
+
+		item, err := buildFinalizeFindingContext(runDir, finding, verdicts, state.FindingEvidence[finding.ID], workspaceFiles, bucket, status)
+		if err != nil {
+			return nil, err
+		}
+		context.Findings = append(context.Findings, item)
+	}
+	data, err := json.MarshalIndent(context, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, '\n')
+	return data, nil
+}
+
+func buildFinalizeFindingContext(runDir string, finding FindingRecord, verdicts map[string]VerdictRecord, evidence map[string]EvidenceRecord, workspaceFiles []string, bucket, status string) (finalizeFindingContext, error) {
+	item := finalizeFindingContext{
+		ID:                 finding.ID,
+		Title:              finding.Title,
+		Category:           finding.Category,
+		Severity:           finding.Severity,
+		Confidence:         finding.Confidence,
+		SourceLeadID:       finding.LeadID,
+		Status:             status,
+		Bucket:             bucket,
+		FindingBodyPath:    finding.BodyPath,
+		Verdicts:           reportVerdictLabels(verdicts),
+		RegisteredEvidence: []finalizeEvidenceContext{},
+	}
+	if dedup, ok := verdicts["deduplicate"]; ok && dedup.Value == "duplicate" {
+		item.CanonicalFindingID = dedup.CanonicalFindingID
+	}
+	body, err := readRunFileExcerpt(runDir, finding.BodyPath, 2500)
+	if err != nil {
+		return item, err
+	}
+	item.FindingBodyExcerpt = body
+
+	if validateVerdict, ok := verdicts["validate"]; ok {
+		notesRel := validationNotesRelPath(finding.ID)
+		if notes, ok := evidence[notesRel]; ok && notes.TaskID == validateVerdict.TaskID {
+			item.ValidationNotesPath = notesRel
+			notesExcerpt, err := readRunFileExcerpt(runDir, notesRel, 5000)
+			if err != nil {
+				return item, err
+			}
+			item.ValidationNotesExcerpt = notesExcerpt
+		}
+	}
+
+	for _, phase := range []string{"review", "deduplicate", "validate"} {
+		verdict, ok := verdicts[phase]
+		if !ok {
+			continue
+		}
+		item.VerdictDetails = append(item.VerdictDetails, finalizeVerdictContext{
+			Phase:              verdict.Phase,
+			Value:              verdict.Value,
+			Reason:             verdict.Reason,
+			CanonicalFindingID: verdict.CanonicalFindingID,
+		})
+	}
+
+	evidenceItems := sortedEvidenceRecords(evidence)
+	validateVerdict, hasValidateVerdict := verdicts["validate"]
+	recommended := map[string]bool{}
+	for _, evidenceItem := range evidenceItems {
+		item.RegisteredEvidence = append(item.RegisteredEvidence, finalizeEvidenceContext{
+			Path:   evidenceItem.Path,
+			Kind:   evidenceItem.Kind,
+			Title:  evidenceItem.Title,
+			TaskID: evidenceItem.TaskID,
+		})
+		if hasValidateVerdict &&
+			evidenceItem.TaskID == validateVerdict.TaskID &&
+			evidenceItem.eventIndex < validateVerdict.eventIndex &&
+			isValidationProofArtifact(finding.ID, evidenceItem.Path) {
+			item.ValidationProofEvidencePaths = append(item.ValidationProofEvidencePaths, evidenceItem.Path)
+			recommended[evidenceItem.Path] = true
+		}
+	}
+	if item.ValidationNotesPath != "" {
+		recommended[item.ValidationNotesPath] = true
+	}
+	for _, evidenceItem := range evidenceItems {
+		if recommended[evidenceItem.Path] || strings.HasPrefix(filepath.Base(evidenceItem.Path), "opencode-") {
+			continue
+		}
+		if strings.Contains(evidenceItem.Path, "-prompt.") {
+			continue
+		}
+		if len(recommended) >= 4 {
+			break
+		}
+		recommended[evidenceItem.Path] = true
+	}
+	item.RecommendedEvidencePaths = sortedMapKeys(recommended)
+
+	searchText := item.FindingBodyExcerpt + "\n" + item.ValidationNotesExcerpt
+	for _, detail := range item.VerdictDetails {
+		searchText += "\n" + detail.Reason
+	}
+	item.AffectedPathCandidates = affectedPathCandidates(searchText, workspaceFiles)
+	return item, nil
+}
+
+func readRunFileExcerpt(runDir, relPath string, limit int) (string, error) {
+	if strings.TrimSpace(relPath) == "" {
+		return "", nil
+	}
+	path := filepath.Join(runDir, filepath.FromSlash(relPath))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", relPath, err)
+	}
+	text := strings.TrimSpace(string(data))
+	if len(text) <= limit {
+		return text, nil
+	}
+	headLimit := limit / 2
+	tailLimit := limit - headLimit
+	head := strings.TrimSpace(text[:headLimit])
+	tail := strings.TrimSpace(text[len(text)-tailLimit:])
+	return head + "\n\n[...snip...]\n\n" + tail, nil
+}
+
+func affectedPathCandidates(text string, workspaceFiles []string) []string {
+	if strings.TrimSpace(text) == "" || len(workspaceFiles) == 0 {
+		return nil
+	}
+	basenameCounts := map[string]int{}
+	for _, path := range workspaceFiles {
+		basenameCounts[pathpkg.Base(path)]++
+	}
+	seen := map[string]bool{}
+	for _, path := range workspaceFiles {
+		basename := pathpkg.Base(path)
+		if strings.Contains(text, path) ||
+			strings.Contains(text, stripFirstPathComponent(path)) ||
+			(basenameCounts[basename] == 1 && containsPathToken(text, basename)) {
+			seen[path] = true
+		}
+	}
+	return sortedMapKeys(seen)
+}
+
+func containsPathToken(text, token string) bool {
+	for offset := 0; ; {
+		index := strings.Index(text[offset:], token)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(token)
+		if isPathTokenBoundary(text, start-1) && isPathTokenBoundary(text, end) {
+			return true
+		}
+		offset = end
+	}
+}
+
+func isPathTokenBoundary(text string, index int) bool {
+	if index < 0 || index >= len(text) {
+		return true
+	}
+	ch := text[index]
+	return !((ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9') ||
+		ch == '_' ||
+		ch == '-' ||
+		ch == '.' ||
+		ch == '/')
+}
+
+func stripFirstPathComponent(path string) string {
+	if index := strings.Index(path, "/"); index >= 0 && index+1 < len(path) {
+		return path[index+1:]
+	}
+	return path
+}
+
+func sortedMapKeys[V any](items map[string]V) []string {
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedEvidenceRecords(items map[string]EvidenceRecord) []EvidenceRecord {
+	records := make([]EvidenceRecord, 0, len(items))
+	for _, item := range items {
+		records = append(records, item)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].eventIndex != records[j].eventIndex {
+			return records[i].eventIndex < records[j].eventIndex
+		}
+		return records[i].Path < records[j].Path
+	})
+	return records
 }

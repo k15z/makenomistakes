@@ -22,14 +22,20 @@ class ValidateNodeGoatReportTest(unittest.TestCase):
 
     def valid_item(self, **overrides):
         item = {
-            "id": "finding_nodegoat_nosql",
-            "title": "NoSQL injection in NodeGoat login",
-            "category": "injection",
+            "id": "finding_generated_uuid",
+            "title": "Missing admin guard on /benefits and IDOR on /allocations/:userId",
+            "category": "authorization",
             "severity": "high",
             "confidence": "high",
             "status": "validation_proven",
-            "summary": "Reachable NoSQL injection in the NodeGoat login flow.",
-            "affected_paths": ["NodeGoat/app/routes/session.js"],
+            "summary": (
+                "A non-admin user can reach /benefits and read another user's "
+                "allocations through /allocations/:userId."
+            ),
+            "affected_paths": [
+                "NodeGoat/app/routes/allocations.js",
+                "NodeGoat/app/routes/benefits.js",
+            ],
             "evidence_paths": ["evidence/proof.log"],
             "verdicts": [
                 "review accepted",
@@ -48,6 +54,71 @@ class ValidateNodeGoatReportTest(unittest.TestCase):
             self.write_report(run_dir, [self.valid_item()])
 
             validator.validate_nodegoat_report(run_dir)
+
+    def test_expected_paths_are_checked_without_stable_finding_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = pathlib.Path(tmp)
+            (run_dir / "evidence").mkdir()
+            (run_dir / "evidence/proof.log").write_text("proof\n", encoding="utf-8")
+            self.write_report(run_dir, [
+                self.valid_item(
+                    id="finding_random_every_run",
+                    affected_paths=["NodeGoat/app/routes/allocations.js"],
+                )
+            ])
+
+            with self.assertRaisesRegex(SystemExit, "benefits authorization"):
+                validator.validate_nodegoat_report(run_dir)
+
+    def test_rejects_report_without_expected_benchmark_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = pathlib.Path(tmp)
+            (run_dir / "evidence").mkdir()
+            (run_dir / "evidence/proof.log").write_text("proof\n", encoding="utf-8")
+            self.write_report(run_dir, [
+                self.valid_item(
+                    title="NoSQL injection in NodeGoat login",
+                    category="injection",
+                    summary="Reachable NoSQL injection in the NodeGoat login flow.",
+                    affected_paths=["NodeGoat/app/routes/session.js"],
+                )
+            ])
+
+            with self.assertRaisesRegex(SystemExit, "expected benchmark check"):
+                validator.validate_nodegoat_report(run_dir)
+
+    def test_allows_nuanced_negative_overclaim_language(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = pathlib.Path(tmp)
+            (run_dir / "evidence").mkdir()
+            (run_dir / "evidence/proof.log").write_text("proof\n", encoding="utf-8")
+            (run_dir / "report.md").write_text(
+                "# Report\nThis is not a full auth bypass, and document.cookie was not proven.\n",
+                encoding="utf-8",
+            )
+            (run_dir / "report.json").write_text(
+                json.dumps({"proven": [self.valid_item()]}),
+                encoding="utf-8",
+            )
+
+            validator.validate_nodegoat_report(run_dir)
+
+    def test_rejects_specific_overclaim_language(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = pathlib.Path(tmp)
+            (run_dir / "evidence").mkdir()
+            (run_dir / "evidence/proof.log").write_text("proof\n", encoding="utf-8")
+            (run_dir / "report.md").write_text(
+                "# Report\nThe hardcoded secret is enabling session forgery.\n",
+                encoding="utf-8",
+            )
+            (run_dir / "report.json").write_text(
+                json.dumps({"proven": [self.valid_item()]}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(SystemExit, "overclaim"):
+                validator.validate_nodegoat_report(run_dir)
 
     def test_rejects_generic_finding_even_if_evidence_mentions_nodegoat(self):
         with tempfile.TemporaryDirectory() as tmp:
