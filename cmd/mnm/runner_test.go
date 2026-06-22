@@ -1216,8 +1216,9 @@ func TestLimaRunnerCommandSequence(t *testing.T) {
 		"limactl start --tty=false mnm-run-abc",
 		"limactl copy --backend=scp " + payload + " mnm-run-abc:/tmp/mnm",
 		"limactl shell mnm-run-abc bash -lc",
-		"command -v rg",
-		"apt-get install -y ripgrep",
+		"for tool in rg git curl jq unzip tar xz file make pkg-config python3 pip3 docker; do",
+		"baseline_packages=\"ca-certificates curl git jq unzip tar xz-utils file make build-essential pkg-config python3 python3-venv python3-pip ripgrep docker.io\"",
+		"apt-get install -y $baseline_packages",
 		"--stop-after 'recon'",
 		"limactl stop --tty=false mnm-run-abc",
 		"limactl delete --force --tty=false mnm-run-abc",
@@ -1414,24 +1415,24 @@ func TestLimaRunnerPreflightAcceptsSufficientHostResources(t *testing.T) {
 func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 	command := guestRunnerCommand(RunRecord{ID: "run_quote'value"}, "")
 
-	ripgrepInstall := "apt-get install -y ripgrep"
+	toolbeltInstall := "apt-get install -y $baseline_packages"
 	runnerStart := "/tmp/mnm runner --run-id 'run_quote'\\''value'"
-	installIndex := strings.Index(command, ripgrepInstall)
+	installIndex := strings.Index(command, toolbeltInstall)
 	runnerIndex := strings.Index(command, runnerStart)
 	if installIndex == -1 {
-		t.Fatalf("guest runner command missing ripgrep install:\n%s", command)
+		t.Fatalf("guest runner command missing baseline toolbelt install:\n%s", command)
 	}
 	if runnerIndex == -1 {
 		t.Fatalf("guest runner command missing quoted runner invocation:\n%s", command)
 	}
 	if installIndex > runnerIndex {
-		t.Fatalf("ripgrep install should happen before runner starts:\n%s", command)
+		t.Fatalf("baseline toolbelt install should happen before runner starts:\n%s", command)
 	}
 	if !strings.Contains(command, "rm -f /tmp/mnm-run/.events.lock") {
 		t.Fatalf("guest runner command should clear stale ledger locks before runner starts:\n%s", command)
 	}
-	if !strings.Contains(command, "ripgrep is required in the audit VM") {
-		t.Fatalf("guest runner command should fail clearly when ripgrep cannot be installed:\n%s", command)
+	if !strings.Contains(command, "audit VM baseline toolbelt is required") {
+		t.Fatalf("guest runner command should fail clearly when the baseline cannot be installed:\n%s", command)
 	}
 	if _, err := exec.LookPath("bash"); err == nil {
 		check := exec.Command("bash", "-n")

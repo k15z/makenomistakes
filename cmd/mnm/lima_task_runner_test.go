@@ -82,6 +82,10 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 		"limactl copy --backend=scp -r " + promptPath + " " + instanceName + ":/tmp/mnm-prompt.md",
 		"limactl copy --backend=scp -r " + filepath.Clean(ledgerDir) + "/. " + instanceName + ":/tmp/mnm-ledger",
 		"limactl copy --backend=scp -r " + filepath.Clean(outputDir) + "/. " + instanceName + ":/tmp/mnm-output",
+		"baseline_packages=\"ca-certificates curl git jq unzip tar xz-utils file make build-essential pkg-config python3 python3-venv python3-pip ripgrep docker.io\"",
+		"docker-compose-v2",
+		"systemctl enable --now docker",
+		"docker info",
 		"/tmp/mnm runner task --run-dir '/tmp/mnm-output' --ledger-dir '/tmp/mnm-ledger' --workspace '/tmp/mnm-workspace' --snapshot '/tmp/snapshot.tar.zst'",
 		"--task-file '/tmp/mnm-output/current-task.json'",
 		"--prompt-file '/tmp/mnm-prompt.md'",
@@ -97,9 +101,6 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing command %q in:\n%s", want, joined)
 		}
-	}
-	if strings.Contains(joined, "docker.io") {
-		t.Fatalf("recon task command should not install Docker:\n%s", joined)
 	}
 	if _, err := os.Stat(filepath.Join(outputDir, ".events.lock")); !os.IsNotExist(err) {
 		t.Fatalf("stale copied task lock should be dropped, stat err=%v", err)
@@ -220,13 +221,13 @@ func TestLimaTaskRunnerRejectsInvalidSetupBeforeVMWork(t *testing.T) {
 	}
 }
 
-func TestValidateTaskRunnerCommandBootstrapsDocker(t *testing.T) {
+func TestTaskRunnerCommandBootstrapsDocker(t *testing.T) {
 	command := guestTaskRunnerCommand(LimaTaskRequest{
-		RunID: "run_validate",
+		RunID: "run_investigate",
 		Task: TaskRecord{
-			RunID:  "run_validate",
-			TaskID: "task_validate_finding",
-			Phase:  "validate",
+			RunID:  "run_investigate",
+			TaskID: "task_investigate_lead",
+			Phase:  "investigate",
 		},
 		Attempt:      1,
 		Config:       RunnerConfig{OpenCodeTaskTimeoutMinutes: 7},
