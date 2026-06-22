@@ -367,8 +367,10 @@ mnm lead close --id %[3]s --status closed_no_finding --reason "..." --negative-b
 9. If the lead still looks plausible but you cannot prove the exact boundary, enforcement point, deployment exposure, or relevant edge cases, close it as inconclusive instead: mnm lead close --id %[3]s --status inconclusive --reason "missing negative proof: ..."
 10. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category %[12]s --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
 11. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
-12. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, inconclusive, or superseded.
-13. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
+12. If investigation reveals an under-covered follow-up area, adjacent risk class, or sibling instance that needs its own pass, create a new lead with mnm lead create when it is concrete enough. Also record it in likely_leads in the task handoff.
+13. When you find a real issue pattern, do a bounded sibling-instance check for the same class of bug in nearby files, routes, handlers, templates, configuration blocks, or data flows before closing the task.
+14. Still close the current lead as promoted_to_finding, closed_no_finding, inconclusive, or superseded.
+15. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
 
 Finding quality bar:
 
@@ -376,6 +378,7 @@ Finding quality bar:
 - Do not use closed_no_finding for a dismissal unless the notes and close command identify the exact boundary, enforcement point, deployment exposure, and edge cases checked.
 - Use inconclusive when a lead is plausible but the environment, missing context, or time prevents a confident positive finding or negative proof.
 - Do not promote vague risk, missing best practices, or style concerns to findings.
+- Split separable root causes into separate findings or follow-up leads when proof, remediation, or ownership differs.
 - Prefer proof commands and short reproduction notes over speculation.
 - Record uncertainty in the finding body rather than overstating the result.
 `, workspace, runDir, lead.ID, lead.Title, lead.Category, lead.Priority, scopeText(cfg), handoffRel, string(body), safeLeadID, taskHandoffSchemaText(), shellQuote(lead.Category)), nil

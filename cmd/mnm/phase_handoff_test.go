@@ -498,3 +498,16 @@ func TestValidateRequiredTaskHandoffRejectsLegacyStringDeadEndsForCurrentTask(t 
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestTaskHandoffSchemaDescribesLikelyLeadFanout(t *testing.T) {
+	schema := taskHandoffSchemaText()
+	for _, want := range []string{
+		"under-covered follow-up areas",
+		"same-class sibling instances",
+		"adjacent risk classes",
+	} {
+		if !strings.Contains(schema, want) {
+			t.Fatalf("schema missing %q:\n%s", want, schema)
+		}
+	}
+}

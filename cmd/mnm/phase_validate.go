@@ -310,6 +310,9 @@ Validation quality bar:
 
 - Prefer runnable proof commands, request/response captures, logs, stack traces, and minimized reproduction scripts over prose.
 - Do not mark proven without observing concrete behavior.
+- When validation proves a class of issue, run a bounded sibling-instance check for the same bug class in nearby files, routes, handlers, templates, configuration blocks, or data flows.
+- Record under-covered follow-up areas, sibling instances, adjacent risk classes, and blocked reproduction paths in likely_leads or blockers in the structured handoff.
+- If validation shows a finding bundles separable root causes whose proof, remediation, or ownership differs, preserve that split in validation notes and likely_leads.
 - Do not mark failed merely because full setup is hard; use inconclusive when the environment blocks a fair test.
 - Keep any long-running servers, containers, or background processes scoped to this disposable VM task.
 `, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), reviewText, dedupText, sourceLead, handoffRel, safeFindingID, taskHandoffSchemaText()), nil

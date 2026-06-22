@@ -69,6 +69,9 @@ func TestReviewPromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"attempted_commands",
 		"mnm verdict record --finding finding_auth --phase review --value accepted",
 		"mnm verdict record --finding finding_auth --phase review --value rejected",
+		"under-covered follow-up areas, sibling instances, adjacent risk classes",
+		"bundles separable root causes",
+		"bounded sibling-instance check",
 		"mnm task complete --status completed",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "review-finding_auth-notes.md")),
 	} {
