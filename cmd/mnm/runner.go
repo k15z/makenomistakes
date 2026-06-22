@@ -1491,11 +1491,26 @@ Required actions:
 10. Create no more than %[3]d leads.
 11. Complete the task with: mnm task complete --status completed --summary "Recon completed"
 
+Recon coverage matrix:
+
+- injection and command/data/query interpreters
+- XSS, HTML/Markdown/template rendering, and browser trust boundaries
+- auth/session, credential, cookie, CSRF, and account lifecycle behavior
+- authorization, IDOR, tenant isolation, and confused-deputy flows
+- SSRF, redirects, URL parsing, callbacks, and outbound fetches
+- DoS/ReDoS, parser bombs, resource exhaustion, and unbounded work
+- logging, observability, audit, and downstream log-consumer sinks
+- sensitive data storage, PII handling, secrets, and encryption/hashing at rest
+- transport, deployment defaults, security headers, and runtime configuration
+- dependency, framework, runtime, and reachable vulnerable-usage risks
+
 Recon discipline:
 
 - Recon maps the workspace and schedules focused work; Investigate and Validate prove, exploit, or falsify issues.
 - If scope instructions ask for tests or proofs, treat them as requirements for later Investigate or Validate unless a cheap smoke command materially improves lead quality.
 - If focused risk areas are configured, create leads inside those areas and avoid broad unrelated audit passes.
+- Use docs, tutorials, examples, tests, TODOs, comments, and "fix for" notes as candidate lead sources, but never as proof by themselves.
+- In the risk register, briefly mark each coverage-matrix class as lead opened, not applicable, or needs targeted pass.
 - Run only bounded inspection commands such as find, rg, package metadata reads, and quick tests when needed to understand the workspace.
 - Do not build end-to-end proof scripts, start long-lived services, fuzz, install heavy dependencies, or keep exploring after you have enough context for focused leads.
 - Register the codebase map and risk register as soon as they are useful, then create leads promptly. Unregistered files are scratch and may be lost.
