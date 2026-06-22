@@ -335,15 +335,11 @@ func runnerTaskCommandContext(ctx context.Context, args []string, stdout, stderr
 		}
 	}
 
-	command := exec.Command(opencodePath,
-		"run",
-		"--format", "json",
-		"--dir", workspaceDir,
-		"--model", *model,
-		"--title", "mnm "+task.Phase+" "+task.TaskID,
-		"--dangerously-skip-permissions",
-		string(prompt),
-	)
+	promptPath, err := writeOpenCodePromptFile(*runDir, string(prompt))
+	if err != nil {
+		return err
+	}
+	command := openCodeRunCommand(opencodePath, workspaceDir, *model, "mnm "+task.Phase+" "+task.TaskID, promptPath)
 	isolateCommandProcessGroup(command)
 	baseEnv := mergeEnv(os.Environ(), setupResult.Env)
 	env := mergeEnv(baseEnv, []string{
@@ -535,12 +531,15 @@ func (failure runnerFailureContext) Record(cause error) error {
 	if cause == nil || failure.RunID == "" || failure.RunDir == "" {
 		return nil
 	}
+	summary, category := summarizeRunnerFailure(cause)
 	relPath := filepath.ToSlash(filepath.Join("evidence", "runner-failure.json"))
 	artifactPath := filepath.Join(failure.RunDir, relPath)
 	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := writeJSON(artifactPath, map[string]any{
 		"run_id":           failure.RunID,
 		"stage":            failure.Stage,
+		"summary":          summary,
+		"category":         category,
 		"error":            cause.Error(),
 		"workspace":        failure.Workspace,
 		"opencode_path":    failure.OpenCodePath,
@@ -558,11 +557,49 @@ func (failure runnerFailureContext) Record(cause error) error {
 		Object:   "run",
 		ObjectID: failure.RunID,
 		Data: map[string]any{
-			"stage": failure.Stage,
-			"error": cause.Error(),
-			"path":  relPath,
+			"stage":    failure.Stage,
+			"summary":  summary,
+			"category": category,
+			"error":    cause.Error(),
+			"path":     relPath,
 		},
 	})
+}
+
+func summarizeRunnerFailure(cause error) (string, string) {
+	message := cause.Error()
+	text := strings.ToLower(message)
+	switch {
+	case strings.Contains(text, "argument list too long"):
+		return "opencode launch failed because the generated prompt or arguments exceeded the OS argv limit", "opencode_argv_limit"
+	case strings.Contains(text, "limactl start"):
+		return "task VM failed to start before opencode could run", "vm_start_failed"
+	case strings.Contains(text, "no such file or directory") && strings.Contains(text, "transcript"):
+		return "task output transcript was missing after a failed attempt", "missing_task_transcript"
+	case strings.Contains(text, "executable file not found"), strings.Contains(text, "permission denied"):
+		return "opencode launch failed before the model task could start", "opencode_launch_failed"
+	default:
+		return runnerFailureRootLine(message), "runner_failed"
+	}
+}
+
+func runnerFailureRootLine(text string) string {
+	const marker = "\nlog excerpt:\n"
+	if _, after, ok := strings.Cut(text, marker); ok {
+		if line := firstNonEmptyLine(after, ""); line != "" {
+			return line
+		}
+	}
+	return firstNonEmptyLine(text, "runner failed")
+}
+
+func firstNonEmptyLine(text, fallback string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
 }
 
 func registerRunnerEvidence(runDir, runID, kind, title, relPath string, allowContentChange bool) (string, error) {
@@ -963,15 +1000,11 @@ func runDirectOpenCodeTaskAttempt(ctx context.Context, opencodePath, workspace, 
 	if err != nil {
 		return result, err
 	}
-	command := exec.Command(opencodePath,
-		"run",
-		"--format", "json",
-		"--dir", workspace,
-		"--model", task.Model,
-		"--title", task.Title,
-		"--dangerously-skip-permissions",
-		prompt,
-	)
+	promptPath, err := writeOpenCodePromptFile(taskRunDir, prompt)
+	if err != nil {
+		return result, err
+	}
+	command := openCodeRunCommand(opencodePath, workspace, task.Model, task.Title, promptPath)
 	isolateCommandProcessGroup(command)
 	baseEnv := mergeEnv(os.Environ(), setupResult.Env)
 	env := mergeEnv(baseEnv, []string{
@@ -1034,6 +1067,31 @@ func (e openCodeAttemptError) Error() string {
 
 func (e openCodeAttemptError) Unwrap() error {
 	return e.err
+}
+
+func writeOpenCodePromptFile(taskRunDir, prompt string) (string, error) {
+	if err := os.MkdirAll(taskRunDir, dirPerm); err != nil {
+		return "", err
+	}
+	path := filepath.Join(taskRunDir, "prompt.md")
+	if err := os.WriteFile(path, []byte(prompt), filePerm); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func openCodeRunCommand(opencodePath, workspace, model, title, promptPath string) *exec.Cmd {
+	return exec.Command(opencodePath,
+		"run",
+		"--format", "json",
+		"--dir", workspace,
+		"--model", model,
+		"--title", title,
+		"--dangerously-skip-permissions",
+		"--file", promptPath,
+		"--",
+		"Read the attached prompt file and follow its instructions exactly.",
+	)
 }
 
 func readLogSuffix(logPath string, offset int64) string {
@@ -1272,15 +1330,26 @@ func retryableOpenCodeError(logPath string, err error) bool {
 	if errors.As(err, &postconditionErr) {
 		return !postconditionErr.ledgerModified
 	}
-	text := strings.ToLower(err.Error())
+	processText := strings.ToLower(err.Error())
+	retryText := processText
 	var attemptErr openCodeAttemptError
 	if errors.As(err, &attemptErr) {
 		if attemptErr.ledgerModified {
 			return false
 		}
-		text += "\n" + strings.ToLower(attemptErr.logText)
+		retryText += "\n" + strings.ToLower(attemptErr.logText)
 	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
-		text += "\n" + strings.ToLower(string(b))
+		retryText += "\n" + strings.ToLower(string(b))
+	}
+	for _, marker := range []string{
+		"argument list too long",
+		"executable file not found",
+		"permission denied",
+		"exec format error",
+	} {
+		if strings.Contains(processText, marker) {
+			return false
+		}
 	}
 	for _, marker := range []string{
 		`"code":502`,
@@ -1295,7 +1364,7 @@ func retryableOpenCodeError(logPath string, err error) bool {
 		"timeout",
 		"timed out",
 	} {
-		if strings.Contains(text, marker) {
+		if strings.Contains(retryText, marker) {
 			return true
 		}
 	}

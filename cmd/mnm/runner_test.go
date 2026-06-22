@@ -491,6 +491,8 @@ exit 0
 	for _, want := range []string{
 		`"run_id": "run_failure"`,
 		`"stage": "recon"`,
+		`"summary": "fatal recon failure"`,
+		`"category": "runner_failed"`,
 		"fatal recon failure",
 		`"opencode_version": "` + opencodeVersion + `"`,
 	} {
@@ -515,7 +517,10 @@ exit 0
 	for _, event := range events {
 		if event.Type == "runner.failed" && event.ObjectID == "run_failure" {
 			foundFailure = true
-			if event.Data["stage"] != "recon" || event.Data["path"] != "evidence/runner-failure.json" {
+			if event.Data["stage"] != "recon" ||
+				event.Data["path"] != "evidence/runner-failure.json" ||
+				event.Data["summary"] != "fatal recon failure" ||
+				event.Data["category"] != "runner_failed" {
 				t.Fatalf("unexpected runner.failed data: %#v", event.Data)
 			}
 		}
@@ -2066,6 +2071,7 @@ fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
 if [ "$count" -eq 1 ]; then
+  printf 'permission denied while reading optional local docs\n'
   printf '{"code":502,"message":"Network connection lost.","metadata":{"error_type":"provider_unavailable"}}\n'
   exit 1
 fi
@@ -2105,6 +2111,106 @@ printf '{"type":"done"}\n'
 	}
 	if retries != 1 {
 		t.Fatalf("retry event count = %d, want 1", retries)
+	}
+}
+
+func TestRunOpenCodeTaskPassesLargePromptByFile(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeFakeOpenCode(t, opencodeVersion+"\n", `#!/bin/sh
+set -eu
+prompt_file=""
+for arg in "$@"; do
+  if [ ${#arg} -gt 4096 ]; then
+    echo "oversized argv entry: ${#arg}" >&2
+    exit 1
+  fi
+done
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--" ]; then
+    break
+  fi
+  if [ "$1" = "--file" ]; then
+    shift
+    prompt_file="${1:-}"
+  elif [ -n "$prompt_file" ] && [ "${1#-}" = "$1" ]; then
+    echo "unexpected file argument after --file: $1" >&2
+    exit 1
+  fi
+  shift
+done
+: "${prompt_file:?prompt file is required}"
+if ! grep -q "large prompt sentinel" "$prompt_file"; then
+  echo "prompt file did not contain sentinel" >&2
+  exit 1
+fi
+printf '{"type":"done"}\n'
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_large_prompt",
+		TaskID:  "task_large_prompt",
+		Phase:   "review",
+		Title:   "mnm large prompt test",
+		Model:   "openrouter/test",
+		Prompt:  strings.Repeat("x", 220000) + "\nlarge prompt sentinel\n",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-large-prompt.jsonl"),
+	})
+	if err != nil {
+		t.Fatalf("large prompt should be passed via file, got: %v", err)
+	}
+	if got := readFile(t, filepath.Join(runDir, "prompt.md")); !strings.Contains(got, "large prompt sentinel") {
+		t.Fatalf("prompt file missing sentinel")
+	}
+}
+
+func TestRunOpenCodeTaskDoesNotRetryHardLaunchFailure(t *testing.T) {
+	oldDelay := openCodeRetryDelay
+	openCodeRetryDelay = 0
+	defer func() { openCodeRetryDelay = oldDelay }()
+
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	opencodePath := writeRetryFakeOpenCode(t, `#!/bin/sh
+set -eu
+count_file="$MNM_RUN_DIR/attempt-count"
+count=0
+if [ -f "$count_file" ]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+echo "fork/exec opencode: argument list too long" >&2
+exit 1
+`)
+
+	err := runOpenCodeTask(opencodePath, t.TempDir(), runDir, opencodeTask{
+		RunID:   "run_hard_launch",
+		TaskID:  "task_hard_launch",
+		Phase:   "review",
+		Title:   "mnm hard launch test",
+		Model:   "openrouter/test",
+		Prompt:  "do not retry hard launch failures",
+		LogPath: filepath.Join(runDir, "evidence", "opencode-hard-launch.jsonl"),
+	})
+	if err == nil {
+		t.Fatal("expected hard launch failure")
+	}
+	if count := strings.TrimSpace(readFile(t, filepath.Join(runDir, "attempt-count"))); count != "1" {
+		t.Fatalf("attempt count = %s, want 1", count)
+	}
+	events, err := readLedgerEvents(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == "task.retrying" {
+			t.Fatalf("hard launch failure should not retry: %#v", event)
+		}
 	}
 }
 
@@ -2239,10 +2345,20 @@ if [ "$MNM_RUN_DIR" = "$MNM_LEDGER_DIR" ]; then
   echo "task output should differ from ledger dir" >&2
   exit 1
 fi
-case "$*" in
+prompt_file=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--file" ]; then
+    shift
+    prompt_file="${1:-}"
+  fi
+  shift
+done
+: "${prompt_file:?prompt file is required}"
+prompt="$(cat "$prompt_file")"
+case "$prompt" in
   *"$MNM_RUN_DIR/evidence/opencode-task-bundle-notes.md"*) ;;
   *)
-    echo "prompt did not point at task output dir: $*" >&2
+    echo "prompt did not point at task output dir: $prompt" >&2
     exit 1
     ;;
 esac
@@ -3156,16 +3272,23 @@ func prependFakeOpenCode(t *testing.T, version string) {
   : "${MNM_RUN_DIR:?MNM_RUN_DIR is required}"
   : "${MNM_TASK_ID:?MNM_TASK_ID is required}"
   prompt=""
+  prompt_file=""
   workspace=""
   while [ "$#" -gt 0 ]; do
     if [ "$1" = "--dir" ]; then
       shift
       workspace="${1:-}"
+    elif [ "$1" = "--file" ]; then
+      shift
+      prompt_file="${1:-}"
     fi
     prompt="$1"
     shift
   done
   : "${workspace:?workspace is required}"
+  if [ -n "$prompt_file" ]; then
+    prompt="$(cat "$prompt_file")"
+  fi
   printf '%s\n' "$MNM_TASK_ID" > "$workspace/mutated-by-opencode"
   mkdir -p "$MNM_RUN_DIR/evidence"
   if printf '%s' "$prompt" | grep -q 'makenomistakes Finalize'; then
