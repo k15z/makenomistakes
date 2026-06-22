@@ -2708,6 +2708,247 @@ func TestEvidenceAddIsIdempotentForSameMetadata(t *testing.T) {
 	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/proof.log", 1)
 }
 
+func TestEvidenceWriteCreatesAndRegistersFile(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	input := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(input, []byte("# Notes\n\nProof from command output.\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"evidence", "write",
+		"--run-dir", runDir,
+		"--kind", "markdown",
+		"--title", "Recon notes",
+		"--path", "evidence/recon-notes.md",
+		"--input", input,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("evidence write failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if got := readFile(t, filepath.Join(runDir, "evidence", "recon-notes.md")); !strings.Contains(got, "Proof from command output.") {
+		t.Fatalf("evidence write did not create file:\n%s", got)
+	}
+	if id := strings.TrimSpace(stdout.String()); !strings.HasPrefix(id, "evidence_") {
+		t.Fatalf("evidence id = %q, want evidence_ prefix", id)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-notes.md", 1)
+	evidence, ok := ledgerTaskEvidence(runDir, "task_recon", "evidence/recon-notes.md")
+	if !ok || evidence.ContentSHA256 == "" {
+		t.Fatalf("expected registered evidence with content hash, got %#v", evidence)
+	}
+}
+
+func TestEvidenceWriteSerializesConcurrentConflictingWriters(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	tempDir := t.TempDir()
+	inputs := []string{
+		filepath.Join(tempDir, "alpha.md"),
+		filepath.Join(tempDir, "beta.md"),
+	}
+	if err := os.WriteFile(inputs[0], []byte("alpha notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inputs[1], []byte("beta notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, len(inputs))
+	var wg sync.WaitGroup
+	for _, input := range inputs {
+		input := input
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"evidence", "write",
+				"--run-dir", runDir,
+				"--kind", "markdown",
+				"--title", "Recon notes",
+				"--path", "evidence/recon-notes.md",
+				"--input", input,
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		failures++
+		if !strings.Contains(err.Error(), "already exists with different content") {
+			t.Fatalf("unexpected conflicting writer error: %v", err)
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("successes/failures = %d/%d, want 1/1", successes, failures)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-notes.md", 1)
+	evidence, ok := ledgerTaskEvidence(runDir, "task_recon", "evidence/recon-notes.md")
+	if !ok {
+		t.Fatal("expected registered evidence")
+	}
+	wantSHA, err := evidenceFileSHA256(runDir, "evidence/recon-notes.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.ContentSHA256 != wantSHA {
+		t.Fatalf("registered content hash = %s, want %s", evidence.ContentSHA256, wantSHA)
+	}
+}
+
+func TestEvidenceWriteRejectsFinalPathSymlink(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(runDir, "evidence", "recon-notes.md")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+	input := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(input, []byte("outside notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "write",
+		"--run-dir", runDir,
+		"--kind", "markdown",
+		"--title", "Recon notes",
+		"--path", "evidence/recon-notes.md",
+		"--input", input,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected final symlink error")
+	}
+	if !strings.Contains(err.Error(), "target artifact evidence/recon-notes.md is a symlink") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-notes.md", 0)
+}
+
+func TestEvidenceWriteRejectsExistingDifferentContent(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	writeRunFile(t, runDir, "evidence/recon-notes.md", "original notes")
+	input := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(input, []byte("changed notes"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "write",
+		"--run-dir", runDir,
+		"--kind", "markdown",
+		"--title", "Recon notes",
+		"--path", "evidence/recon-notes.md",
+		"--input", input,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected existing content error")
+	}
+	if !strings.Contains(err.Error(), "already exists with different content") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := readFile(t, filepath.Join(runDir, "evidence", "recon-notes.md")); got != "original notes" {
+		t.Fatalf("evidence write overwrote existing content: %q", got)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-notes.md", 0)
+}
+
+func TestHandoffWriteNormalizesAndRegistersFile(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	taskID := "task_review_" + safeFileID(findingID)
+	if err := writeCurrentTaskForTest(runDir, TaskRecord{
+		RunID:       "run_test",
+		TaskID:      taskID,
+		Phase:       "review",
+		Title:       "Review finding",
+		Instruction: "Review one finding.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(t.TempDir(), "handoff.json")
+	if err := os.WriteFile(input, []byte(`{
+  "phase": "wrong",
+  "task_id": "wrong",
+  "attempted_commands": ["go test ./..."],
+  "setup_discoveries": ["use docker compose"],
+  "blockers": [],
+  "likely_leads": ["check sibling handlers"],
+  "confirmed_dead_ends": [],
+  "notes": "review context"
+}`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"handoff", "write",
+		"--run-dir", runDir,
+		"--finding", findingID,
+		"--path", "evidence/handoff-review-" + safeFileID(findingID) + ".json",
+		"--input", input,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("handoff write failed: %v\nstderr: %s", err, stderr.String())
+	}
+	relPath := "evidence/handoff-review-" + safeFileID(findingID) + ".json"
+	handoff, err := readTaskHandoffFile(runDir, relPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handoff.Version != phaseHandoffVersion || handoff.Phase != "review" || handoff.TaskID != taskID || handoff.FindingID != findingID {
+		t.Fatalf("handoff was not normalized: %#v", handoff)
+	}
+	if handoff.SourcePath != "" {
+		t.Fatalf("handoff source_path should not be persisted in authored files: %#v", handoff)
+	}
+	evidence, ok := ledgerFindingTaskEvidenceBefore(runDir, findingID, taskID, relPath, maxInt)
+	if !ok || evidence.Kind != "json" || !strings.HasPrefix(evidence.Title, "Task handoff:") || evidence.ContentSHA256 == "" {
+		t.Fatalf("expected registered handoff evidence, got ok=%v evidence=%#v", ok, evidence)
+	}
+}
+
+func TestHandoffWriteRequiresPhaseOwner(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	setCurrentTaskPhaseForTest(t, runDir, "review")
+	input := filepath.Join(t.TempDir(), "handoff.json")
+	if err := os.WriteFile(input, []byte(`{"attempted_commands":["go test ./..."],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}`), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"handoff", "write",
+		"--run-dir", runDir,
+		"--path", "evidence/handoff-review-missing.json",
+		"--input", input,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing finding owner error")
+	}
+	if !strings.Contains(err.Error(), "review handoff requires --finding") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEvidenceAddIsAtomicForParallelSameMetadata(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	proof := writeRunFile(t, runDir, "evidence/proof.log", "proof")

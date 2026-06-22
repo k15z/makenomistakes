@@ -263,12 +263,12 @@ Required actions:
 3. Use the handoff context to avoid rechecking confirmed dead ends and to reuse setup or command discoveries from prior tasks.
 4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-6. Write review notes, commands, falsification attempts, code references, and uncertainty to %[2]s/evidence/review-%[16]s-notes.md, then register them with: mnm evidence add --kind markdown --title "Review notes: %[4]s" --finding %[3]s --path %[2]s/evidence/review-%[16]s-notes.md
-7. Write a structured task handoff JSON file to %[2]s/evidence/handoff-review-%[16]s.json using this schema:
+6. Write and register review notes, commands, falsification attempts, code references, and uncertainty with: mnm evidence write --kind markdown --title "Review notes: %[4]s" --finding %[3]s --path %[2]s/evidence/review-%[16]s-notes.md
+The mnm evidence write and mnm handoff write commands read artifact content from stdin unless you pass --input /tmp/file; use a heredoc, pipe, or --input to provide content.
+7. Write and register a structured task handoff JSON file with: mnm handoff write --finding %[3]s --path %[2]s/evidence/handoff-review-%[16]s.json. Use this schema as the JSON input:
 
 %[17]s
 
-Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --finding %[3]s --path %[2]s/evidence/handoff-review-%[16]s.json
 8. If the finding is concrete, in scope, supported by code references, and has a plausible failure or exploit path, record: mnm verdict record --finding %[3]s --phase review --value accepted --reason "..."
 9. If the finding is vague, out of scope, unsupported, contradicted by the code, duplicate-style noise, or only a best-practice concern, record: mnm verdict record --finding %[3]s --phase review --value rejected --reason "..."
 10. Complete the task with: mnm task complete --status completed --summary "Reviewed %[3]s"

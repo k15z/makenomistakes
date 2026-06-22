@@ -191,17 +191,16 @@ Required actions:
 3. Use the handoff context to preserve prior setup discoveries, blockers, likely follow-up leads, and confirmed dead ends while clustering.
 4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-6. Write clustering notes, canonical selections, duplicate rationale, and any uncertainty to %[2]s/evidence/deduplicate-notes.md.
-7. Register the notes with: mnm evidence add --kind markdown --title "Deduplication notes" --path %[2]s/evidence/deduplicate-notes.md
-8. Write a structured task handoff JSON file to %[2]s/evidence/handoff-deduplicate.json using this schema:
+6. Write and register clustering notes, canonical selections, duplicate rationale, and any uncertainty with: mnm evidence write --kind markdown --title "Deduplication notes" --path %[2]s/evidence/deduplicate-notes.md
+The mnm evidence write and mnm handoff write commands read artifact content from stdin unless you pass --input /tmp/file; use a heredoc, pipe, or --input to provide content.
+7. Write and register a structured task handoff JSON file with: mnm handoff write --path %[2]s/evidence/handoff-deduplicate.json. Use this schema as the JSON input:
 
 %[8]s
 
-Register it with: mnm evidence add --kind json --title "Task handoff: Deduplication" --path %[2]s/evidence/handoff-deduplicate.json
-9. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
-10. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
-11. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
-12. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
+8. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
+9. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
+10. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
+11. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
 
 Deduplication quality bar:
 
