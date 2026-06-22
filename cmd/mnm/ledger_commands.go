@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -469,9 +470,20 @@ func findingCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 func evidenceCommand(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "add" {
-		return errors.New("evidence supports: add")
+	if len(args) == 0 {
+		return errors.New("evidence supports: add, write")
 	}
+	switch args[0] {
+	case "add":
+		return evidenceAddCommand(args[1:], stdout, stderr)
+	case "write":
+		return evidenceWriteCommand(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown evidence subcommand %q; expected add or write", args[0])
+	}
+}
+
+func evidenceAddCommand(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("evidence add", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	runDirFlag := flags.String("run-dir", "", "run directory")
@@ -480,55 +492,140 @@ func evidenceCommand(args []string, stdout, stderr io.Writer) error {
 	path := flags.String("path", "", "evidence file path")
 	leadID := flags.String("lead", "", "lead id")
 	findingID := flags.String("finding", "", "finding id")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	kindText, err := requiredTextFlag("--kind", *kind)
+
+	runDir, registration, err := evidenceRegistrationForCommand(*runDirFlag, *kind, *title, *path, *leadID, *findingID, "evidence add")
 	if err != nil {
 		return err
 	}
-	titleText, err := requiredTextFlag("--title", *title)
-	if err != nil {
-		return err
-	}
-	if *leadID != "" && *findingID != "" {
-		return errors.New("evidence add accepts at most one of --lead or --finding")
-	}
-	runDir, task, err := currentTaskForCommand(*runDirFlag)
-	if err != nil {
-		return err
-	}
-	if err := requireEvidenceOwnerPhase(task, *leadID, *findingID); err != nil {
-		return err
-	}
-	if *leadID != "" {
-		if err := requireLedgerObject(runDir, "lead", *leadID); err != nil {
-			return err
-		}
-	}
-	if *findingID != "" {
-		if err := requireLedgerObject(runDir, "finding", *findingID); err != nil {
-			return err
-		}
-	}
-	relPath, err := requirePathInsideRunDir(runDir, *path)
-	if err != nil {
-		return err
-	}
-	evidenceID, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
-		RunID:     task.RunID,
-		TaskID:    task.TaskID,
-		Kind:      kindText,
-		Title:     titleText,
-		Path:      relPath,
-		LeadID:    *leadID,
-		FindingID: *findingID,
-	})
+	evidenceID, err := registerTaskEvidence(runDir, registration)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, evidenceID)
 	return nil
+}
+
+func evidenceWriteCommand(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("evidence write", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	runDirFlag := flags.String("run-dir", "", "run directory")
+	kind := flags.String("kind", "", "evidence kind")
+	title := flags.String("title", "", "evidence title")
+	path := flags.String("path", "", "evidence file path")
+	leadID := flags.String("lead", "", "lead id")
+	findingID := flags.String("finding", "", "finding id")
+	input := flags.String("input", "", "input file; reads stdin when omitted")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	runDir, registration, err := evidenceRegistrationForWriteCommand(*runDirFlag, *kind, *title, *path, *leadID, *findingID, "evidence write")
+	if err != nil {
+		return err
+	}
+	data, err := readCommandInput(*input)
+	if err != nil {
+		return err
+	}
+	if err := writeEvidenceFileIfAbsentOrSame(runDir, registration.Path, data); err != nil {
+		return err
+	}
+	evidenceID, err := registerTaskEvidence(runDir, registration)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, evidenceID)
+	return nil
+}
+
+func evidenceRegistrationForCommand(runDirFlag, kind, title, path, leadID, findingID, command string) (string, taskEvidenceRegistration, error) {
+	kindText, err := requiredTextFlag("--kind", kind)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	titleText, err := requiredTextFlag("--title", title)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	if leadID != "" && findingID != "" {
+		return "", taskEvidenceRegistration{}, fmt.Errorf("%s accepts at most one of --lead or --finding", command)
+	}
+	runDir, task, err := currentTaskForCommand(runDirFlag)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	if err := requireEvidenceOwnerPhase(task, command, leadID, findingID); err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	if leadID != "" {
+		if err := requireLedgerObject(runDir, "lead", leadID); err != nil {
+			return "", taskEvidenceRegistration{}, err
+		}
+	}
+	if findingID != "" {
+		if err := requireLedgerObject(runDir, "finding", findingID); err != nil {
+			return "", taskEvidenceRegistration{}, err
+		}
+	}
+	relPath, err := requirePathInsideRunDir(runDir, path)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	return runDir, taskEvidenceRegistration{
+		RunID:     task.RunID,
+		TaskID:    task.TaskID,
+		Kind:      kindText,
+		Title:     titleText,
+		Path:      relPath,
+		LeadID:    leadID,
+		FindingID: findingID,
+	}, nil
+}
+
+func evidenceRegistrationForWriteCommand(runDirFlag, kind, title, path, leadID, findingID, command string) (string, taskEvidenceRegistration, error) {
+	kindText, err := requiredTextFlag("--kind", kind)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	titleText, err := requiredTextFlag("--title", title)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	if leadID != "" && findingID != "" {
+		return "", taskEvidenceRegistration{}, fmt.Errorf("%s accepts at most one of --lead or --finding", command)
+	}
+	runDir, task, err := currentTaskForCommand(runDirFlag)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	if err := requireEvidenceOwnerPhase(task, command, leadID, findingID); err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	if leadID != "" {
+		if err := requireLedgerObject(runDir, "lead", leadID); err != nil {
+			return "", taskEvidenceRegistration{}, err
+		}
+	}
+	if findingID != "" {
+		if err := requireLedgerObject(runDir, "finding", findingID); err != nil {
+			return "", taskEvidenceRegistration{}, err
+		}
+	}
+	relPath, err := writableRunRelPath(runDir, path)
+	if err != nil {
+		return "", taskEvidenceRegistration{}, err
+	}
+	return runDir, taskEvidenceRegistration{
+		RunID:     task.RunID,
+		TaskID:    task.TaskID,
+		Kind:      kindText,
+		Title:     titleText,
+		Path:      relPath,
+		LeadID:    leadID,
+		FindingID: findingID,
+	}, nil
 }
 
 func verdictCommand(args []string, stdout, stderr io.Writer) error {
@@ -831,14 +928,14 @@ func requireCurrentTaskPhase(task TaskRecord, command string, allowed ...string)
 	return fmt.Errorf("current task phase %q cannot run %s; expected one of: %s", task.Phase, command, strings.Join(allowed, ", "))
 }
 
-func requireEvidenceOwnerPhase(task TaskRecord, leadID, findingID string) error {
+func requireEvidenceOwnerPhase(task TaskRecord, command, leadID, findingID string) error {
 	switch {
 	case leadID != "":
-		return requireCurrentTaskPhase(task, "evidence add --lead", "investigate")
+		return requireCurrentTaskPhase(task, command+" --lead", "investigate")
 	case findingID != "":
-		return requireCurrentTaskPhase(task, "evidence add --finding", "investigate", "review", "validate")
+		return requireCurrentTaskPhase(task, command+" --finding", "investigate", "review", "validate")
 	default:
-		return requireCurrentTaskPhase(task, "evidence add", "recon", "deduplicate")
+		return requireCurrentTaskPhase(task, command, "recon", "deduplicate")
 	}
 }
 
@@ -947,6 +1044,63 @@ func requireNoRegisteredEvidenceContentConflictUnlocked(runDir string, registrat
 		}
 	}
 	return nil
+}
+
+func readCommandInput(inputPath string) ([]byte, error) {
+	if strings.TrimSpace(inputPath) != "" {
+		return os.ReadFile(inputPath)
+	}
+	return io.ReadAll(os.Stdin)
+}
+
+func writableRunRelPath(runDir, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("path is required")
+	}
+	absRunDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return "", err
+	}
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(absRunDir, filepath.FromSlash(candidate))
+	}
+	absPath, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRunDir, absPath)
+	if err != nil {
+		return "", err
+	}
+	rel = filepath.ToSlash(rel)
+	if err := validateTaskBundleRelPath(rel); err != nil {
+		return "", fmt.Errorf("path: %w", err)
+	}
+	if _, err := taskBundleArtifactTargetPath(absRunDir, rel); err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+func writeEvidenceFileIfAbsentOrSame(runDir, relPath string, data []byte) error {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Errorf("evidence input for %s must not be empty", relPath)
+	}
+	target, err := taskBundleArtifactTargetPath(runDir, relPath)
+	if err != nil {
+		return err
+	}
+	if existing, err := os.ReadFile(target); err == nil {
+		if bytes.Equal(existing, data) {
+			return nil
+		}
+		return fmt.Errorf("evidence path %s already exists with different content; choose a fresh path", relPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeFileAtomic(target, data, filePerm)
 }
 
 func requiredTextFlag(name, value string) (string, error) {

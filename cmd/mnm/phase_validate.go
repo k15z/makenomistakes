@@ -327,18 +327,17 @@ Required actions:
 4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory. Prior evidence files may be present for context; do not overwrite or re-register them.
 5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
 6. Attempt the highest-fidelity reproduction or exploit that is feasible inside this VM. Build services, run tests, start dev servers, use Docker/Compose/minikube if available and scoped to this workspace, seed data, send requests, inject malformed inputs, trigger crashes, or write small proof scripts as needed.
-7. Write validation notes, commands, observed output, blockers, and any proof artifacts to %[2]s/evidence/validate-%[17]s-notes.md.
-8. Register the notes with: mnm evidence add --kind markdown --title "Validation notes: %[4]s" --finding %[3]s --path %[2]s/evidence/validate-%[17]s-notes.md
-9. Write a structured task handoff JSON file to %[2]s/evidence/handoff-validate-%[17]s.json using this schema:
+7. Write and register validation notes, commands, observed output, blockers, and any proof artifact index with: mnm evidence write --kind markdown --title "Validation notes: %[4]s" --finding %[3]s --path %[2]s/evidence/validate-%[17]s-notes.md
+8. Write and register a structured task handoff JSON file with: mnm handoff write --finding %[3]s --path %[2]s/evidence/handoff-validate-%[17]s.json. Use this schema as the JSON input:
 
 %[18]s
 
-For blocked validation, include a blocker with the missing dependency, failed command, required service, suspected config gap, and next command whenever known. Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --finding %[3]s --path %[2]s/evidence/handoff-validate-%[17]s.json
-10. If you observed the claimed failure, exploit path, crash, data exposure, or other concrete impact, write at least one separate proof artifact such as a command log, request/response capture, minimized reproduction script, stack trace, or screenshot under %[2]s/evidence/ and register it with: mnm evidence add --kind log --title "Validation proof: %[4]s" --finding %[3]s --path PROOF_PATH. Use a fresh validation-specific path, especially when rerunning an existing investigation script whose default log path points at prior evidence. Validation notes alone are not enough for a proven verdict.
-11. If you observed concrete impact and registered separate proof evidence, record: mnm verdict record --finding %[3]s --phase validate --value proven --reason "..."
-12. If focused validation contradicts the finding or shows it is not reachable/applicable, record: mnm verdict record --finding %[3]s --phase validate --value failed --reason "..."
-13. If the environment, dependencies, missing services, credentials, or time prevent a fair proof while the finding remains plausible, record: mnm verdict record --finding %[3]s --phase validate --value inconclusive --reason "..."
-14. Complete the task with: mnm task complete --status completed --summary "Validated %[3]s"
+For blocked validation, include a blocker with the missing dependency, failed command, required service, suspected config gap, and next command whenever known.
+9. If you observed the claimed failure, exploit path, crash, data exposure, or other concrete impact, write at least one separate proof artifact such as a command log, request/response capture, minimized reproduction script, stack trace, or screenshot under %[2]s/evidence/ and register it with: mnm evidence write for new text artifacts or mnm evidence add for files produced by tools. Use a fresh validation-specific path, especially when rerunning an existing investigation script whose default log path points at prior evidence. Validation notes alone are not enough for a proven verdict.
+10. If you observed concrete impact and registered separate proof evidence, record: mnm verdict record --finding %[3]s --phase validate --value proven --reason "..."
+11. If focused validation contradicts the finding or shows it is not reachable/applicable, record: mnm verdict record --finding %[3]s --phase validate --value failed --reason "..."
+12. If the environment, dependencies, missing services, credentials, or time prevent a fair proof while the finding remains plausible, record: mnm verdict record --finding %[3]s --phase validate --value inconclusive --reason "..."
+13. Complete the task with: mnm task complete --status completed --summary "Validated %[3]s"
 
 Validation quality bar:
 

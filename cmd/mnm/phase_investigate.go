@@ -354,19 +354,18 @@ Required actions:
 3. Read the phase handoff context for prior setup discoveries, confirmed dead ends, open leads, candidate findings, and task handoff entries from earlier work.
 4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-6. Write investigation notes, commands, observed output, code references, and decision rationale to %[2]s/evidence/investigate-%[10]s-notes.md, then register them with: mnm evidence add --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md
-7. Write a structured task handoff JSON file to %[2]s/evidence/handoff-investigate-%[10]s.json using this schema:
+6. Write and register investigation notes, commands, observed output, code references, and decision rationale with: mnm evidence write --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md
+7. Write and register a structured task handoff JSON file with: mnm handoff write --lead %[3]s --path %[2]s/evidence/handoff-investigate-%[10]s.json. Use this schema as the JSON input:
 
 %[11]s
 
-Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --lead %[3]s --path %[2]s/evidence/handoff-investigate-%[10]s.json
 8. If the lead is not a real issue because it is unreachable, internal-only, protected by auth, gated by deployment boundaries, or otherwise non-impacting, close it as closed_no_finding only after recording concrete negative proof:
 
 mnm lead close --id %[3]s --status closed_no_finding --reason "..." --negative-boundary "exact trust/network/auth/data-flow/deployment boundary" --negative-enforcement "specific guard, policy, middleware, check, or code path" --negative-exposure "deployment exposure conclusion" --negative-edge-cases "bypasses, roles, alternate routes, and edge cases checked"
 
 9. If the lead still looks plausible but you cannot prove the exact boundary, enforcement point, deployment exposure, or relevant edge cases, close it as inconclusive instead: mnm lead close --id %[3]s --status inconclusive --reason "missing negative proof: ..."
 10. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category %[12]s --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
-11. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
+11. Attach any additional logs, command output, traces, or proof files with mnm evidence write for new text artifacts or mnm evidence add for files produced by tools. Tie finding evidence to the finding ID returned by mnm finding create.
 12. If investigation reveals an under-covered follow-up area, adjacent risk class, or sibling instance that needs its own pass, create a new lead with mnm lead create when it is concrete enough. Also record it in likely_leads in the task handoff.
 13. When you find a real issue pattern, do a bounded sibling-instance check for the same class of bug in nearby files, routes, handlers, templates, configuration blocks, or data flows before closing the task.
 14. Still close the current lead as promoted_to_finding, closed_no_finding, inconclusive, or superseded.

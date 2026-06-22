@@ -54,6 +54,8 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return findingCommand(args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(args[1:], stdout, stderr)
+	case "handoff":
+		return handoffCommand(args[1:], stdout, stderr)
 	case "verdict":
 		return verdictCommand(args[1:], stdout, stderr)
 	case "report":
@@ -73,7 +75,7 @@ Usage:
   mnm analyze [--prepare-only] [--keep-vm] [--resume RUN_ID] [path]
   mnm runs [--json] [path]
   mnm report show [--json] RUN_ID [path]
-  mnm task|lead|finding|evidence|verdict|report ...
+  mnm task|lead|finding|evidence|handoff|verdict|report ...
 
 Commands:
   init       Create mnm.toml and .mnmignore in a workspace.
@@ -83,6 +85,7 @@ Commands:
   lead       Create or close audit leads.
   finding    Create candidate findings.
   evidence   Register evidence files.
+  handoff    Write and register structured task handoffs.
   verdict    Record review, deduplication, or validation decisions.
   report     Finalize or show generated reports.
   runner     Internal VM-side runner entrypoint.
