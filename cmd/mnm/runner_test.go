@@ -2413,6 +2413,8 @@ func TestPrepareOpenCodeTaskBundleAttemptPrunesGeneratedEvidence(t *testing.T) {
 	}{
 		{rel: "evidence/recon-codebase-map.md", body: "# Map\n"},
 		{rel: "evidence/handoff-review-finding_auth.json", body: `{"version":1}`},
+		{rel: "evidence/oauth-prompt.md", body: "durable proof about an OAuth prompt"},
+		{rel: "evidence/opencode-proof.jsonl", body: `{"proof":"user-authored evidence"}`},
 		{rel: "evidence/opencode-recon.jsonl", body: `{"type":"done"}`},
 		{rel: "evidence/review-finding_auth-prompt.md", body: "# Prompt\n"},
 		{rel: "evidence/nested/opencode-review-finding_auth.jsonl", body: `{"type":"done"}`},
@@ -2445,6 +2447,8 @@ func TestPrepareOpenCodeTaskBundleAttemptPrunesGeneratedEvidence(t *testing.T) {
 	for _, rel := range []string{
 		"evidence/recon-codebase-map.md",
 		"evidence/handoff-review-finding_auth.json",
+		"evidence/oauth-prompt.md",
+		"evidence/opencode-proof.jsonl",
 	} {
 		if _, err := os.Stat(filepath.Join(outputDir, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("expected copied evidence %s: %v", rel, err)

@@ -1170,16 +1170,51 @@ func copyRunContextForTaskBundle(runDir, outputDir string) error {
 
 func shouldCopyTaskBundleEvidence(relPath string) bool {
 	base := filepath.Base(relPath)
-	if strings.HasPrefix(base, "opencode-") && strings.HasSuffix(base, ".jsonl") {
+	if generatedOpenCodeTranscriptName(base) {
 		return false
 	}
-	if strings.HasSuffix(base, "-prompt.md") {
+	if generatedPromptEvidenceName(base) {
 		return false
 	}
 	if base == "runner-failure.json" {
 		return false
 	}
 	return true
+}
+
+func generatedOpenCodeTranscriptName(base string) bool {
+	if !strings.HasPrefix(base, "opencode-") || !strings.HasSuffix(base, ".jsonl") {
+		return false
+	}
+	if oneOf(base, "opencode-recon.jsonl", "opencode-deduplicate.jsonl", "opencode-finalize.jsonl", "opencode-task.jsonl") {
+		return true
+	}
+	for _, prefix := range []string{
+		"opencode-investigate-",
+		"opencode-review-",
+		"opencode-validate-",
+		"opencode-task_",
+	} {
+		if strings.HasPrefix(base, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func generatedPromptEvidenceName(base string) bool {
+	if oneOf(base, "recon-prompt.md", "deduplicate-prompt.md", "finalize-prompt.md") {
+		return true
+	}
+	if !strings.HasSuffix(base, "-prompt.md") {
+		return false
+	}
+	for _, prefix := range []string{"investigate-", "review-", "validate-"} {
+		if strings.HasPrefix(base, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskBundlePrompt(prompt, runDir, outputDir string) string {

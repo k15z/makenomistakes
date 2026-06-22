@@ -288,7 +288,11 @@ func compactTaskHandoffFile(handoff taskHandoffFile) taskHandoffFile {
 	handoff.LikelyLeads = compactStringList(handoff.LikelyLeads, phaseHandoffMaxListItems, phaseHandoffMaxTextRunes)
 	handoff.Notes = compactPhaseHandoffText(handoff.Notes)
 	if len(handoff.Blockers) > phaseHandoffMaxListItems {
+		omitted := len(handoff.Blockers) - phaseHandoffMaxListItems
 		handoff.Blockers = handoff.Blockers[:phaseHandoffMaxListItems]
+		handoff.Blockers = append(handoff.Blockers, taskHandoffBlocker{
+			Summary: fmt.Sprintf("[truncated; %d more blockers omitted]", omitted),
+		})
 	}
 	for i := range handoff.Blockers {
 		handoff.Blockers[i].Summary = compactPhaseHandoffText(handoff.Blockers[i].Summary)
@@ -299,7 +303,15 @@ func compactTaskHandoffFile(handoff taskHandoffFile) taskHandoffFile {
 		handoff.Blockers[i].NextCommand = compactPhaseHandoffText(handoff.Blockers[i].NextCommand)
 	}
 	if len(handoff.ConfirmedDeadEnds) > phaseHandoffMaxListItems {
+		omitted := len(handoff.ConfirmedDeadEnds) - phaseHandoffMaxListItems
 		handoff.ConfirmedDeadEnds = handoff.ConfirmedDeadEnds[:phaseHandoffMaxListItems]
+		handoff.ConfirmedDeadEnds = append(handoff.ConfirmedDeadEnds, taskHandoffDeadEnd{
+			Summary:                  fmt.Sprintf("[truncated; %d more confirmed dead ends omitted]", omitted),
+			NegativeProofBoundary:    "omitted by phase handoff compaction",
+			NegativeProofEnforcement: "omitted by phase handoff compaction",
+			NegativeProofExposure:    "omitted by phase handoff compaction",
+			NegativeProofEdgeCases:   "omitted by phase handoff compaction",
+		})
 	}
 	for i := range handoff.ConfirmedDeadEnds {
 		handoff.ConfirmedDeadEnds[i].Summary = compactPhaseHandoffText(handoff.ConfirmedDeadEnds[i].Summary)

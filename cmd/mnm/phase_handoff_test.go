@@ -149,6 +149,22 @@ func TestPreparePhaseHandoffContextCompactsTaskHandoffs(t *testing.T) {
 	for i := 0; i < phaseHandoffMaxListItems+3; i++ {
 		extraCommands = append(extraCommands, "extra command")
 	}
+	blockers := make([]taskHandoffBlocker, 0, phaseHandoffMaxListItems+2)
+	deadEnds := make([]taskHandoffDeadEnd, 0, phaseHandoffMaxListItems+2)
+	for i := 0; i < phaseHandoffMaxListItems+2; i++ {
+		blockers = append(blockers, taskHandoffBlocker{
+			Summary:         longText,
+			RequiredService: longText,
+			NextCommand:     longText,
+		})
+		deadEnds = append(deadEnds, taskHandoffDeadEnd{
+			Summary:                  longText,
+			NegativeProofBoundary:    longText,
+			NegativeProofEnforcement: longText,
+			NegativeProofExposure:    longText,
+			NegativeProofEdgeCases:   longText,
+		})
+	}
 	handoffRel := "evidence/handoff-investigate-lead_auth.json"
 	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
 		Version:           phaseHandoffVersion,
@@ -157,20 +173,10 @@ func TestPreparePhaseHandoffContextCompactsTaskHandoffs(t *testing.T) {
 		LeadID:            "lead_auth",
 		AttemptedCommands: append([]string{longText}, extraCommands...),
 		SetupDiscoveries:  []string{longText},
-		Blockers: []taskHandoffBlocker{{
-			Summary:         longText,
-			RequiredService: longText,
-			NextCommand:     longText,
-		}},
-		LikelyLeads: []string{longText},
-		ConfirmedDeadEnds: []taskHandoffDeadEnd{{
-			Summary:                  longText,
-			NegativeProofBoundary:    longText,
-			NegativeProofEnforcement: longText,
-			NegativeProofExposure:    longText,
-			NegativeProofEdgeCases:   longText,
-		}},
-		Notes: longText,
+		Blockers:          blockers,
+		LikelyLeads:       []string{longText},
+		ConfirmedDeadEnds: deadEnds,
+		Notes:             longText,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +207,8 @@ func TestPreparePhaseHandoffContextCompactsTaskHandoffs(t *testing.T) {
 		"important prefix",
 		"[truncated]",
 		"[truncated; ",
+		"more blockers omitted",
+		"more confirmed dead ends omitted",
 		handoffRel,
 	} {
 		if !strings.Contains(data, want) {
