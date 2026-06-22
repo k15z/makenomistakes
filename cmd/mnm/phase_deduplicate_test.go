@@ -66,6 +66,29 @@ func TestDeduplicatePromptIncludesExistingCanonicalContext(t *testing.T) {
 	}
 }
 
+func TestDeduplicatePromptTruncatesLargeFindingBody(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	longBody := "body-start\n" + strings.Repeat("A", deduplicateFindingBodyPreviewRunes+500) + "\nbody-tail"
+	finding := addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", longBody)
+
+	prompt, err := deduplicatePrompt(runDir, "/workspace", Config{}, []FindingRecord{finding}, []FindingRecord{finding}, "evidence/phase-handoff-task_deduplicate.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"body-start",
+		"[truncated; read the full finding body at ",
+		filepath.Join(runDir, "evidence", "finding-one.md"),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "body-tail") {
+		t.Fatalf("prompt included unbounded finding body tail:\n%s", prompt)
+	}
+}
+
 func TestRunDeduplicatePhaseRecordsVerdicts(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	addReviewedFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "First candidate body.")

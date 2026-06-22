@@ -2405,6 +2405,67 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestPrepareOpenCodeTaskBundleAttemptPrunesGeneratedEvidence(t *testing.T) {
+	runDir := t.TempDir()
+	for _, item := range []struct {
+		rel  string
+		body string
+	}{
+		{rel: "evidence/recon-codebase-map.md", body: "# Map\n"},
+		{rel: "evidence/handoff-review-finding_auth.json", body: `{"version":1}`},
+		{rel: "evidence/oauth-prompt.md", body: "durable proof about an OAuth prompt"},
+		{rel: "evidence/opencode-proof.jsonl", body: `{"proof":"user-authored evidence"}`},
+		{rel: "evidence/opencode-recon.jsonl", body: `{"type":"done"}`},
+		{rel: "evidence/review-finding_auth-prompt.md", body: "# Prompt\n"},
+		{rel: "evidence/nested/opencode-review-finding_auth.jsonl", body: `{"type":"done"}`},
+		{rel: "evidence/runner-failure.json", body: `{"stage":"review"}`},
+	} {
+		writeRunFile(t, runDir, item.rel, item.body)
+	}
+	task := TaskRecord{
+		RunID:  "run_task_bundle",
+		TaskID: "task_review_finding_auth",
+		Phase:  "review",
+	}
+	taskPath := filepath.Join(runDir, "tasks", task.TaskID+".json")
+	if err := writeTaskFile(taskPath, task); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir, preparedTaskFile, err := prepareOpenCodeTaskBundleAttempt(runDir, opencodeTask{
+		RunID:    task.RunID,
+		TaskID:   task.TaskID,
+		Phase:    task.Phase,
+		TaskFile: taskPath,
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preparedTaskFile != filepath.Join(outputDir, currentTaskFile) {
+		t.Fatalf("prepared task file = %q, want current task under output dir %q", preparedTaskFile, outputDir)
+	}
+	for _, rel := range []string{
+		"evidence/recon-codebase-map.md",
+		"evidence/handoff-review-finding_auth.json",
+		"evidence/oauth-prompt.md",
+		"evidence/opencode-proof.jsonl",
+	} {
+		if _, err := os.Stat(filepath.Join(outputDir, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("expected copied evidence %s: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{
+		"evidence/opencode-recon.jsonl",
+		"evidence/review-finding_auth-prompt.md",
+		"evidence/nested/opencode-review-finding_auth.jsonl",
+		"evidence/runner-failure.json",
+	} {
+		if _, err := os.Stat(filepath.Join(outputDir, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Fatalf("expected generated evidence %s to be pruned, stat err=%v", rel, err)
+		}
+	}
+}
+
 func TestRunOpenCodeTaskRegistersSetupLogFromTaskBundleOutput(t *testing.T) {
 	runDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {

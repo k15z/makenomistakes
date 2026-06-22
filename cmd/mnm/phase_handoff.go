@@ -12,6 +12,11 @@ import (
 
 const phaseHandoffVersion = 1
 
+const (
+	phaseHandoffMaxListItems = 20
+	phaseHandoffMaxTextRunes = 1600
+)
+
 type phaseHandoffContext struct {
 	Version           int                     `json:"version"`
 	RunID             string                  `json:"run_id"`
@@ -105,6 +110,7 @@ func preparePhaseHandoffContext(runDir, runID string, task TaskRecord, leadID, f
 	if err != nil {
 		return "", err
 	}
+	context = compactPhaseHandoffContext(context)
 	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(relPath)), context); err != nil {
 		return "", err
 	}
@@ -253,6 +259,72 @@ func buildPhaseHandoffContext(runDir, runID, targetPhase string) (phaseHandoffCo
 		return phaseHandoffContext{}, err
 	}
 	return context, nil
+}
+
+func compactPhaseHandoffContext(context phaseHandoffContext) phaseHandoffContext {
+	for i := range context.ConfirmedDeadEnds {
+		compactPhaseHandoffLeadClose(&context.ConfirmedDeadEnds[i])
+	}
+	for i := range context.InconclusiveLeads {
+		compactPhaseHandoffLeadClose(&context.InconclusiveLeads[i])
+	}
+	for i := range context.TaskHandoffs {
+		context.TaskHandoffs[i] = compactTaskHandoffFile(context.TaskHandoffs[i])
+	}
+	return context
+}
+
+func compactPhaseHandoffLeadClose(item *phaseHandoffLeadClose) {
+	item.Reason = compactPhaseHandoffText(item.Reason)
+	item.NegativeProofBoundary = compactPhaseHandoffText(item.NegativeProofBoundary)
+	item.NegativeProofEnforcement = compactPhaseHandoffText(item.NegativeProofEnforcement)
+	item.NegativeProofExposure = compactPhaseHandoffText(item.NegativeProofExposure)
+	item.NegativeProofEdgeCases = compactPhaseHandoffText(item.NegativeProofEdgeCases)
+}
+
+func compactTaskHandoffFile(handoff taskHandoffFile) taskHandoffFile {
+	handoff.AttemptedCommands = compactStringList(handoff.AttemptedCommands, phaseHandoffMaxListItems, phaseHandoffMaxTextRunes)
+	handoff.SetupDiscoveries = compactStringList(handoff.SetupDiscoveries, phaseHandoffMaxListItems, phaseHandoffMaxTextRunes)
+	handoff.LikelyLeads = compactStringList(handoff.LikelyLeads, phaseHandoffMaxListItems, phaseHandoffMaxTextRunes)
+	handoff.Notes = compactPhaseHandoffText(handoff.Notes)
+	if len(handoff.Blockers) > phaseHandoffMaxListItems {
+		omitted := len(handoff.Blockers) - phaseHandoffMaxListItems
+		handoff.Blockers = handoff.Blockers[:phaseHandoffMaxListItems]
+		handoff.Blockers = append(handoff.Blockers, taskHandoffBlocker{
+			Summary: fmt.Sprintf("[truncated; %d more blockers omitted]", omitted),
+		})
+	}
+	for i := range handoff.Blockers {
+		handoff.Blockers[i].Summary = compactPhaseHandoffText(handoff.Blockers[i].Summary)
+		handoff.Blockers[i].MissingDependency = compactPhaseHandoffText(handoff.Blockers[i].MissingDependency)
+		handoff.Blockers[i].FailedCommand = compactPhaseHandoffText(handoff.Blockers[i].FailedCommand)
+		handoff.Blockers[i].RequiredService = compactPhaseHandoffText(handoff.Blockers[i].RequiredService)
+		handoff.Blockers[i].SuspectedConfigGap = compactPhaseHandoffText(handoff.Blockers[i].SuspectedConfigGap)
+		handoff.Blockers[i].NextCommand = compactPhaseHandoffText(handoff.Blockers[i].NextCommand)
+	}
+	if len(handoff.ConfirmedDeadEnds) > phaseHandoffMaxListItems {
+		omitted := len(handoff.ConfirmedDeadEnds) - phaseHandoffMaxListItems
+		handoff.ConfirmedDeadEnds = handoff.ConfirmedDeadEnds[:phaseHandoffMaxListItems]
+		handoff.ConfirmedDeadEnds = append(handoff.ConfirmedDeadEnds, taskHandoffDeadEnd{
+			Summary:                  fmt.Sprintf("[truncated; %d more confirmed dead ends omitted]", omitted),
+			NegativeProofBoundary:    "omitted by phase handoff compaction",
+			NegativeProofEnforcement: "omitted by phase handoff compaction",
+			NegativeProofExposure:    "omitted by phase handoff compaction",
+			NegativeProofEdgeCases:   "omitted by phase handoff compaction",
+		})
+	}
+	for i := range handoff.ConfirmedDeadEnds {
+		handoff.ConfirmedDeadEnds[i].Summary = compactPhaseHandoffText(handoff.ConfirmedDeadEnds[i].Summary)
+		handoff.ConfirmedDeadEnds[i].NegativeProofBoundary = compactPhaseHandoffText(handoff.ConfirmedDeadEnds[i].NegativeProofBoundary)
+		handoff.ConfirmedDeadEnds[i].NegativeProofEnforcement = compactPhaseHandoffText(handoff.ConfirmedDeadEnds[i].NegativeProofEnforcement)
+		handoff.ConfirmedDeadEnds[i].NegativeProofExposure = compactPhaseHandoffText(handoff.ConfirmedDeadEnds[i].NegativeProofExposure)
+		handoff.ConfirmedDeadEnds[i].NegativeProofEdgeCases = compactPhaseHandoffText(handoff.ConfirmedDeadEnds[i].NegativeProofEdgeCases)
+	}
+	return handoff
+}
+
+func compactPhaseHandoffText(text string) string {
+	return previewRunes(text, phaseHandoffMaxTextRunes, " [truncated]")
 }
 
 func setupLogEvidence(evidence []EvidenceRecord) []phaseHandoffEvidence {
