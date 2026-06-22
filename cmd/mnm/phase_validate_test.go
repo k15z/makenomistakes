@@ -31,6 +31,7 @@ func TestValidatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"missing dependency, failed command, required service, suspected config gap, and next command",
 		"mnm evidence write --kind markdown",
+		"read artifact content from stdin unless you pass --input /tmp/file",
 		"mnm handoff write --finding finding_auth",
 		"Validation notes alone are not enough for a proven verdict.",
 		"mnm verdict record --finding finding_auth --phase validate --value proven",

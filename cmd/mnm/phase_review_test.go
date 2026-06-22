@@ -65,6 +65,7 @@ func TestReviewPromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Admin routes do not check user role",
 		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"mnm evidence write --kind markdown",
+		"read artifact content from stdin unless you pass --input /tmp/file",
 		"mnm handoff write --finding finding_auth",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "handoff-review-finding_auth.json")),
 		"attempted_commands",

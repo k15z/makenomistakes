@@ -355,6 +355,7 @@ Required actions:
 4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
 5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
 6. Write and register investigation notes, commands, observed output, code references, and decision rationale with: mnm evidence write --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md
+The mnm evidence write and mnm handoff write commands read artifact content from stdin unless you pass --input /tmp/file; use a heredoc, pipe, or --input to provide content.
 7. Write and register a structured task handoff JSON file with: mnm handoff write --lead %[3]s --path %[2]s/evidence/handoff-investigate-%[10]s.json. Use this schema as the JSON input:
 
 %[11]s

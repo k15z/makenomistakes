@@ -90,13 +90,7 @@ func handoffWriteCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	output = append(output, '\n')
-	if err := writeEvidenceFileIfAbsentOrSame(runDir, relPath, output); err != nil {
-		return err
-	}
-	if err := validateNonEmptyEvidenceFile(runDir, relPath); err != nil {
-		return err
-	}
-	evidenceID, err := registerTaskEvidence(runDir, registration)
+	evidenceID, err := writeAndRegisterTaskEvidence(runDir, registration, output)
 	if err != nil {
 		return err
 	}

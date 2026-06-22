@@ -529,10 +529,7 @@ func evidenceWriteCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := writeEvidenceFileIfAbsentOrSame(runDir, registration.Path, data); err != nil {
-		return err
-	}
-	evidenceID, err := registerTaskEvidence(runDir, registration)
+	evidenceID, err := writeAndRegisterTaskEvidence(runDir, registration, data)
 	if err != nil {
 		return err
 	}
@@ -982,6 +979,15 @@ func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) 
 	} else if err != nil {
 		return "", fmt.Errorf("stat evidence path %s: %w", registration.Path, err)
 	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	return registerTaskEvidenceUnlocked(runDir, registration, contentSHA256)
+}
+
+func registerTaskEvidenceUnlocked(runDir string, registration taskEvidenceRegistration, contentSHA256 string) (string, error) {
 	evidenceID := newLedgerID("evidence")
 	event, err := prepareLedgerEvent(runDir, LedgerEvent{
 		RunID:    registration.RunID,
@@ -1001,11 +1007,6 @@ func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) 
 	if err != nil {
 		return "", err
 	}
-	unlock, err := lockRunDir(runDir)
-	if err != nil {
-		return "", err
-	}
-	defer unlock()
 	if err := requireNoRegisteredEvidenceContentConflictUnlocked(runDir, registration, contentSHA256); err != nil {
 		return "", err
 	}
@@ -1025,6 +1026,69 @@ func registerTaskEvidence(runDir string, registration taskEvidenceRegistration) 
 		return "", err
 	}
 	return evidenceID, nil
+}
+
+func writeAndRegisterTaskEvidence(runDir string, registration taskEvidenceRegistration, data []byte) (string, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", fmt.Errorf("evidence input for %s must not be empty", registration.Path)
+	}
+	unlock, err := lockRunDir(runDir)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	target, err := taskBundleArtifactTargetPath(runDir, registration.Path)
+	if err != nil {
+		return "", err
+	}
+	if err := writeTaskEvidenceFileUnlocked(target, registration.Path, data); err != nil {
+		return "", err
+	}
+	return registerTaskEvidenceUnlocked(runDir, registration, evidenceBytesSHA256(data))
+}
+
+func writeTaskEvidenceFileUnlocked(target, relPath string, data []byte) error {
+	info, err := os.Lstat(target)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("target artifact %s is a symlink", relPath)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("target artifact %s is not a regular file", relPath)
+		}
+		existing, err := os.ReadFile(target)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(existing, data) {
+			return nil
+		}
+		return fmt.Errorf("evidence path %s already exists with different content; choose a fresh path", relPath)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeNewEvidenceFileExclusive(target, data)
+}
+
+func writeNewEvidenceFileExclusive(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return err
+	}
+	output, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, filePerm)
+	if err != nil {
+		return err
+	}
+	writeErr := error(nil)
+	if _, err := output.Write(data); err != nil {
+		writeErr = err
+	}
+	closeErr := output.Close()
+	if writeErr != nil {
+		_ = os.Remove(path)
+		return writeErr
+	}
+	return closeErr
 }
 
 func requireNoRegisteredEvidenceContentConflictUnlocked(runDir string, registration taskEvidenceRegistration, contentSHA256 string) error {
@@ -1082,25 +1146,6 @@ func writableRunRelPath(runDir, path string) (string, error) {
 		return "", err
 	}
 	return rel, nil
-}
-
-func writeEvidenceFileIfAbsentOrSame(runDir, relPath string, data []byte) error {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return fmt.Errorf("evidence input for %s must not be empty", relPath)
-	}
-	target, err := taskBundleArtifactTargetPath(runDir, relPath)
-	if err != nil {
-		return err
-	}
-	if existing, err := os.ReadFile(target); err == nil {
-		if bytes.Equal(existing, data) {
-			return nil
-		}
-		return fmt.Errorf("evidence path %s already exists with different content; choose a fresh path", relPath)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return writeFileAtomic(target, data, filePerm)
 }
 
 func requiredTextFlag(name, value string) (string, error) {

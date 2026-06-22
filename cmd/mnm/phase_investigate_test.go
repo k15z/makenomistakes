@@ -39,6 +39,7 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Check whether admin routes miss authorization.",
 		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"mnm evidence write --kind markdown",
+		"read artifact content from stdin unless you pass --input /tmp/file",
 		"mnm handoff write --lead lead_auth",
 		"attempted_commands",
 		"--negative-boundary",

@@ -29,6 +29,7 @@ func TestDeduplicatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Deduplicate status: Pending deduplicate verdict",
 		"First candidate body.",
 		"mnm evidence write --kind markdown --title \"Deduplication notes\"",
+		"read artifact content from stdin unless you pass --input /tmp/file",
 		"mnm handoff write --path",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "deduplicate-notes.md")),
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "handoff-deduplicate.json")),

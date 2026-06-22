@@ -328,6 +328,7 @@ Required actions:
 5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
 6. Attempt the highest-fidelity reproduction or exploit that is feasible inside this VM. Build services, run tests, start dev servers, use Docker/Compose/minikube if available and scoped to this workspace, seed data, send requests, inject malformed inputs, trigger crashes, or write small proof scripts as needed.
 7. Write and register validation notes, commands, observed output, blockers, and any proof artifact index with: mnm evidence write --kind markdown --title "Validation notes: %[4]s" --finding %[3]s --path %[2]s/evidence/validate-%[17]s-notes.md
+The mnm evidence write and mnm handoff write commands read artifact content from stdin unless you pass --input /tmp/file; use a heredoc, pipe, or --input to provide content.
 8. Write and register a structured task handoff JSON file with: mnm handoff write --finding %[3]s --path %[2]s/evidence/handoff-validate-%[17]s.json. Use this schema as the JSON input:
 
 %[18]s

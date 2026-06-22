@@ -122,6 +122,10 @@ func evidenceFileSHA256(runDir, relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return evidenceBytesSHA256(data), nil
+}
+
+func evidenceBytesSHA256(data []byte) string {
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
 }

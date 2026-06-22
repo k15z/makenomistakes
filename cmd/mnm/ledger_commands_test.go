@@ -2739,6 +2739,109 @@ func TestEvidenceWriteCreatesAndRegistersFile(t *testing.T) {
 	}
 }
 
+func TestEvidenceWriteSerializesConcurrentConflictingWriters(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	tempDir := t.TempDir()
+	inputs := []string{
+		filepath.Join(tempDir, "alpha.md"),
+		filepath.Join(tempDir, "beta.md"),
+	}
+	if err := os.WriteFile(inputs[0], []byte("alpha notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inputs[1], []byte("beta notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, len(inputs))
+	var wg sync.WaitGroup
+	for _, input := range inputs {
+		input := input
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			errs <- run([]string{
+				"evidence", "write",
+				"--run-dir", runDir,
+				"--kind", "markdown",
+				"--title", "Recon notes",
+				"--path", "evidence/recon-notes.md",
+				"--input", input,
+			}, &stdout, &stderr)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		failures++
+		if !strings.Contains(err.Error(), "already exists with different content") {
+			t.Fatalf("unexpected conflicting writer error: %v", err)
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("successes/failures = %d/%d, want 1/1", successes, failures)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-notes.md", 1)
+	evidence, ok := ledgerTaskEvidence(runDir, "task_recon", "evidence/recon-notes.md")
+	if !ok {
+		t.Fatal("expected registered evidence")
+	}
+	wantSHA, err := evidenceFileSHA256(runDir, "evidence/recon-notes.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.ContentSHA256 != wantSHA {
+		t.Fatalf("registered content hash = %s, want %s", evidence.ContentSHA256, wantSHA)
+	}
+}
+
+func TestEvidenceWriteRejectsFinalPathSymlink(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	if err := os.MkdirAll(filepath.Join(runDir, "evidence"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(runDir, "evidence", "recon-notes.md")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+	input := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(input, []byte("outside notes\n"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "write",
+		"--run-dir", runDir,
+		"--kind", "markdown",
+		"--title", "Recon notes",
+		"--path", "evidence/recon-notes.md",
+		"--input", input,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected final symlink error")
+	}
+	if !strings.Contains(err.Error(), "target artifact evidence/recon-notes.md is a symlink") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertEvidenceEventCount(t, runDir, "task_recon", "evidence/recon-notes.md", 0)
+}
+
 func TestEvidenceWriteRejectsExistingDifferentContent(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	writeRunFile(t, runDir, "evidence/recon-notes.md", "original notes")
