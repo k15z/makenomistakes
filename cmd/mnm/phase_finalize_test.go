@@ -28,6 +28,8 @@ func TestFinalizePromptIncludesRequiredReportCommands(t *testing.T) {
 		"Do not read opencode-*.jsonl transcripts",
 		"treat validation notes and verdict details as higher authority",
 		"hardcoded session signing secret is not by itself proof of forged authenticated sessions",
+		"script execution, cookie read, CSRF action",
+		"reachable vulnerable usage, affected version",
 		"mnm report finalize --markdown",
 		filepath.ToSlash(filepath.Join(runDir, "report.md")),
 		filepath.ToSlash(filepath.Join(runDir, "report.json")),

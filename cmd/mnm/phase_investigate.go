@@ -379,6 +379,8 @@ Finding quality bar:
 - Use inconclusive when a lead is plausible but the environment, missing context, or time prevents a confident positive finding or negative proof.
 - Do not promote vague risk, missing best practices, or style concerns to findings.
 - Split separable root causes into separate findings or follow-up leads when proof, remediation, or ownership differs.
+- For session, cookie, CSRF, and account-lifecycle leads, trace the exact state transition and storage boundary: login, logout, reset, rotation, invalidation, cookie attributes, server-side session store versus signed cookie, and whether script execution can actually read or alter the relevant credential.
+- For dependency, framework, or runtime leads, identify the installed version, reachable import/call/config path, and vulnerable API or behavior. If network is available, prefer primary advisories or release notes; otherwise record the local evidence and what still needs confirmation.
 - Prefer proof commands and short reproduction notes over speculation.
 - Record uncertainty in the finding body rather than overstating the result.
 `, workspace, runDir, lead.ID, lead.Title, lead.Category, lead.Priority, scopeText(cfg), handoffRel, string(body), safeLeadID, taskHandoffSchemaText(), shellQuote(lead.Category)), nil
