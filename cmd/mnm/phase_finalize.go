@@ -227,7 +227,7 @@ Required actions:
 
 1. Run: mnm task current
 2. Read %[2]s/evidence/finalize-context.json first. It is a compact, host-generated view of the ledger containing every finding, its bucket/status, exact verdict labels, recommended evidence paths, validation proof paths, and affected path candidates that pass the workspace manifest check.
-3. Read %[2]s/%[7]s for structured phase handoff context including setup logs, task handoffs, confirmed dead ends, open leads, and blockers. Use it to preserve nuance about blocked validation and plausible-but-unproven areas.
+3. Read %[2]s/%[7]s for structured phase handoff context including setup logs, task handoffs, confirmed dead ends, inconclusive leads, open leads, and blockers. Use it to preserve nuance about blocked validation and plausible-but-unproven areas.
 4. Use the compact context as the source of truth for JSON shape, buckets, statuses, verdict labels, evidence paths, and affected paths. For prose, treat validation notes and verdict details as higher authority than the original finding body because review and validation may narrow or retract earlier claims.
 5. Do not read opencode-*.jsonl transcripts or the full raw events.jsonl unless report validation fails and the compact context is insufficient to debug it. These transcript files are large and not needed for the final report.
 6. Write a human-readable Markdown report to %[2]s/report.md.

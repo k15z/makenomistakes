@@ -486,6 +486,35 @@ func TestValidateTaskBundleRejectsSetupLogEvidenceForOtherTask(t *testing.T) {
 	}
 }
 
+func TestValidateTaskBundleRequiresNegativeProofForClosedNoFinding(t *testing.T) {
+	bundleDir := t.TempDir()
+	task := TaskRecord{RunID: "run_bundle", TaskID: "task_investigate_lead_auth", Phase: "investigate"}
+	writeTaskBundleEvents(t, bundleDir,
+		LedgerEvent{
+			ID:        "event_close",
+			RunID:     task.RunID,
+			Type:      "lead.closed",
+			Object:    "lead",
+			ObjectID:  "lead_auth",
+			TaskID:    task.TaskID,
+			Timestamp: "2026-01-01T00:00:00Z",
+			Data: map[string]any{
+				"status": "closed_no_finding",
+				"reason": "Auth appears to block the path.",
+			},
+		},
+		taskCompletedEvent(task),
+	)
+
+	_, err := validateTaskBundle(bundleDir, task)
+	if err == nil {
+		t.Fatal("expected missing negative proof error")
+	}
+	if !strings.Contains(err.Error(), "closed_no_finding lead close requires data.negative_proof_boundary") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestIngestTaskBundleRejectsDivergentExistingArtifactBeforeAppendingEvents(t *testing.T) {
 	runDir := t.TempDir()
 	bundleDir := t.TempDir()

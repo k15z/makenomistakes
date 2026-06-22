@@ -19,6 +19,7 @@ type phaseHandoffContext struct {
 	GeneratedAt       string                  `json:"generated_at"`
 	OpenLeads         []phaseHandoffLead      `json:"open_leads"`
 	ConfirmedDeadEnds []phaseHandoffLeadClose `json:"confirmed_dead_ends"`
+	InconclusiveLeads []phaseHandoffLeadClose `json:"inconclusive_leads"`
 	Findings          []phaseHandoffFinding   `json:"findings"`
 	SetupLogs         []phaseHandoffEvidence  `json:"setup_logs"`
 	TaskHandoffs      []taskHandoffFile       `json:"task_handoffs"`
@@ -33,12 +34,16 @@ type phaseHandoffLead struct {
 }
 
 type phaseHandoffLeadClose struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Category string `json:"category"`
-	Status   string `json:"status"`
-	Reason   string `json:"reason"`
-	TaskID   string `json:"task_id"`
+	ID                       string `json:"id"`
+	Title                    string `json:"title"`
+	Category                 string `json:"category"`
+	Status                   string `json:"status"`
+	Reason                   string `json:"reason"`
+	TaskID                   string `json:"task_id"`
+	NegativeProofBoundary    string `json:"negative_proof_boundary,omitempty"`
+	NegativeProofEnforcement string `json:"negative_proof_enforcement,omitempty"`
+	NegativeProofExposure    string `json:"negative_proof_exposure,omitempty"`
+	NegativeProofEdgeCases   string `json:"negative_proof_edge_cases,omitempty"`
 }
 
 type phaseHandoffFinding struct {
@@ -71,7 +76,7 @@ type taskHandoffFile struct {
 	SetupDiscoveries  []string             `json:"setup_discoveries"`
 	Blockers          []taskHandoffBlocker `json:"blockers"`
 	LikelyLeads       []string             `json:"likely_leads"`
-	ConfirmedDeadEnds []string             `json:"confirmed_dead_ends"`
+	ConfirmedDeadEnds []taskHandoffDeadEnd `json:"confirmed_dead_ends"`
 	Notes             string               `json:"notes,omitempty"`
 	SourcePath        string               `json:"source_path,omitempty"`
 }
@@ -83,6 +88,15 @@ type taskHandoffBlocker struct {
 	RequiredService    string `json:"required_service,omitempty"`
 	SuspectedConfigGap string `json:"suspected_config_gap,omitempty"`
 	NextCommand        string `json:"next_command,omitempty"`
+}
+
+type taskHandoffDeadEnd struct {
+	Summary                  string `json:"summary"`
+	NegativeProofBoundary    string `json:"negative_proof_boundary"`
+	NegativeProofEnforcement string `json:"negative_proof_enforcement"`
+	NegativeProofExposure    string `json:"negative_proof_exposure"`
+	NegativeProofEdgeCases   string `json:"negative_proof_edge_cases"`
+	Legacy                   bool   `json:"legacy,omitempty"`
 }
 
 func preparePhaseHandoffContext(runDir, runID string, task TaskRecord, leadID, findingID string) (string, error) {
@@ -140,7 +154,7 @@ func validateRequiredTaskHandoff(runDir, phase, taskID, leadID, findingID string
 	if err != nil {
 		return err
 	}
-	if err := validateTaskHandoffFile(handoff, evidence); err != nil {
+	if err := validateTaskHandoffFile(handoff, evidence, false); err != nil {
 		return fmt.Errorf("validate task handoff %s: %w", relPath, err)
 	}
 	if handoff.Phase != phase {
@@ -195,6 +209,7 @@ func buildPhaseHandoffContext(runDir, runID, targetPhase string) (phaseHandoffCo
 		}
 	}
 	context.ConfirmedDeadEnds = confirmedDeadEndsFromEvents(events, leadByID)
+	context.InconclusiveLeads = inconclusiveLeadsFromEvents(events, leadByID)
 	for _, finding := range findings {
 		context.Findings = append(context.Findings, phaseHandoffFinding{
 			ID:         finding.ID,
@@ -242,6 +257,36 @@ func confirmedDeadEndsFromEvents(events []LedgerEvent, leadByID map[string]LeadR
 		if status != "closed_no_finding" && status != "superseded" {
 			continue
 		}
+		if status == "closed_no_finding" && !leadCloseHasNegativeProof(event) {
+			continue
+		}
+		lead := leadByID[event.ObjectID]
+		items = append(items, phaseHandoffLeadClose{
+			ID:                       event.ObjectID,
+			Title:                    lead.Title,
+			Category:                 lead.Category,
+			Status:                   status,
+			Reason:                   stringData(event.Data, "reason"),
+			TaskID:                   event.TaskID,
+			NegativeProofBoundary:    stringData(event.Data, "negative_proof_boundary"),
+			NegativeProofEnforcement: stringData(event.Data, "negative_proof_enforcement"),
+			NegativeProofExposure:    stringData(event.Data, "negative_proof_exposure"),
+			NegativeProofEdgeCases:   stringData(event.Data, "negative_proof_edge_cases"),
+		})
+	}
+	return items
+}
+
+func inconclusiveLeadsFromEvents(events []LedgerEvent, leadByID map[string]LeadRecord) []phaseHandoffLeadClose {
+	var items []phaseHandoffLeadClose
+	for _, event := range events {
+		if event.Type != "lead.closed" || event.Object != "lead" {
+			continue
+		}
+		status := stringData(event.Data, "status")
+		if status != "inconclusive" {
+			continue
+		}
 		lead := leadByID[event.ObjectID]
 		items = append(items, phaseHandoffLeadClose{
 			ID:       event.ObjectID,
@@ -253,6 +298,13 @@ func confirmedDeadEndsFromEvents(events []LedgerEvent, leadByID map[string]LeadR
 		})
 	}
 	return items
+}
+
+func leadCloseHasNegativeProof(event LedgerEvent) bool {
+	return strings.TrimSpace(stringData(event.Data, "negative_proof_boundary")) != "" &&
+		strings.TrimSpace(stringData(event.Data, "negative_proof_enforcement")) != "" &&
+		strings.TrimSpace(stringData(event.Data, "negative_proof_exposure")) != "" &&
+		strings.TrimSpace(stringData(event.Data, "negative_proof_edge_cases")) != ""
 }
 
 func findingVerdictLabelsFromEvents(events []LedgerEvent, findingID string) []string {
@@ -289,7 +341,7 @@ func taskHandoffsFromEvidence(runDir string, evidence []EvidenceRecord) ([]taskH
 		if err != nil {
 			return nil, err
 		}
-		if err := validateTaskHandoffFile(handoff, item); err != nil {
+		if err := validateTaskHandoffFile(handoff, item, true); err != nil {
 			return nil, fmt.Errorf("validate task handoff %s: %w", item.Path, err)
 		}
 		handoff.SourcePath = item.Path
@@ -311,7 +363,23 @@ func readTaskHandoffFile(runDir, relPath string) (taskHandoffFile, error) {
 	return handoff, nil
 }
 
-func validateTaskHandoffFile(handoff taskHandoffFile, evidence EvidenceRecord) error {
+func (deadEnd *taskHandoffDeadEnd) UnmarshalJSON(data []byte) error {
+	var summary string
+	if err := json.Unmarshal(data, &summary); err == nil {
+		deadEnd.Summary = summary
+		deadEnd.Legacy = true
+		return nil
+	}
+	type taskHandoffDeadEndAlias taskHandoffDeadEnd
+	var decoded taskHandoffDeadEndAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*deadEnd = taskHandoffDeadEnd(decoded)
+	return nil
+}
+
+func validateTaskHandoffFile(handoff taskHandoffFile, evidence EvidenceRecord, allowLegacyDeadEnds bool) error {
 	if handoff.Version != phaseHandoffVersion {
 		return fmt.Errorf("version = %d, want %d", handoff.Version, phaseHandoffVersion)
 	}
@@ -330,6 +398,29 @@ func validateTaskHandoffFile(handoff taskHandoffFile, evidence EvidenceRecord) e
 	for i, blocker := range handoff.Blockers {
 		if strings.TrimSpace(blocker.Summary) == "" {
 			return fmt.Errorf("blockers[%d].summary is required", i)
+		}
+	}
+	for i, deadEnd := range handoff.ConfirmedDeadEnds {
+		if deadEnd.Legacy && allowLegacyDeadEnds {
+			if strings.TrimSpace(deadEnd.Summary) == "" {
+				return fmt.Errorf("confirmed_dead_ends[%d].summary is required", i)
+			}
+			continue
+		}
+		if strings.TrimSpace(deadEnd.Summary) == "" {
+			return fmt.Errorf("confirmed_dead_ends[%d].summary is required", i)
+		}
+		if strings.TrimSpace(deadEnd.NegativeProofBoundary) == "" {
+			return fmt.Errorf("confirmed_dead_ends[%d].negative_proof_boundary is required", i)
+		}
+		if strings.TrimSpace(deadEnd.NegativeProofEnforcement) == "" {
+			return fmt.Errorf("confirmed_dead_ends[%d].negative_proof_enforcement is required", i)
+		}
+		if strings.TrimSpace(deadEnd.NegativeProofExposure) == "" {
+			return fmt.Errorf("confirmed_dead_ends[%d].negative_proof_exposure is required", i)
+		}
+		if strings.TrimSpace(deadEnd.NegativeProofEdgeCases) == "" {
+			return fmt.Errorf("confirmed_dead_ends[%d].negative_proof_edge_cases is required", i)
 		}
 	}
 	return nil
@@ -355,7 +446,15 @@ func taskHandoffSchemaText() string {
     }
   ],
   "likely_leads": ["follow-up areas or leads that still look plausible"],
-  "confirmed_dead_ends": ["areas ruled out and the concrete reason"],
+  "confirmed_dead_ends": [
+    {
+      "summary": "area ruled out and the concrete reason",
+      "negative_proof_boundary": "exact trust/network/auth/data-flow/deployment boundary",
+      "negative_proof_enforcement": "specific guard, policy, middleware, check, or code path",
+      "negative_proof_exposure": "deployment exposure conclusion",
+      "negative_proof_edge_cases": "bypasses, roles, alternate routes, and edge cases checked"
+    }
+  ],
   "notes": "brief extra context"
 }`
 }

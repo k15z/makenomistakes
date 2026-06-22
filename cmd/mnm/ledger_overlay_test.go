@@ -206,12 +206,12 @@ func TestLedgerOverlayCanCloseSnapshotLead(t *testing.T) {
 	t.Setenv(ledgerDirEnv, ledgerDir)
 
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{
+	if err := run(append([]string{
 		"lead", "close",
 		"--id", "lead_auth",
 		"--status", "closed_no_finding",
 		"--reason", "not reproducible",
-	}, &stdout, &stderr); err != nil {
+	}, negativeProofCLIArgs()...), &stdout, &stderr); err != nil {
 		t.Fatalf("lead close failed: %v\nstderr: %s", err, stderr.String())
 	}
 	outputEvents, err := readTaskBundleEvents(filepath.Join(outputDir, eventsFile))
