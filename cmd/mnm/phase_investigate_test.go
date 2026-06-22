@@ -11,7 +11,10 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	writeRunFile(t, runDir, "evidence/lead-auth.md", "Check whether admin routes miss authorization.")
 	cfg := Config{
-		Instructions: InstructionConfig{Scope: "Security and correctness only."},
+		Instructions: InstructionConfig{
+			Scope:     "Security and correctness only.",
+			RiskAreas: []string{"authorization"},
+		},
 	}
 	lead := LeadRecord{
 		ID:       "lead_auth",
@@ -31,6 +34,8 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"# makenomistakes Investigate",
 		"Lead ID: lead_auth",
 		"Security and correctness only.",
+		"Focused risk areas:",
+		"- authorization",
 		"Check whether admin routes miss authorization.",
 		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"Task handoff:",
@@ -41,6 +46,7 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"--negative-edge-cases",
 		"--status inconclusive",
 		"mnm finding create --lead lead_auth",
+		`--category 'security'`,
 		"mnm lead close --id lead_auth",
 		"mnm task complete --status completed",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "investigate-lead_auth-notes.md")),

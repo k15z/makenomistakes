@@ -338,12 +338,77 @@ func TestValidateReconLedgerOutputsUsesLatestCompletionStatus(t *testing.T) {
 		}
 	}
 
-	err := validateReconLedgerOutputs(runDir, "task_recon")
+	err := validateReconLedgerOutputs(runDir, "task_recon", Config{})
 	if err == nil {
 		t.Fatal("expected latest failed recon completion to be rejected")
 	}
 	if !strings.Contains(err.Error(), "did not complete successfully") {
 		t.Fatalf("expected completion status error, got %v", err)
+	}
+}
+
+func TestValidateReconLedgerOutputsRejectsOffCampaignLeadCategory(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	for _, event := range []LedgerEvent{
+		{
+			RunID:    "run_recon",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_map",
+			TaskID:   "task_recon",
+			Data: map[string]any{
+				"kind":  "markdown",
+				"title": "Recon codebase map",
+				"path":  "evidence/recon-codebase-map.md",
+			},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_risk",
+			TaskID:   "task_recon",
+			Data: map[string]any{
+				"kind":  "markdown",
+				"title": "Recon risk register",
+				"path":  "evidence/recon-risk-register.md",
+			},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "lead.created",
+			Object:   "lead",
+			ObjectID: "lead_broad",
+			TaskID:   "task_recon",
+			Data: map[string]any{
+				"title":     "Broad review",
+				"category":  "general",
+				"priority":  "medium",
+				"body_path": "evidence/lead-broad.md",
+			},
+		},
+		{
+			RunID:    "run_recon",
+			Type:     "task.completed",
+			Object:   "task",
+			ObjectID: "task_recon",
+			TaskID:   "task_recon",
+			Data:     map[string]any{"status": "completed"},
+		},
+	} {
+		if err := appendLedgerEvent(runDir, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := validateReconLedgerOutputs(runDir, "task_recon", Config{
+		Instructions: InstructionConfig{RiskAreas: []string{"authorization"}},
+	})
+	if err == nil {
+		t.Fatal("expected off-campaign lead category error")
+	}
+	if !strings.Contains(err.Error(), "outside configured risk areas") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -2911,11 +2976,36 @@ func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
 		"Maximum leads: 3",
 		"Focus on parser bugs.",
 		"mnm lead create --title",
+		`--category 'security'`,
 		"--body-file /tmp/run/evidence/lead-specific-name.md",
 		"Recon maps the workspace and schedules focused work; Investigate and Validate prove, exploit, or falsify issues.",
 		"If scope instructions ask for tests or proofs, treat them as requirements for later Investigate or Validate",
+		"If focused risk areas are configured, create leads inside those areas",
 		"Do not build end-to-end proof scripts, start long-lived services",
 		"Unregistered files are scratch and may be lost.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestReconPromptIncludesFocusedRiskAreas(t *testing.T) {
+	cfg := Config{
+		Runner: RunnerConfig{MaxLeads: 4},
+		Instructions: InstructionConfig{
+			Scope:     "Security only.",
+			RiskAreas: []string{"authorization", "data exposure"},
+		},
+	}
+	prompt := reconPrompt("/tmp/run", "/tmp/workspace", cfg)
+	for _, want := range []string{
+		"Focused risk areas:",
+		"- authorization",
+		"- data exposure",
+		`--category 'authorization'`,
+		"Allowed categories: authorization, data exposure.",
+		"avoid broad unrelated audit passes",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)

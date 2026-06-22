@@ -145,6 +145,7 @@ func defaultConfig() string {
 scope = """
 Describe what is in scope, out of scope, and what the audit should care about.
 """
+risk_areas = []
 
 [workspace]
 root = "."

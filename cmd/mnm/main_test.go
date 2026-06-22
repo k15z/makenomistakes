@@ -23,6 +23,9 @@ func TestInitCreatesConfigAndIgnore(t *testing.T) {
 	if !strings.Contains(config, `default = "openrouter/deepseek/deepseek-v4-pro"`) {
 		t.Fatalf("config missing default model:\n%s", config)
 	}
+	if !strings.Contains(config, `risk_areas = []`) {
+		t.Fatalf("config missing risk areas:\n%s", config)
+	}
 
 	ignore := readFile(t, filepath.Join(dir, ".mnmignore"))
 	if !strings.Contains(ignore, ".mnm/") {

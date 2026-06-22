@@ -24,7 +24,8 @@ type Config struct {
 }
 
 type InstructionConfig struct {
-	Scope string `toml:"scope"`
+	Scope     string   `toml:"scope"`
+	RiskAreas []string `toml:"risk_areas"`
 }
 
 type WorkspaceConfig struct {
@@ -102,6 +103,9 @@ func (cfg Config) validate(workspaceDir string) (ResolvedConfig, error) {
 	}
 	if strings.TrimSpace(cfg.Instructions.Scope) == "" {
 		return ResolvedConfig{}, errors.New("instructions.scope must not be empty")
+	}
+	if _, err := normalizedRiskAreas(cfg.Instructions.RiskAreas); err != nil {
+		return ResolvedConfig{}, err
 	}
 
 	root := strings.TrimSpace(cfg.Workspace.Root)
