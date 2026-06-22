@@ -22,7 +22,8 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		Status:   "open",
 	}
 
-	prompt, err := investigatePrompt(runDir, "/workspace", cfg, lead)
+	handoffRel := "evidence/phase-handoff-task_investigate_lead_auth.json"
+	prompt, err := investigatePrompt(runDir, "/workspace", cfg, lead, handoffRel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +32,9 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Lead ID: lead_auth",
 		"Security and correctness only.",
 		"Check whether admin routes miss authorization.",
+		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
+		"Task handoff:",
+		"attempted_commands",
 		"mnm finding create --lead lead_auth",
 		"mnm lead close --id lead_auth",
 		"mnm task complete --status completed",
@@ -106,8 +110,13 @@ cat > "$MNM_RUN_DIR/evidence/investigate-$MNM_LEAD_ID-notes.md" <<'EOF'
 
 Lead closed by fake opencode.
 EOF
+cat > "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" <<EOF
+{"version":1,"phase":"investigate","task_id":"$MNM_TASK_ID","lead_id":"$MNM_LEAD_ID","attempted_commands":["fake investigate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":["closed by fake opencode"]}
+EOF
+handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_investigate_evidence_$MNM_LEAD_ID","run_id":"run_limit","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","content_sha256":"d1bbbd1e106e0c495f8dccdf753163e3ae58f2a3428ce125bc1c520bd697caa6","lead_id":"$MNM_LEAD_ID","finding_id":""}}
+{"id":"event_investigate_handoff_$MNM_LEAD_ID","run_id":"run_limit","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_handoff_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: Lead $MNM_LEAD_ID","path":"evidence/handoff-investigate-$MNM_LEAD_ID.json","content_sha256":"$handoff_sha","lead_id":"$MNM_LEAD_ID","finding_id":""}}
 {"id":"event_close_$MNM_LEAD_ID","run_id":"run_limit","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"closed_no_finding","reason":"closed by fake opencode"}}
 {"id":"event_done_$MNM_LEAD_ID","run_id":"run_limit","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
@@ -553,8 +562,13 @@ cat > "$MNM_RUN_DIR/evidence/investigate-$MNM_LEAD_ID-notes.md" <<'EOF'
 
 Lead was promoted without a finding by fake opencode.
 EOF
+cat > "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" <<EOF
+{"version":1,"phase":"investigate","task_id":"$MNM_TASK_ID","lead_id":"$MNM_LEAD_ID","attempted_commands":["fake investigate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_investigate_evidence_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_${MNM_LEAD_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","content_sha256":"3e00c34bcb1b3ea7036a1ca3a44e550bf36bdd52b786872a2b95a12b9280a25d","lead_id":"$MNM_LEAD_ID","finding_id":""}}
+{"id":"event_investigate_handoff_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"evidence.added","object":"evidence","object_id":"evidence_investigate_handoff_${MNM_LEAD_ID}_$$","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: Lead $MNM_LEAD_ID","path":"evidence/handoff-investigate-$MNM_LEAD_ID.json","content_sha256":"$handoff_sha","lead_id":"$MNM_LEAD_ID","finding_id":""}}
 {"id":"event_close_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"status":"promoted_to_finding","reason":"promoted by fake opencode"}}
 {"id":"event_done_${MNM_LEAD_ID}_$$","run_id":"run_investigate","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF

@@ -113,7 +113,11 @@ func runReviewTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, w
 	}
 	defer cleanupWorkspace()
 
-	prompt, err := reviewPrompt(runDir, taskWorkspace, cfg, finding)
+	handoffRel, err := preparePhaseHandoffContext(runDir, runID, task, "", finding.ID)
+	if err != nil {
+		return err
+	}
+	prompt, err := reviewPrompt(runDir, taskWorkspace, cfg, finding, handoffRel)
 	if err != nil {
 		return err
 	}
@@ -156,6 +160,9 @@ func runReviewTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, w
 			if err := validateNonEmptyEvidenceFile(verifyRunDir, notesRel); err != nil {
 				return err
 			}
+			if err := validateRequiredTaskHandoff(verifyRunDir, task.Phase, task.TaskID, "", finding.ID); err != nil {
+				return err
+			}
 			if !ledgerFindingHasVerdict(verifyRunDir, finding.ID, "review") {
 				return fmt.Errorf("review opencode task did not record review verdict for finding %s", finding.ID)
 			}
@@ -184,7 +191,7 @@ func reviewNotesRelPath(findingID string) string {
 	return filepath.ToSlash(filepath.Join("evidence", "review-"+safeFileID(findingID)+"-notes.md"))
 }
 
-func reviewPrompt(runDir, workspace string, cfg Config, finding FindingRecord) (string, error) {
+func reviewPrompt(runDir, workspace string, cfg Config, finding FindingRecord, handoffRel string) (string, error) {
 	bodyPath, err := findingBodyPath(runDir, finding)
 	if err != nil {
 		return "", err
@@ -227,6 +234,10 @@ Recon context files:
 - %[2]s/evidence/recon-codebase-map.md
 - %[2]s/evidence/recon-risk-register.md
 
+Phase handoff context:
+
+- %[2]s/%[15]s
+
 Finding body path: %[10]s
 
 Finding body:
@@ -248,20 +259,27 @@ Source lead evidence:
 Required actions:
 
 1. Run: mnm task current
-2. Read the finding body, attached evidence, recon context, and relevant source code. Run focused proof or falsification commands if they materially affect the verdict.
-3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
-4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. If the finding is concrete, in scope, supported by code references, and has a plausible failure or exploit path, write review notes to %[2]s/evidence/review-%[15]s-notes.md, register them with: mnm evidence add --kind markdown --title "Review notes: %[4]s" --finding %[3]s --path %[2]s/evidence/review-%[15]s-notes.md, then record: mnm verdict record --finding %[3]s --phase review --value accepted --reason "..."
-6. If the finding is vague, out of scope, unsupported, contradicted by the code, duplicate-style noise, or only a best-practice concern, write review notes to %[2]s/evidence/review-%[15]s-notes.md, register them with the same mnm evidence add command, then record: mnm verdict record --finding %[3]s --phase review --value rejected --reason "..."
-7. Complete the task with: mnm task complete --status completed --summary "Reviewed %[3]s"
+2. Read the finding body, attached evidence, recon context, phase handoff context, and relevant source code. Run focused proof or falsification commands if they materially affect the verdict.
+3. Use the handoff context to avoid rechecking confirmed dead ends and to reuse setup or command discoveries from prior tasks.
+4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
+5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
+6. Write review notes, commands, falsification attempts, code references, and uncertainty to %[2]s/evidence/review-%[16]s-notes.md, then register them with: mnm evidence add --kind markdown --title "Review notes: %[4]s" --finding %[3]s --path %[2]s/evidence/review-%[16]s-notes.md
+7. Write a structured task handoff JSON file to %[2]s/evidence/handoff-review-%[16]s.json using this schema:
+
+%[17]s
+
+Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --finding %[3]s --path %[2]s/evidence/handoff-review-%[16]s.json
+8. If the finding is concrete, in scope, supported by code references, and has a plausible failure or exploit path, record: mnm verdict record --finding %[3]s --phase review --value accepted --reason "..."
+9. If the finding is vague, out of scope, unsupported, contradicted by the code, duplicate-style noise, or only a best-practice concern, record: mnm verdict record --finding %[3]s --phase review --value rejected --reason "..."
+10. Complete the task with: mnm task complete --status completed --summary "Reviewed %[3]s"
 
 Review quality bar:
 
 - Be cynical. Reject findings that do not survive concrete code inspection.
 - Do not create new findings in Review. Record a verdict for this candidate only.
-- Prefer short command output, code references, and falsification notes over general commentary.
+- Preserve important commands, setup discoveries, blockers, and confirmed dead ends in the structured handoff.
 - Record uncertainty in the review notes and reason rather than overstating the result.
-`, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), sourceLead, formatEvidenceList(runDir, leadEvidence), safeFindingID), nil
+`, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), sourceLead, formatEvidenceList(runDir, leadEvidence), handoffRel, safeFindingID, taskHandoffSchemaText()), nil
 }
 
 func sourceLeadText(runDir, leadID string) string {

@@ -659,6 +659,9 @@ printf '{"type":"done"}\n'
 			t.Fatalf("setup log missing %q:\n%s", want, setupLog)
 		}
 	}
+	if _, ok := ledgerTaskEvidence(outputDir, "task_recon", "evidence/setup-task_recon-attempt-1.log"); !ok {
+		t.Fatal("setup log was not registered as task evidence")
+	}
 	if _, err := validateTaskBundle(outputDir, task); err != nil {
 		t.Fatalf("task output should validate as bundle: %v", err)
 	}
@@ -2250,7 +2253,7 @@ printf '{"type":"done"}\n'
 	if !ok {
 		t.Fatalf("setup log was not registered as task evidence")
 	}
-	if evidence.Kind != "log" || evidence.Title != "Task setup log" {
+	if evidence.Kind != "log" || evidence.Title != "Setup hook log: mnm task bundle setup test" {
 		t.Fatalf("unexpected setup evidence: %#v", evidence)
 	}
 }
@@ -3048,9 +3051,14 @@ EOF
     cat > "$MNM_RUN_DIR/evidence/validate-$MNM_FINDING_ID-proof.log" <<'EOF'
 fake proof command observed the issue
 EOF
+    cat > "$MNM_RUN_DIR/evidence/handoff-validate-$MNM_FINDING_ID.json" <<EOF
+{"version":1,"phase":"validate","task_id":"$MNM_TASK_ID","finding_id":"$MNM_FINDING_ID","attempted_commands":["fake validate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+    handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-validate-$MNM_FINDING_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-validate-$MNM_FINDING_ID.json") | awk '{print $1}')"
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_fake_validate_evidence_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:11Z","data":{"kind":"markdown","title":"Validation notes","path":"evidence/validate-$MNM_FINDING_ID-notes.md","content_sha256":"57edc8df5ef1d937269fa86ae284e7e5b701dea91b34b3cc512b2b36c7911e6c","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
 {"id":"event_fake_validate_proof_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_validate_proof_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:12Z","data":{"kind":"log","title":"Validation proof","path":"evidence/validate-$MNM_FINDING_ID-proof.log","content_sha256":"c36995e1241d001aa3fd14787f46e5a2ef059a179dac1890d6f298f9edec548c","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_fake_validate_handoff_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_validate_handoff_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:13Z","data":{"kind":"json","title":"Task handoff: $MNM_FINDING_ID","path":"evidence/handoff-validate-$MNM_FINDING_ID.json","content_sha256":"$handoff_sha","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
 {"id":"event_fake_validate_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_validate_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:13Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"validate","value":"proven","reason":"Proven by fake validate.","canonical_finding_id":""}}
 {"id":"event_fake_validate_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:14Z","data":{"status":"completed","summary":"Validated $MNM_FINDING_ID"}}
 EOF
@@ -3063,8 +3071,13 @@ EOF
 
 Fake deduplication notes for tests.
 EOF
-    cat >> "$MNM_RUN_DIR/events.jsonl" <<'EOF'
+    cat > "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" <<'EOF'
+{"version":1,"phase":"deduplicate","task_id":"task_deduplicate","attempted_commands":["fake deduplicate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+    handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-deduplicate.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-deduplicate.json") | awk '{print $1}')"
+    cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_fake_deduplicate_evidence","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_deduplicate_notes","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:09Z","data":{"kind":"markdown","title":"Deduplication notes","path":"evidence/deduplicate-notes.md","content_sha256":"12cd072b30c1feba2bfc924e75e5dee362f4ff239c0cb4b1d6f5d676e3075cda"}}
+{"id":"event_fake_deduplicate_handoff","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_deduplicate_handoff","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:10Z","data":{"kind":"json","title":"Task handoff: Deduplication","path":"evidence/handoff-deduplicate.json","content_sha256":"$handoff_sha"}}
 {"id":"event_fake_deduplicate","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:10Z","data":{"finding_id":"finding_fake_lead_fake_auth","phase":"deduplicate","value":"canonical","reason":"Unique in fake runner.","canonical_finding_id":""}}
 {"id":"event_fake_deduplicate_done","run_id":"run_test","type":"task.completed","object":"task","object_id":"task_deduplicate","task_id":"task_deduplicate","timestamp":"2026-01-01T00:00:11Z","data":{"status":"completed","summary":"Deduplicated fake finding"}}
 EOF
@@ -3078,8 +3091,13 @@ EOF
 
 Fake review notes for tests.
 EOF
+    cat > "$MNM_RUN_DIR/evidence/handoff-review-$MNM_FINDING_ID.json" <<EOF
+{"version":1,"phase":"review","task_id":"$MNM_TASK_ID","finding_id":"$MNM_FINDING_ID","attempted_commands":["fake review"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+    handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-review-$MNM_FINDING_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-review-$MNM_FINDING_ID.json") | awk '{print $1}')"
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_fake_review_evidence_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_review_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:07Z","data":{"kind":"markdown","title":"Review notes","path":"evidence/review-$MNM_FINDING_ID-notes.md","content_sha256":"ad3899e2ddf4134f602646d7a65035fd673efb36e906c437d4950529912b0042","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_fake_review_handoff_$MNM_FINDING_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_review_handoff_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:08Z","data":{"kind":"json","title":"Task handoff: $MNM_FINDING_ID","path":"evidence/handoff-review-$MNM_FINDING_ID.json","content_sha256":"$handoff_sha","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
 {"id":"event_fake_review_$MNM_FINDING_ID","run_id":"run_test","type":"verdict.recorded","object":"verdict","object_id":"verdict_fake_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:08Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"Accepted by fake review."}}
 {"id":"event_fake_review_done_$MNM_FINDING_ID","run_id":"run_test","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:09Z","data":{"status":"completed","summary":"Reviewed $MNM_FINDING_ID"}}
 EOF
@@ -3098,8 +3116,13 @@ EOF
 
 Fake finding for tests.
 EOF
+    cat > "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" <<EOF
+{"version":1,"phase":"investigate","task_id":"$MNM_TASK_ID","lead_id":"$MNM_LEAD_ID","attempted_commands":["fake investigate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+    handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-investigate-$MNM_LEAD_ID.json") | awk '{print $1}')"
     cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_fake_investigate_evidence_$MNM_LEAD_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_investigate_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:04Z","data":{"kind":"markdown","title":"Investigation notes","path":"evidence/investigate-$MNM_LEAD_ID-notes.md","content_sha256":"6445080467aad59a102894b4042719a97fee1ddc694ae52d0314bce52cbaac33","lead_id":"$MNM_LEAD_ID","finding_id":""}}
+{"id":"event_fake_investigate_handoff_$MNM_LEAD_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_investigate_handoff_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"kind":"json","title":"Task handoff: $MNM_LEAD_ID","path":"evidence/handoff-investigate-$MNM_LEAD_ID.json","content_sha256":"$handoff_sha","lead_id":"$MNM_LEAD_ID","finding_id":""}}
 {"id":"event_fake_finding_$MNM_LEAD_ID","run_id":"run_test","type":"finding.created","object":"finding","object_id":"finding_fake_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:05Z","data":{"title":"Fake candidate finding","lead_id":"$MNM_LEAD_ID","category":"authz","severity":"high","confidence":"medium","body_path":"evidence/finding-$MNM_LEAD_ID.md"}}
 {"id":"event_fake_finding_evidence_$MNM_LEAD_ID","run_id":"run_test","type":"evidence.added","object":"evidence","object_id":"evidence_fake_finding_$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:06Z","data":{"kind":"markdown","title":"Fake finding evidence","path":"evidence/finding-$MNM_LEAD_ID.md","content_sha256":"422e8e852039204ed5048483d7d3a611a102cfa0caa85ea3c11bad50c3595dea","lead_id":"","finding_id":"finding_fake_$MNM_LEAD_ID"}}
 {"id":"event_fake_lead_closed_$MNM_LEAD_ID","run_id":"run_test","type":"lead.closed","object":"lead","object_id":"$MNM_LEAD_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:07Z","data":{"status":"promoted_to_finding","reason":"Promoted by fake investigate."}}

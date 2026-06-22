@@ -223,7 +223,11 @@ func runInvestigateTaskWithAttemptRunnerContext(ctx context.Context, runDir, run
 	}
 	defer cleanupWorkspace()
 
-	prompt, err := investigatePrompt(runDir, taskWorkspace, cfg, lead)
+	handoffRel, err := preparePhaseHandoffContext(runDir, runID, task, lead.ID, "")
+	if err != nil {
+		return err
+	}
+	prompt, err := investigatePrompt(runDir, taskWorkspace, cfg, lead, handoffRel)
 	if err != nil {
 		return err
 	}
@@ -267,6 +271,9 @@ func runInvestigateTaskWithAttemptRunnerContext(ctx context.Context, runDir, run
 			if err := registeredEvidenceFileError(verifyRunDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
 				return err
 			}
+			if err := validateRequiredTaskHandoff(verifyRunDir, task.Phase, task.TaskID, lead.ID, ""); err != nil {
+				return err
+			}
 			status, exists, err := ledgerLeadStatus(verifyRunDir, lead.ID)
 			if err != nil {
 				return err
@@ -302,7 +309,7 @@ func investigationNotesRelPath(leadID string) string {
 	return filepath.ToSlash(filepath.Join("evidence", "investigate-"+safeFileID(leadID)+"-notes.md"))
 }
 
-func investigatePrompt(runDir, workspace string, cfg Config, lead LeadRecord) (string, error) {
+func investigatePrompt(runDir, workspace string, cfg Config, lead LeadRecord, handoffRel string) (string, error) {
 	bodyPath, err := leadBodyPath(runDir, lead)
 	if err != nil {
 		return "", err
@@ -331,7 +338,10 @@ Recon context files:
 
 - %[2]s/evidence/recon-codebase-map.md
 - %[2]s/evidence/recon-risk-register.md
-- %[8]s
+
+Phase handoff context:
+
+- %[2]s/%[8]s
 
 Lead body:
 
@@ -341,14 +351,20 @@ Required actions:
 
 1. Run: mnm task current
 2. Read the recon context and inspect the workspace with local tools. Run focused tests, dependency checks, repro scripts, or small proof commands when they would materially answer the lead.
-3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
-4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. Write investigation notes, commands, observed output, code references, and decision rationale to %[2]s/evidence/investigate-%[10]s-notes.md, then register them with: mnm evidence add --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md
-6. If the lead is not a real issue, close the lead with: mnm lead close --id %[3]s --status closed_no_finding --reason "..."
-7. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
-8. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
-9. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, or superseded.
-10. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
+3. Read the phase handoff context for prior setup discoveries, confirmed dead ends, open leads, candidate findings, and task handoff entries from earlier work.
+4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
+5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
+6. Write investigation notes, commands, observed output, code references, and decision rationale to %[2]s/evidence/investigate-%[10]s-notes.md, then register them with: mnm evidence add --kind markdown --title "Investigation notes: %[4]s" --lead %[3]s --path %[2]s/evidence/investigate-%[10]s-notes.md
+7. Write a structured task handoff JSON file to %[2]s/evidence/handoff-investigate-%[10]s.json using this schema:
+
+%[11]s
+
+Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --lead %[3]s --path %[2]s/evidence/handoff-investigate-%[10]s.json
+8. If the lead is not a real issue, close the lead with: mnm lead close --id %[3]s --status closed_no_finding --reason "..."
+9. If the lead is a real candidate issue, write a finding body to %[2]s/evidence/finding-%[10]s.md with impact, affected paths, evidence, reproduction notes, and confidence limits. Create it with: mnm finding create --lead %[3]s --title "Specific issue title" --category security --severity medium --confidence medium --body-file %[2]s/evidence/finding-%[10]s.md, then close this lead with: mnm lead close --id %[3]s --status promoted_to_finding --reason "..."
+10. Attach any additional logs, command output, traces, or proof files with mnm evidence add. Tie finding evidence to the finding ID returned by mnm finding create.
+11. If investigation reveals a separate follow-up area, create a new lead with mnm lead create. Still close the current lead as promoted_to_finding, closed_no_finding, or superseded.
+12. Complete the task with: mnm task complete --status completed --summary "Investigated %[3]s"
 
 Finding quality bar:
 
@@ -356,7 +372,7 @@ Finding quality bar:
 - Do not promote vague risk, missing best practices, or style concerns to findings.
 - Prefer proof commands and short reproduction notes over speculation.
 - Record uncertainty in the finding body rather than overstating the result.
-`, workspace, runDir, lead.ID, lead.Title, lead.Category, lead.Priority, scopeText(cfg), bodyPath, string(body), safeLeadID), nil
+`, workspace, runDir, lead.ID, lead.Title, lead.Category, lead.Priority, scopeText(cfg), handoffRel, string(body), safeLeadID, taskHandoffSchemaText()), nil
 }
 
 func maxInvestigations(cfg Config) int {

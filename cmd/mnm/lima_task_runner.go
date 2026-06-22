@@ -31,6 +31,8 @@ type LimaTaskRequest struct {
 	OutputDir    string
 	PromptPath   string
 	LogRelPath   string
+	LeadID       string
+	FindingID    string
 	Model        string
 	ModelAPIKey  string
 	KeepVM       bool
@@ -82,6 +84,8 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		OutputDir:    outputDir,
 		PromptPath:   promptPath,
 		LogRelPath:   logRelPath,
+		LeadID:       task.LeadID,
+		FindingID:    task.FindingID,
 		Model:        task.Model,
 		ModelAPIKey:  runner.ModelAPIKey,
 		KeepVM:       runner.KeepVM,
@@ -313,6 +317,12 @@ func guestTaskRunnerCommand(request LimaTaskRequest) string {
 			int(effectiveRunnerSetupTimeout(request.Config.Setup).Minutes()),
 			shellQuote(runnerSetupMode(request.Config.Setup)),
 		)
+	}
+	if request.LeadID != "" {
+		runnerCommand += " --lead-id " + shellQuote(request.LeadID)
+	}
+	if request.FindingID != "" {
+		runnerCommand += " --finding-id " + shellQuote(request.FindingID)
 	}
 	if request.SkipVerify {
 		runnerCommand += " --skip-bundle-verify"

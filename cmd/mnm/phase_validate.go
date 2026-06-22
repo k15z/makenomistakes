@@ -69,7 +69,11 @@ func runValidateTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 	}
 	defer cleanupWorkspace()
 
-	prompt, err := validatePrompt(runDir, taskWorkspace, cfg, finding)
+	handoffRel, err := preparePhaseHandoffContext(runDir, runID, task, "", finding.ID)
+	if err != nil {
+		return err
+	}
+	prompt, err := validatePrompt(runDir, taskWorkspace, cfg, finding, handoffRel)
 	if err != nil {
 		return err
 	}
@@ -110,6 +114,9 @@ func runValidateTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 				return fmt.Errorf("validate opencode task did not register validation evidence %s for finding %s", notesRel, finding.ID)
 			}
 			if err := validateNonEmptyValidationEvidence(verifyRunDir, notesRel); err != nil {
+				return err
+			}
+			if err := validateRequiredTaskHandoff(verifyRunDir, task.Phase, task.TaskID, "", finding.ID); err != nil {
 				return err
 			}
 			verdict, ok, err := ledgerFindingVerdict(verifyRunDir, finding.ID, "validate")
@@ -180,15 +187,24 @@ func validationProofEvidence(runDir, findingID, taskID string, beforeIndex int, 
 		if item.TaskID != taskID || item.eventIndex >= beforeIndex || excluded[item.Path] {
 			continue
 		}
+		if !isValidationProofArtifact(findingID, item) {
+			continue
+		}
 		proof = append(proof, item)
 	}
 	return proof, nil
 }
 
-func isValidationProofArtifact(findingID, relPath string) bool {
+func isValidationProofArtifact(findingID string, item EvidenceRecord) bool {
 	safeFindingID := safeFileID(findingID)
+	relPath := item.Path
 	notesRel := validationNotesRelPath(findingID)
 	transcriptRel := filepath.ToSlash(filepath.Join("evidence", "opencode-validate-"+safeFindingID+".jsonl"))
+	if strings.HasPrefix(item.Title, "Phase handoff context:") ||
+		strings.HasPrefix(item.Title, "Task handoff:") ||
+		strings.HasPrefix(item.Title, "Setup hook log:") {
+		return false
+	}
 	return relPath != notesRel &&
 		relPath != transcriptRel &&
 		!strings.HasPrefix(relPath, "evidence/validate-"+safeFindingID+"-prompt.")
@@ -198,7 +214,7 @@ func validationNotesRelPath(findingID string) string {
 	return filepath.ToSlash(filepath.Join("evidence", "validate-"+safeFileID(findingID)+"-notes.md"))
 }
 
-func validatePrompt(runDir, workspace string, cfg Config, finding FindingRecord) (string, error) {
+func validatePrompt(runDir, workspace string, cfg Config, finding FindingRecord, handoffRel string) (string, error) {
 	bodyPath, err := findingBodyPath(runDir, finding)
 	if err != nil {
 		return "", err
@@ -238,6 +254,10 @@ Recon context files:
 - %[2]s/evidence/recon-codebase-map.md
 - %[2]s/evidence/recon-risk-register.md
 
+Phase handoff context:
+
+- %[2]s/%[16]s
+
 Finding body path: %[10]s
 
 Finding body:
@@ -263,17 +283,23 @@ Source lead context:
 Required actions:
 
 1. Run: mnm task current
-2. Read the finding body, prior review and deduplication verdicts, attached evidence, recon context, and relevant source code.
-3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory. Prior evidence files may be present for context; do not overwrite or re-register them.
-4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. Attempt the highest-fidelity reproduction or exploit that is feasible inside this VM. Build services, run tests, start dev servers, use Docker/Compose/minikube if available and scoped to this workspace, seed data, send requests, inject malformed inputs, trigger crashes, or write small proof scripts as needed.
-6. Write validation notes, commands, observed output, blockers, and any proof artifacts to %[2]s/evidence/validate-%[16]s-notes.md.
-7. Register the notes with: mnm evidence add --kind markdown --title "Validation notes: %[4]s" --finding %[3]s --path %[2]s/evidence/validate-%[16]s-notes.md
-8. If you observed the claimed failure, exploit path, crash, data exposure, or other concrete impact, write at least one separate proof artifact such as a command log, request/response capture, minimized reproduction script, stack trace, or screenshot under %[2]s/evidence/ and register it with: mnm evidence add --kind log --title "Validation proof: %[4]s" --finding %[3]s --path PROOF_PATH. Use a fresh validation-specific path, especially when rerunning an existing investigation script whose default log path points at prior evidence. Validation notes alone are not enough for a proven verdict.
-9. If you observed concrete impact and registered separate proof evidence, record: mnm verdict record --finding %[3]s --phase validate --value proven --reason "..."
-10. If focused validation contradicts the finding or shows it is not reachable/applicable, record: mnm verdict record --finding %[3]s --phase validate --value failed --reason "..."
-11. If the environment, dependencies, missing services, credentials, or time prevent a fair proof while the finding remains plausible, record: mnm verdict record --finding %[3]s --phase validate --value inconclusive --reason "..."
-12. Complete the task with: mnm task complete --status completed --summary "Validated %[3]s"
+2. Read the finding body, prior review and deduplication verdicts, attached evidence, recon context, phase handoff context, and relevant source code.
+3. Reuse setup discoveries, successful commands, failed commands, blocked services, likely leads, and confirmed dead ends from the phase handoff context before rediscovering environment setup.
+4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory. Prior evidence files may be present for context; do not overwrite or re-register them.
+5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
+6. Attempt the highest-fidelity reproduction or exploit that is feasible inside this VM. Build services, run tests, start dev servers, use Docker/Compose/minikube if available and scoped to this workspace, seed data, send requests, inject malformed inputs, trigger crashes, or write small proof scripts as needed.
+7. Write validation notes, commands, observed output, blockers, and any proof artifacts to %[2]s/evidence/validate-%[17]s-notes.md.
+8. Register the notes with: mnm evidence add --kind markdown --title "Validation notes: %[4]s" --finding %[3]s --path %[2]s/evidence/validate-%[17]s-notes.md
+9. Write a structured task handoff JSON file to %[2]s/evidence/handoff-validate-%[17]s.json using this schema:
+
+%[18]s
+
+For blocked validation, include a blocker with the missing dependency, failed command, required service, suspected config gap, and next command whenever known. Register it with: mnm evidence add --kind json --title "Task handoff: %[4]s" --finding %[3]s --path %[2]s/evidence/handoff-validate-%[17]s.json
+10. If you observed the claimed failure, exploit path, crash, data exposure, or other concrete impact, write at least one separate proof artifact such as a command log, request/response capture, minimized reproduction script, stack trace, or screenshot under %[2]s/evidence/ and register it with: mnm evidence add --kind log --title "Validation proof: %[4]s" --finding %[3]s --path PROOF_PATH. Use a fresh validation-specific path, especially when rerunning an existing investigation script whose default log path points at prior evidence. Validation notes alone are not enough for a proven verdict.
+11. If you observed concrete impact and registered separate proof evidence, record: mnm verdict record --finding %[3]s --phase validate --value proven --reason "..."
+12. If focused validation contradicts the finding or shows it is not reachable/applicable, record: mnm verdict record --finding %[3]s --phase validate --value failed --reason "..."
+13. If the environment, dependencies, missing services, credentials, or time prevent a fair proof while the finding remains plausible, record: mnm verdict record --finding %[3]s --phase validate --value inconclusive --reason "..."
+14. Complete the task with: mnm task complete --status completed --summary "Validated %[3]s"
 
 Validation quality bar:
 
@@ -281,7 +307,7 @@ Validation quality bar:
 - Do not mark proven without observing concrete behavior.
 - Do not mark failed merely because full setup is hard; use inconclusive when the environment blocks a fair test.
 - Keep any long-running servers, containers, or background processes scoped to this disposable VM task.
-`, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), reviewText, dedupText, sourceLead, safeFindingID), nil
+`, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), reviewText, dedupText, sourceLead, handoffRel, safeFindingID, taskHandoffSchemaText()), nil
 }
 
 func verdictSummary(runDir, findingID, phase string) string {

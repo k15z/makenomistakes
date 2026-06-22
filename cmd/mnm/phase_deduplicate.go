@@ -54,7 +54,11 @@ func runDeduplicatePhaseWithAttemptRunnerContext(ctx context.Context, runDir, ru
 	}
 	defer cleanupWorkspace()
 
-	prompt, err := deduplicatePrompt(runDir, taskWorkspace, cfg, allFindings, findings)
+	handoffRel, err := preparePhaseHandoffContext(runDir, runID, task, "", "")
+	if err != nil {
+		return err
+	}
+	prompt, err := deduplicatePrompt(runDir, taskWorkspace, cfg, allFindings, findings, handoffRel)
 	if err != nil {
 		return err
 	}
@@ -94,6 +98,9 @@ func runDeduplicatePhaseWithAttemptRunnerContext(ctx context.Context, runDir, ru
 				return fmt.Errorf("deduplicate opencode task did not register deduplication evidence %s", notesRel)
 			}
 			if err := registeredEvidenceFileError(verifyRunDir, notesRel, evidence.ContentSHA256, validateNonEmptyEvidenceFile); err != nil {
+				return err
+			}
+			if err := validateRequiredTaskHandoff(verifyRunDir, task.Phase, task.TaskID, "", ""); err != nil {
 				return err
 			}
 			var missing []string
@@ -140,7 +147,7 @@ func deduplicateNotesRelPath() string {
 	return filepath.ToSlash(filepath.Join("evidence", "deduplicate-notes.md"))
 }
 
-func deduplicatePrompt(runDir, workspace string, cfg Config, allFindings, pendingFindings []FindingRecord) (string, error) {
+func deduplicatePrompt(runDir, workspace string, cfg Config, allFindings, pendingFindings []FindingRecord, handoffRel string) (string, error) {
 	findingText, err := formatDeduplicateFindings(runDir, allFindings, findingIDSet(pendingFindings))
 	if err != nil {
 		return "", err
@@ -164,6 +171,10 @@ Recon context files:
 - %[2]s/evidence/recon-codebase-map.md
 - %[2]s/evidence/recon-risk-register.md
 
+Phase handoff context:
+
+- %[2]s/%[7]s
+
 Review-accepted findings:
 
 %[5]s
@@ -171,15 +182,21 @@ Review-accepted findings:
 Required actions:
 
 1. Run: mnm task current
-2. Read the finding bodies, review notes, attached evidence, recon context, and relevant source code when needed to decide whether two findings describe the same root defect.
-3. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
-4. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
-5. Write clustering notes, canonical selections, duplicate rationale, and any uncertainty to %[2]s/evidence/deduplicate-notes.md.
-6. Register the notes with: mnm evidence add --kind markdown --title "Deduplication notes" --path %[2]s/evidence/deduplicate-notes.md
-7. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
-8. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
-9. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
-10. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
+2. Read the finding bodies, review notes, attached evidence, recon context, phase handoff context, and relevant source code when needed to decide whether two findings describe the same root defect.
+3. Use the handoff context to preserve prior setup discoveries, blockers, likely follow-up leads, and confirmed dead ends while clustering.
+4. Treat the workspace as a disposable per-task copy. Write durable audit artifacts only under the run directory.
+5. Keep filesystem searches scoped to the workspace and run directory. Do not run broad host filesystem scans such as find / or inspect host mounts like /Users; use /tmp only for temporary tools or repro files.
+6. Write clustering notes, canonical selections, duplicate rationale, and any uncertainty to %[2]s/evidence/deduplicate-notes.md.
+7. Register the notes with: mnm evidence add --kind markdown --title "Deduplication notes" --path %[2]s/evidence/deduplicate-notes.md
+8. Write a structured task handoff JSON file to %[2]s/evidence/handoff-deduplicate.json using this schema:
+
+%[8]s
+
+Register it with: mnm evidence add --kind json --title "Task handoff: Deduplication" --path %[2]s/evidence/handoff-deduplicate.json
+9. For every finding listed as "Pending deduplicate verdict", record exactly one deduplicate verdict.
+10. For a unique issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value canonical --reason "..."
+11. For a duplicate issue, record: mnm verdict record --finding FINDING_ID --phase deduplicate --value duplicate --canonical-finding CANONICAL_FINDING_ID --reason "Duplicate of CANONICAL_FINDING_ID because ..."
+12. Complete the task with: mnm task complete --status completed --summary "Deduplicated reviewed findings"
 
 Deduplication quality bar:
 
@@ -187,7 +204,8 @@ Deduplication quality bar:
 - Findings in the same file, framework, category, or symptom family are not automatically duplicates.
 - Do not reject findings in Deduplicate. If a reviewed finding seems weak, mark it canonical and leave proof or failure to Validate.
 - Prefer the clearest, most complete finding as the canonical finding for a duplicate cluster.
-`, workspace, runDir, len(allFindings), scopeText(cfg), findingText, pendingIDs), nil
+- Preserve clustering commands, setup discoveries, blockers, likely follow-up leads, and confirmed duplicate dead ends in the structured handoff.
+`, workspace, runDir, len(allFindings), scopeText(cfg), findingText, pendingIDs, handoffRel, taskHandoffSchemaText()), nil
 }
 
 func formatDeduplicateFindings(runDir string, findings []FindingRecord, pending map[string]struct{}) (string, error) {

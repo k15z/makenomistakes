@@ -212,6 +212,8 @@ func runnerTaskCommandContext(ctx context.Context, args []string, stdout, stderr
 	setupScript := flags.String("setup-script", "", "workspace-relative setup script to source before opencode")
 	setupTimeoutMinutes := flags.Int("setup-timeout-minutes", defaultRunnerSetupTimeoutMinutes, "setup script timeout in minutes")
 	setupMode := flags.String("setup-mode", "fail", "setup failure mode: fail or warn")
+	leadID := flags.String("lead-id", "", "lead id associated with this task")
+	findingID := flags.String("finding-id", "", "finding id associated with this task")
 	skipBundleVerify := flags.Bool("skip-bundle-verify", false, "skip task bundle verification after opencode exits")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -225,6 +227,9 @@ func runnerTaskCommandContext(ctx context.Context, args []string, stdout, stderr
 	}
 	if *timeoutMinutes <= 0 {
 		return errors.New("runner task --timeout-minutes must be positive")
+	}
+	if *leadID != "" && *findingID != "" {
+		return errors.New("runner task --lead-id and --finding-id are mutually exclusive")
 	}
 	setup := RunnerSetupConfig{
 		Script:         *setupScript,
@@ -305,13 +310,28 @@ func runnerTaskCommandContext(ctx context.Context, args []string, stdout, stderr
 		return err
 	}
 	setupResult, err := runTaskSetupHook(ctx, workspaceDir, *runDir, opencodeTask{
-		RunID:  task.RunID,
-		TaskID: task.TaskID,
-		Phase:  task.Phase,
-		Setup:  setup,
+		RunID:     task.RunID,
+		TaskID:    task.TaskID,
+		Phase:     task.Phase,
+		LeadID:    *leadID,
+		FindingID: *findingID,
+		Setup:     setup,
 	}, 1)
 	if err != nil {
 		return err
+	}
+	if setup.Script != "" {
+		if err := registerSuccessfulTaskSetupLog(*runDir, *runDir, opencodeTask{
+			RunID:     task.RunID,
+			TaskID:    task.TaskID,
+			Phase:     task.Phase,
+			Title:     "mnm " + task.Phase + " " + task.TaskID,
+			LeadID:    *leadID,
+			FindingID: *findingID,
+			Setup:     setup,
+		}, 1); err != nil {
+			return err
+		}
 	}
 
 	command := exec.Command(opencodePath,
@@ -333,6 +353,12 @@ func runnerTaskCommandContext(ctx context.Context, args []string, stdout, stderr
 		taskFileEnv + "=" + taskFileInBundle,
 		"PATH=/tmp:" + envValue(baseEnv, "PATH"),
 	})
+	if *leadID != "" {
+		env = mergeEnv(env, []string{"MNM_LEAD_ID=" + *leadID})
+	}
+	if *findingID != "" {
+		env = mergeEnv(env, []string{"MNM_FINDING_ID=" + *findingID})
+	}
 	command.Env = env
 
 	logFile, err := os.OpenFile(resolvedLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, filePerm)
@@ -863,6 +889,9 @@ func registerSuccessfulTaskSetupLog(runDir, taskRunDir string, task opencodeTask
 		return nil
 	}
 	relPath := taskSetupLogRelPath(task.TaskID, attempt)
+	if _, exists := ledgerTaskEvidence(runDir, task.TaskID, relPath); exists {
+		return nil
+	}
 	source := filepath.Join(taskRunDir, filepath.FromSlash(relPath))
 	if _, err := os.Stat(source); err != nil {
 		return fmt.Errorf("setup log %s was not captured for task %s: %w", relPath, task.TaskID, err)
@@ -873,11 +902,15 @@ func registerSuccessfulTaskSetupLog(runDir, taskRunDir string, task opencodeTask
 			return fmt.Errorf("copy setup log %s: %w", relPath, err)
 		}
 	}
+	title := "Setup hook log: " + task.Phase
+	if task.Title != "" {
+		title = "Setup hook log: " + task.Title
+	}
 	_, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
 		RunID:              task.RunID,
 		TaskID:             task.TaskID,
 		Kind:               "log",
-		Title:              "Task setup log",
+		Title:              title,
 		Path:               relPath,
 		LeadID:             task.LeadID,
 		FindingID:          task.FindingID,

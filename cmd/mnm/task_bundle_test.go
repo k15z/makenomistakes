@@ -427,7 +427,7 @@ func TestValidateTaskBundleAllowsSetupLogEvidenceForFinalize(t *testing.T) {
 			Timestamp: "2026-01-01T00:00:00Z",
 			Data: map[string]any{
 				"kind":           "log",
-				"title":          "Task setup log",
+				"title":          "Setup hook log: finalize",
 				"path":           setupLogRelPath,
 				"content_sha256": taskBundleFileSHA256ForTest(t, bundleDir, setupLogRelPath),
 			},
@@ -469,7 +469,7 @@ func TestValidateTaskBundleRejectsSetupLogEvidenceForOtherTask(t *testing.T) {
 			Timestamp: "2026-01-01T00:00:00Z",
 			Data: map[string]any{
 				"kind":           "log",
-				"title":          "Task setup log",
+				"title":          "Setup hook log: review",
 				"path":           setupLogRelPath,
 				"content_sha256": taskBundleFileSHA256ForTest(t, bundleDir, setupLogRelPath),
 			},

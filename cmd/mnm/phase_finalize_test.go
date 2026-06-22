@@ -10,9 +10,10 @@ import (
 
 func TestFinalizePromptIncludesRequiredReportCommands(t *testing.T) {
 	runDir := newLedgerTestRun(t)
+	handoffRel := "evidence/phase-handoff-task_finalize.json"
 	prompt, err := finalizePrompt(runDir, "/workspace", Config{
 		Instructions: InstructionConfig{Scope: "Security and correctness only."},
-	})
+	}, handoffRel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,6 +23,8 @@ func TestFinalizePromptIncludesRequiredReportCommands(t *testing.T) {
 		"Ledger path: " + filepath.ToSlash(filepath.Join(runDir, "events.jsonl")),
 		"Security and correctness only.",
 		"Read " + filepath.ToSlash(filepath.Join(runDir, "evidence", "finalize-context.json")) + " first",
+		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
+		"structured phase handoff context",
 		"Do not read opencode-*.jsonl transcripts",
 		"treat validation notes and verdict details as higher authority",
 		"hardcoded session signing secret is not by itself proof of forged authenticated sessions",

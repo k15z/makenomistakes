@@ -51,9 +51,10 @@ func TestReviewPromptIncludesRequiredLedgerCommands(t *testing.T) {
 		BodyPath:   "evidence/finding-auth.md",
 	}
 
+	handoffRel := "evidence/phase-handoff-task_review_finding_auth.json"
 	prompt, err := reviewPrompt(runDir, "/workspace", Config{
 		Instructions: InstructionConfig{Scope: "Security and correctness only."},
-	}, finding)
+	}, finding, handoffRel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,10 @@ func TestReviewPromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"Finding ID: finding_auth",
 		"Security and correctness only.",
 		"Admin routes do not check user role",
+		filepath.ToSlash(filepath.Join(runDir, handoffRel)),
 		"mnm evidence add --kind markdown",
+		filepath.ToSlash(filepath.Join(runDir, "evidence", "handoff-review-finding_auth.json")),
+		"attempted_commands",
 		"mnm verdict record --finding finding_auth --phase review --value accepted",
 		"mnm verdict record --finding finding_auth --phase review --value rejected",
 		"mnm task complete --status completed",
@@ -105,8 +109,13 @@ cat > "$MNM_RUN_DIR/evidence/review-$MNM_FINDING_ID-notes.md" <<'EOF'
 
 Finding accepted by fake opencode.
 EOF
+cat > "$MNM_RUN_DIR/evidence/handoff-review-$MNM_FINDING_ID.json" <<EOF
+{"version":1,"phase":"review","task_id":"$MNM_TASK_ID","finding_id":"$MNM_FINDING_ID","attempted_commands":["fake review"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}
+EOF
+handoff_sha="$( (sha256sum "$MNM_RUN_DIR/evidence/handoff-review-$MNM_FINDING_ID.json" 2>/dev/null || shasum -a 256 "$MNM_RUN_DIR/evidence/handoff-review-$MNM_FINDING_ID.json") | awk '{print $1}')"
 cat >> "$MNM_RUN_DIR/events.jsonl" <<EOF
 {"id":"event_review_evidence_$MNM_FINDING_ID","run_id":"run_review","type":"evidence.added","object":"evidence","object_id":"evidence_review_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:00Z","data":{"kind":"markdown","title":"Review notes","path":"evidence/review-$MNM_FINDING_ID-notes.md","content_sha256":"ddac59eafaa08bc99530d71bd9784951b3b1fee0973d0d75fde6a294b3b60e53","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
+{"id":"event_review_handoff_$MNM_FINDING_ID","run_id":"run_review","type":"evidence.added","object":"evidence","object_id":"evidence_review_handoff_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"kind":"json","title":"Task handoff: $MNM_FINDING_ID","path":"evidence/handoff-review-$MNM_FINDING_ID.json","content_sha256":"$handoff_sha","lead_id":"","finding_id":"$MNM_FINDING_ID"}}
 {"id":"event_review_$MNM_FINDING_ID","run_id":"run_review","type":"verdict.recorded","object":"verdict","object_id":"verdict_$MNM_FINDING_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:01Z","data":{"finding_id":"$MNM_FINDING_ID","phase":"review","value":"accepted","reason":"accepted by fake opencode"}}
 {"id":"event_done_$MNM_FINDING_ID","run_id":"run_review","type":"task.completed","object":"task","object_id":"$MNM_TASK_ID","task_id":"$MNM_TASK_ID","timestamp":"2026-01-01T00:00:02Z","data":{"status":"completed","summary":"done"}}
 EOF
