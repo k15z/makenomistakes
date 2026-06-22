@@ -54,8 +54,11 @@ The target runner model owns all model execution by scheduling one disposable
 task VM per `opencode` task attempt. Each task VM installs or bootstraps
 `opencode`, receives the matching `mnm` CLI as the structured ledger interface,
 and bootstraps a pinned Node.js toolchain when the snapshot contains
-`package.json` files. It also ensures `ripgrep` is available so agents have a
-reliable fast search tool inside the disposable audit environment.
+`package.json` files. It also ensures a baseline audit toolbelt is available:
+`ripgrep`, `git`, `curl`, `ca-certificates`, `jq`, `unzip`, `tar`, `xz-utils`,
+`file`, `make`, `build-essential`, `pkg-config`, `python3`, `python3-venv`,
+`python3-pip`, Docker, and Docker Compose when available from the VM package
+repositories.
 Each task VM receives the immutable workspace snapshot plus the ledger and
 evidence context needed for its task. Build artifacts, package installs, dev
 servers, containers, and repro files disappear with that VM after the host has
