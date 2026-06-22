@@ -165,8 +165,8 @@ memory_gb = 8
 disk_gb = 80
 timeout_minutes = 120
 opencode_task_timeout_minutes = 30
-max_leads = 24
-max_investigations = 24
+max_leads = 42
+max_investigations = 42
 parallel_tasks = 2
 ```
 
