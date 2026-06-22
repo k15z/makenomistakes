@@ -26,6 +26,12 @@ func TestInitCreatesConfigAndIgnore(t *testing.T) {
 	if !strings.Contains(config, `risk_areas = []`) {
 		t.Fatalf("config missing risk areas:\n%s", config)
 	}
+	if !strings.Contains(config, `max_leads = 42`) {
+		t.Fatalf("config missing broad max lead default:\n%s", config)
+	}
+	if !strings.Contains(config, `max_investigations = 42`) {
+		t.Fatalf("config missing broad max investigation default:\n%s", config)
+	}
 
 	ignore := readFile(t, filepath.Join(dir, ".mnmignore"))
 	if !strings.Contains(ignore, ".mnm/") {
