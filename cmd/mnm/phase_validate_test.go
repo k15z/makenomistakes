@@ -31,6 +31,9 @@ func TestValidatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"mnm verdict record --finding finding_auth --phase validate --value proven",
 		"mnm verdict record --finding finding_auth --phase validate --value failed",
 		"mnm verdict record --finding finding_auth --phase validate --value inconclusive",
+		"bounded sibling-instance check",
+		"under-covered follow-up areas, sibling instances, adjacent risk classes",
+		"bundles separable root causes",
 		"mnm task complete --status completed",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "validate-finding_auth-notes.md")),
 	} {

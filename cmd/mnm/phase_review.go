@@ -277,7 +277,9 @@ Review quality bar:
 
 - Be cynical. Reject findings that do not survive concrete code inspection.
 - Do not create new findings in Review. Record a verdict for this candidate only.
-- Preserve important commands, setup discoveries, blockers, and confirmed dead ends in the structured handoff.
+- Preserve important commands, setup discoveries, blockers, under-covered follow-up areas, sibling instances, adjacent risk classes, and confirmed dead ends in the structured handoff.
+- If the candidate bundles separable root causes whose proof, remediation, or ownership differs, call that out in review notes and likely_leads instead of accepting it as one broad issue.
+- When a candidate survives review, do a bounded sibling-instance check for the same class of bug in nearby files, routes, handlers, templates, configuration blocks, or data flows.
 - Record uncertainty in the review notes and reason rather than overstating the result.
 `, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), sourceLead, formatEvidenceList(runDir, leadEvidence), handoffRel, safeFindingID, taskHandoffSchemaText()), nil
 }

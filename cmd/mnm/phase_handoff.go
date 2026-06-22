@@ -471,7 +471,7 @@ func taskHandoffSchemaText() string {
       "next_command": "optional concrete next command to try"
     }
   ],
-  "likely_leads": ["follow-up areas or leads that still look plausible"],
+  "likely_leads": ["under-covered follow-up areas, same-class sibling instances, or adjacent risk classes that deserve another pass"],
   "confirmed_dead_ends": [
     {
       "summary": "area ruled out and the concrete reason",
