@@ -105,6 +105,7 @@ func runFinalizeTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Timeout:  openCodeTaskTimeout(cfg),
+		Setup:    cfg.Runner.Setup,
 		Verify: func(verifyRunDir string) error {
 			report, ok, err := latestFinalizedReportForTask(verifyRunDir, task.TaskID)
 			if err != nil {

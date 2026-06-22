@@ -361,6 +361,57 @@ func TestAnalyzeResumesPreparedRun(t *testing.T) {
 	_ = onlyRunIDWithStatus(t, dir, RunStatusCompleted)
 }
 
+func TestAnalyzeResumeUsesSavedSnapshotForSetupHook(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", dir}, &stdout, &stderr); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "audit"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	setupPath := filepath.Join(dir, "audit", "setup.sh")
+	if err := os.WriteFile(setupPath, []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "mnm.toml")
+	config := readFile(t, configPath)
+	config = strings.Replace(config, `script = ""`, `script = "audit/setup.sh"`, 1)
+	if err := os.WriteFile(configPath, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		PrepareOnly:  true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, &recordingRunner{}); err != nil {
+		t.Fatalf("prepare analyze failed: %v", err)
+	}
+	runID := onlyRunIDWithStatus(t, dir, RunStatusPrepared)
+	if err := os.Remove(setupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	runner := &recordingRunner{}
+	if err := analyzeWorkspace(t.Context(), AnalyzeOptions{
+		WorkspaceDir: dir,
+		ResumeRunID:  runID,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+	}, runner); err != nil {
+		t.Fatalf("resume analyze should use saved snapshot setup script: %v", err)
+	}
+	if !runner.called {
+		t.Fatal("expected resume to call runner")
+	}
+}
+
 func TestAnalyzeRejectsCompletedResume(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")

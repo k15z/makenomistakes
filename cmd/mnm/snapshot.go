@@ -191,6 +191,91 @@ func extractWorkspaceSnapshot(snapshotPath, dst string) error {
 	return nil
 }
 
+func validateWorkspaceSnapshotContainsFile(snapshotPath, relPath string) error {
+	cleanRelPath, err := cleanWorkspaceRelativePath(relPath)
+	if err != nil {
+		return err
+	}
+	input, err := os.Open(snapshotPath)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	decoder, err := zstd.NewReader(input)
+	if err != nil {
+		return err
+	}
+	defer decoder.Close()
+	reader := tar.NewReader(decoder)
+	entries := map[string]tar.Header{}
+
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return validateWorkspaceSnapshotFileEntry(entries, cleanRelPath)
+		}
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(filepath.Clean(filepath.FromSlash(header.Name)))
+		if name == "." || name == ".." || strings.HasPrefix(name, "../") {
+			continue
+		}
+		entries[name] = *header
+	}
+}
+
+func validateWorkspaceSnapshotFileEntry(entries map[string]tar.Header, relPath string) error {
+	seen := map[string]bool{}
+	current := relPath
+	for {
+		if seen[current] {
+			return fmt.Errorf("workspace snapshot setup script %s has a symlink cycle", relPath)
+		}
+		seen[current] = true
+		header, ok := entries[current]
+		if !ok {
+			return fmt.Errorf("workspace snapshot does not contain setup script %s", current)
+		}
+		switch header.Typeflag {
+		case tar.TypeReg, tar.TypeRegA:
+			return nil
+		case tar.TypeSymlink:
+			target, err := cleanSnapshotSymlinkTarget(current, header.Linkname)
+			if err != nil {
+				return fmt.Errorf("workspace snapshot setup script %s has unsafe symlink target: %w", current, err)
+			}
+			current = target
+		case tar.TypeDir:
+			return fmt.Errorf("workspace snapshot setup script %s is a directory", current)
+		default:
+			return fmt.Errorf("workspace snapshot setup script %s is not a regular file or symlink", current)
+		}
+	}
+}
+
+func cleanSnapshotSymlinkTarget(linkPath, target string) (string, error) {
+	if strings.TrimSpace(target) == "" || filepath.IsAbs(target) {
+		return "", errors.New("target must be relative")
+	}
+	base := filepath.Dir(filepath.FromSlash(linkPath))
+	clean := filepath.ToSlash(filepath.Clean(filepath.Join(base, filepath.FromSlash(target))))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", errors.New("target must stay inside the workspace root")
+	}
+	return clean, nil
+}
+
+func validateRunnerSetupInSnapshot(snapshotPath string, setup RunnerSetupConfig) error {
+	if strings.TrimSpace(setup.Script) == "" {
+		return nil
+	}
+	if err := validateRunnerSetupSyntax(setup); err != nil {
+		return err
+	}
+	return validateWorkspaceSnapshotContainsFile(snapshotPath, setup.Script)
+}
+
 func safeSnapshotTarget(dst, name string) (string, error) {
 	if name == "" || filepath.IsAbs(name) {
 		return "", fmt.Errorf("unsafe snapshot entry path %q", name)

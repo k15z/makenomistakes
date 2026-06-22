@@ -44,8 +44,12 @@ type RunnerRequest struct {
 }
 
 func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
+	return runnerCommandContext(context.Background(), args, stdout, stderr)
+}
+
+func runnerCommandContext(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
 	if len(args) > 0 && args[0] == "task" {
-		return runnerTaskCommand(args[1:], stdout, stderr)
+		return runnerTaskCommandContext(ctx, args[1:], stdout, stderr)
 	}
 	flags := flag.NewFlagSet("runner", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -132,42 +136,42 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 	}
 
 	failure.Stage = "recon"
-	if err := runReconTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+	if err := runReconTaskWithAttemptRunnerContext(ctx, *runDir, *runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}); err != nil {
 		return err
 	}
 	if shouldStopAfterPhase(stopAfterPhase, "recon") {
 		return recordRunnerStopped(*runDir, *runID, workspace, "recon", stdout)
 	}
 	failure.Stage = "investigate"
-	if err := runInvestigatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+	if err := runInvestigatePhaseWithAttemptRunnerContext(ctx, *runDir, *runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}); err != nil {
 		return err
 	}
 	if shouldStopAfterPhase(stopAfterPhase, "investigate") {
 		return recordRunnerStopped(*runDir, *runID, workspace, "investigate", stdout)
 	}
 	failure.Stage = "review"
-	if err := runReviewPhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+	if err := runReviewPhaseWithAttemptRunnerContext(ctx, *runDir, *runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}); err != nil {
 		return err
 	}
 	if shouldStopAfterPhase(stopAfterPhase, "review") {
 		return recordRunnerStopped(*runDir, *runID, workspace, "review", stdout)
 	}
 	failure.Stage = "deduplicate"
-	if err := runDeduplicatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+	if err := runDeduplicatePhaseWithAttemptRunnerContext(ctx, *runDir, *runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}); err != nil {
 		return err
 	}
 	if shouldStopAfterPhase(stopAfterPhase, "deduplicate") {
 		return recordRunnerStopped(*runDir, *runID, workspace, "deduplicate", stdout)
 	}
 	failure.Stage = "validate"
-	if err := runValidatePhase(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+	if err := runValidatePhaseWithAttemptRunnerContext(ctx, *runDir, *runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}); err != nil {
 		return err
 	}
 	if shouldStopAfterPhase(stopAfterPhase, "validate") {
 		return recordRunnerStopped(*runDir, *runID, workspace, "validate", stdout)
 	}
 	failure.Stage = "finalize"
-	if err := runFinalizeTask(*runDir, *runID, workspace, cfg, opencodePath); err != nil {
+	if err := runFinalizeTaskWithAttemptRunnerContext(ctx, *runDir, *runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath}); err != nil {
 		return err
 	}
 
@@ -189,6 +193,10 @@ func runnerCommand(args []string, stdout, stderr io.Writer) (err error) {
 }
 
 func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
+	return runnerTaskCommandContext(context.Background(), args, stdout, stderr)
+}
+
+func runnerTaskCommandContext(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("runner task", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	runDir := flags.String("run-dir", "", "task output bundle directory")
@@ -201,6 +209,9 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	opencodePathFlag := flags.String("opencode-path", "", "opencode executable path")
 	logPath := flags.String("log-path", "", "opencode transcript path")
 	timeoutMinutes := flags.Int("timeout-minutes", effectiveOpenCodeTaskTimeoutMinutes(Config{}), "opencode task timeout in minutes")
+	setupScript := flags.String("setup-script", "", "workspace-relative setup script to source before opencode")
+	setupTimeoutMinutes := flags.Int("setup-timeout-minutes", defaultRunnerSetupTimeoutMinutes, "setup script timeout in minutes")
+	setupMode := flags.String("setup-mode", "fail", "setup failure mode: fail or warn")
 	skipBundleVerify := flags.Bool("skip-bundle-verify", false, "skip task bundle verification after opencode exits")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -214,6 +225,14 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if *timeoutMinutes <= 0 {
 		return errors.New("runner task --timeout-minutes must be positive")
+	}
+	setup := RunnerSetupConfig{
+		Script:         *setupScript,
+		TimeoutMinutes: *setupTimeoutMinutes,
+		Mode:           *setupMode,
+	}
+	if err := validateRunnerTaskSetupFlags(setup); err != nil {
+		return err
 	}
 	task, err := readTaskFile(*taskFile)
 	if err != nil {
@@ -285,6 +304,15 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 	if err := ensureWorkspaceToolchains(workspaceDir); err != nil {
 		return err
 	}
+	setupResult, err := runTaskSetupHook(ctx, workspaceDir, *runDir, opencodeTask{
+		RunID:  task.RunID,
+		TaskID: task.TaskID,
+		Phase:  task.Phase,
+		Setup:  setup,
+	}, 1)
+	if err != nil {
+		return err
+	}
 
 	command := exec.Command(opencodePath,
 		"run",
@@ -296,14 +324,15 @@ func runnerTaskCommand(args []string, stdout, stderr io.Writer) error {
 		string(prompt),
 	)
 	isolateCommandProcessGroup(command)
-	env := append(os.Environ(),
-		"MNM_RUN_DIR="+*runDir,
-		ledgerDirEnv+"="+privateLedgerDir,
-		"MNM_TASK_ID="+task.TaskID,
-		"MNM_PHASE="+task.Phase,
-		taskFileEnv+"="+taskFileInBundle,
-		"PATH=/tmp:"+os.Getenv("PATH"),
-	)
+	baseEnv := mergeEnv(os.Environ(), setupResult.Env)
+	env := mergeEnv(baseEnv, []string{
+		"MNM_RUN_DIR=" + *runDir,
+		ledgerDirEnv + "=" + privateLedgerDir,
+		"MNM_TASK_ID=" + task.TaskID,
+		"MNM_PHASE=" + task.Phase,
+		taskFileEnv + "=" + taskFileInBundle,
+		"PATH=/tmp:" + envValue(baseEnv, "PATH"),
+	})
 	command.Env = env
 
 	logFile, err := os.OpenFile(resolvedLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, filePerm)
@@ -580,6 +609,7 @@ func runReconTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID, wo
 		LogPath:  logPath,
 		TaskFile: filepath.Join(runDir, currentTaskFile),
 		Timeout:  openCodeTaskTimeout(cfg),
+		Setup:    cfg.Runner.Setup,
 		BundleIngestOptions: taskBundleIngestOptions{
 			AllowAfterCompleted: allowRecoveryIngest,
 		},
@@ -731,6 +761,7 @@ type opencodeTask struct {
 	Timeout             time.Duration
 	Verify              func(string) error
 	BundleIngestOptions taskBundleIngestOptions
+	Setup               RunnerSetupConfig
 }
 
 type opencodeTaskAttemptRunner interface {
@@ -748,7 +779,7 @@ func (runner directOpenCodeTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context
 	if err := ctx.Err(); err != nil {
 		return openCodeAttemptResult{}, err
 	}
-	return runDirectOpenCodeTaskAttempt(runner.opencodePath, workspace, runDir, task, attempt)
+	return runDirectOpenCodeTaskAttempt(ctx, runner.opencodePath, workspace, runDir, task, attempt)
 }
 
 func runOpenCodeTask(opencodePath, workspace, runDir string, task opencodeTask) error {
@@ -797,6 +828,9 @@ func runOpenCodeTaskWithAttemptRunnerContext(ctx context.Context, attemptRunner 
 			}
 		}
 		if err == nil {
+			if setupErr := registerSuccessfulTaskSetupLog(runDir, result.TaskRunDir, task, attempt); setupErr != nil {
+				return setupErr
+			}
 			return nil
 		}
 		lastErr = err
@@ -824,6 +858,34 @@ func runOpenCodeTaskWithAttemptRunnerContext(ctx context.Context, attemptRunner 
 	return fmt.Errorf("opencode task %s failed after %d attempt(s): %w%s", task.TaskID, attempts, lastErr, openCodeLogExcerpt(task.LogPath))
 }
 
+func registerSuccessfulTaskSetupLog(runDir, taskRunDir string, task opencodeTask, attempt int) error {
+	if strings.TrimSpace(task.Setup.Script) == "" {
+		return nil
+	}
+	relPath := taskSetupLogRelPath(task.TaskID, attempt)
+	source := filepath.Join(taskRunDir, filepath.FromSlash(relPath))
+	if _, err := os.Stat(source); err != nil {
+		return fmt.Errorf("setup log %s was not captured for task %s: %w", relPath, task.TaskID, err)
+	}
+	target := filepath.Join(runDir, filepath.FromSlash(relPath))
+	if filepath.Clean(source) != filepath.Clean(target) {
+		if err := copyFileMode(source, target, filePerm); err != nil {
+			return fmt.Errorf("copy setup log %s: %w", relPath, err)
+		}
+	}
+	_, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:              task.RunID,
+		TaskID:             task.TaskID,
+		Kind:               "log",
+		Title:              "Task setup log",
+		Path:               relPath,
+		LeadID:             task.LeadID,
+		FindingID:          task.FindingID,
+		AllowContentChange: true,
+	})
+	return err
+}
+
 type openCodeAttemptResult struct {
 	logText        string
 	ledgerModified bool
@@ -831,7 +893,7 @@ type openCodeAttemptResult struct {
 	Bundle         bool
 }
 
-func runDirectOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
+func runDirectOpenCodeTaskAttempt(ctx context.Context, opencodePath, workspace, runDir string, task opencodeTask, attempt int) (openCodeAttemptResult, error) {
 	result := openCodeAttemptResult{TaskRunDir: runDir}
 	taskRunDir := runDir
 	taskFile := task.TaskFile
@@ -859,6 +921,10 @@ func runDirectOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task o
 	if err != nil {
 		return result, err
 	}
+	setupResult, err := runTaskSetupHook(ctx, workspace, taskRunDir, task, attempt)
+	if err != nil {
+		return result, err
+	}
 	logFile, err := os.OpenFile(task.LogPath, flag, filePerm)
 	if err != nil {
 		return result, err
@@ -873,23 +939,24 @@ func runDirectOpenCodeTaskAttempt(opencodePath, workspace, runDir string, task o
 		prompt,
 	)
 	isolateCommandProcessGroup(command)
-	env := append(os.Environ(),
-		"MNM_RUN_DIR="+taskRunDir,
-		"MNM_TASK_ID="+task.TaskID,
-		"MNM_PHASE="+task.Phase,
-		"PATH=/tmp:"+os.Getenv("PATH"),
-	)
+	baseEnv := mergeEnv(os.Environ(), setupResult.Env)
+	env := mergeEnv(baseEnv, []string{
+		"MNM_RUN_DIR=" + taskRunDir,
+		"MNM_TASK_ID=" + task.TaskID,
+		"MNM_PHASE=" + task.Phase,
+		"PATH=/tmp:" + envValue(baseEnv, "PATH"),
+	})
 	if task.usesTaskBundle() {
-		env = append(env, ledgerDirEnv+"="+runDir)
+		env = mergeEnv(env, []string{ledgerDirEnv + "=" + runDir})
 	}
 	if task.LeadID != "" {
-		env = append(env, "MNM_LEAD_ID="+task.LeadID)
+		env = mergeEnv(env, []string{"MNM_LEAD_ID=" + task.LeadID})
 	}
 	if task.FindingID != "" {
-		env = append(env, "MNM_FINDING_ID="+task.FindingID)
+		env = mergeEnv(env, []string{"MNM_FINDING_ID=" + task.FindingID})
 	}
 	if taskFile != "" {
-		env = append(env, taskFileEnv+"="+taskFile)
+		env = mergeEnv(env, []string{taskFileEnv + "=" + taskFile})
 	}
 	command.Env = env
 	command.Stdout = logFile

@@ -104,6 +104,7 @@ func runValidateTaskWithAttemptRunnerContext(ctx context.Context, runDir, runID,
 		LogPath:   logPath,
 		TaskFile:  taskPath,
 		Timeout:   openCodeTaskTimeout(cfg),
+		Setup:     cfg.Runner.Setup,
 		Verify: func(verifyRunDir string) error {
 			if !ledgerFindingHasTaskEvidencePath(verifyRunDir, finding.ID, task.TaskID, notesRel) {
 				return fmt.Errorf("validate opencode task did not register validation evidence %s for finding %s", notesRel, finding.ID)

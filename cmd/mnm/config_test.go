@@ -136,6 +136,97 @@ func TestConfigRejectsInvalidOpenCodeTaskTimeout(t *testing.T) {
 	}
 }
 
+func TestConfigAcceptsRunnerSetupHook(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "audit"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "audit", "setup.sh"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), `script = ""`, `script = "audit/setup.sh"`, 1)
+	config = strings.Replace(config, `mode = "fail"`, `mode = "warn"`, 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.validate(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := effectiveRunnerSetupTimeout(cfg.Runner.Setup); got != 15*time.Minute {
+		t.Fatalf("setup timeout = %s, want 15m", got)
+	}
+	if got := runnerSetupMode(cfg.Runner.Setup); got != "warn" {
+		t.Fatalf("setup mode = %q, want warn", got)
+	}
+}
+
+func TestConfigRejectsInvalidRunnerSetupHook(t *testing.T) {
+	tests := []struct {
+		name     string
+		edit     func(string) string
+		wantText string
+	}{
+		{
+			name: "absolute script",
+			edit: func(config string) string {
+				return strings.Replace(config, `script = ""`, `script = "/tmp/setup.sh"`, 1)
+			},
+			wantText: "path must be relative",
+		},
+		{
+			name: "traversal script",
+			edit: func(config string) string {
+				return strings.Replace(config, `script = ""`, `script = "../setup.sh"`, 1)
+			},
+			wantText: "path must stay inside",
+		},
+		{
+			name: "negative timeout",
+			edit: func(config string) string {
+				return strings.Replace(config, `timeout_minutes = 15`, `timeout_minutes = -1`, 1)
+			},
+			wantText: "runner.setup.timeout_minutes must not be negative",
+		},
+		{
+			name: "bad mode",
+			edit: func(config string) string {
+				return strings.Replace(config, `mode = "fail"`, `mode = "continue"`, 1)
+			},
+			wantText: `runner.setup.mode must be "fail" or "warn"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "mnm.toml")
+			config := tt.edit(defaultConfig())
+			if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+			cfg, err := loadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = cfg.validate(dir)
+			if err == nil {
+				t.Fatal("expected runner setup validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestPhaseModelUsesInvestigateOverride(t *testing.T) {
 	cfg := Config{
 		Models: ModelConfig{

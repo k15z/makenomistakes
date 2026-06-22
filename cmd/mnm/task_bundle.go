@@ -159,7 +159,7 @@ func validateTaskBundlePhaseEvent(task TaskRecord, event LedgerEvent) error {
 				return fmt.Errorf("phase %q cannot attach finding evidence", task.Phase)
 			}
 		default:
-			if !oneOf(task.Phase, "recon", "deduplicate") {
+			if !oneOf(task.Phase, "recon", "deduplicate") && !isTaskSetupLogEvidence(task, event) {
 				return fmt.Errorf("phase %q cannot register unowned evidence", task.Phase)
 			}
 		}
@@ -174,6 +174,33 @@ func validateTaskBundlePhaseEvent(task TaskRecord, event LedgerEvent) error {
 		}
 	}
 	return nil
+}
+
+func isTaskSetupLogEvidence(task TaskRecord, event LedgerEvent) bool {
+	return stringData(event.Data, "kind") == "log" &&
+		stringData(event.Data, "title") == "Task setup log" &&
+		isTaskSetupLogPath(task.TaskID, stringData(event.Data, "path"))
+}
+
+func isTaskSetupLogPath(taskID, relPath string) bool {
+	prefix := "evidence/setup-" + safeFileID(taskID) + "-attempt-"
+	if !strings.HasPrefix(relPath, prefix) || !strings.HasSuffix(relPath, ".log") {
+		return false
+	}
+	attempt := strings.TrimSuffix(strings.TrimPrefix(relPath, prefix), ".log")
+	if attempt == "" {
+		return false
+	}
+	hasNonZero := false
+	for _, char := range attempt {
+		if char < '0' || char > '9' {
+			return false
+		}
+		if char != '0' {
+			hasNonZero = true
+		}
+	}
+	return hasNonZero
 }
 
 func taskBundleEventAllowed(eventType string) bool {

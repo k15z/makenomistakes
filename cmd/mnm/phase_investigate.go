@@ -258,6 +258,7 @@ func runInvestigateTaskWithAttemptRunnerContext(ctx context.Context, runDir, run
 		LogPath:  logPath,
 		TaskFile: taskPath,
 		Timeout:  openCodeTaskTimeout(cfg),
+		Setup:    cfg.Runner.Setup,
 		Verify: func(verifyRunDir string) error {
 			evidence, ok := ledgerLeadTaskEvidence(verifyRunDir, lead.ID, task.TaskID, notesRel)
 			if !ok {
