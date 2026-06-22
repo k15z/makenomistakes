@@ -572,7 +572,7 @@ func summarizeRunnerFailure(cause error) (string, string) {
 	switch {
 	case strings.Contains(text, "argument list too long"):
 		return "opencode launch failed because the generated prompt or arguments exceeded the OS argv limit", "opencode_argv_limit"
-	case strings.Contains(text, "limactl start"):
+	case strings.Contains(text, "limactl start"), strings.Contains(text, "task vm start failed"):
 		return "task VM failed to start before opencode could run", "vm_start_failed"
 	case strings.Contains(text, "no such file or directory") && strings.Contains(text, "transcript"):
 		return "task output transcript was missing after a failed attempt", "missing_task_transcript"
@@ -1390,6 +1390,10 @@ func retryableOpenCodeError(logPath string, err error) bool {
 	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
 		retryText += "\n" + strings.ToLower(string(b))
 	}
+	var stageErr limaTaskStageError
+	if errors.As(err, &stageErr) && retryableLimaTaskStage(stageErr.Stage) {
+		return true
+	}
 	for _, marker := range []string{
 		"argument list too long",
 		"executable file not found",
@@ -1401,6 +1405,11 @@ func retryableOpenCodeError(logPath string, err error) bool {
 		}
 	}
 	for _, marker := range []string{
+		"task vm create failed",
+		"task vm start failed",
+		"task vm copy inputs failed",
+		"task vm copy output failed",
+		"limactl start",
 		`"code":502`,
 		"provider_unavailable",
 		"network connection lost",

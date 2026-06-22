@@ -94,7 +94,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		KeepVM:       runner.KeepVM,
 		SkipVerify:   true,
 	})
-	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath)
+	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath, limaAttemptShouldRequireLog(runErr))
 	if runErr != nil {
 		if logErr != nil {
 			runErr = errors.Join(runErr, logErr)
@@ -139,13 +139,16 @@ func taskLogRelPath(runDir string, task opencodeTask) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-func copyLimaAttemptLog(outputDir, logRelPath, hostLogPath string) (string, error) {
+func copyLimaAttemptLog(outputDir, logRelPath, hostLogPath string, requireLog bool) (string, error) {
 	attemptLogPath := filepath.Join(outputDir, filepath.FromSlash(logRelPath))
 	logText := readLogSuffix(attemptLogPath, 0)
 	if hostLogPath == "" {
 		return logText, nil
 	}
 	if _, err := os.Stat(attemptLogPath); err != nil {
+		if !requireLog && errors.Is(err, os.ErrNotExist) {
+			return logText, nil
+		}
 		return logText, fmt.Errorf("copy task transcript from bundle: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(hostLogPath), dirPerm); err != nil {
@@ -191,7 +194,7 @@ func (runner LimaRunner) RunTask(ctx context.Context, request LimaTaskRequest) e
 		"--disk", disk,
 		"template:ubuntu-lts",
 	); err != nil {
-		return err
+		return limaTaskStageError{Stage: "create", Err: err}
 	}
 
 	defer func() {
@@ -202,16 +205,47 @@ func (runner LimaRunner) RunTask(ctx context.Context, request LimaTaskRequest) e
 	}()
 
 	if err := runner.Executor.Run(ctx, "limactl", "start", "--tty=false", instanceName); err != nil {
-		return err
+		return limaTaskStageError{Stage: "start", Err: err}
 	}
 	if err := runner.copyTaskInputs(ctx, instanceName, payloadPath, request); err != nil {
-		return err
+		return limaTaskStageError{Stage: "copy inputs", Err: err}
 	}
 	if err := runner.runGuestTask(ctx, instanceName, request); err != nil {
 		_ = runner.copyTaskOutput(context.Background(), instanceName, request.OutputDir)
-		return err
+		return limaTaskStageError{Stage: "guest task", Err: err}
 	}
-	return runner.copyTaskOutput(ctx, instanceName, request.OutputDir)
+	if err := runner.copyTaskOutput(ctx, instanceName, request.OutputDir); err != nil {
+		return limaTaskStageError{Stage: "copy output", Err: err}
+	}
+	return nil
+}
+
+type limaTaskStageError struct {
+	Stage string
+	Err   error
+}
+
+func (err limaTaskStageError) Error() string {
+	return fmt.Sprintf("task VM %s failed: %v", err.Stage, err.Err)
+}
+
+func (err limaTaskStageError) Unwrap() error {
+	return err.Err
+}
+
+func retryableLimaTaskStage(stage string) bool {
+	return oneOf(stage, "create", "start", "copy inputs", "copy output")
+}
+
+func limaAttemptShouldRequireLog(runErr error) bool {
+	if runErr == nil {
+		return true
+	}
+	var stageErr limaTaskStageError
+	if !errors.As(runErr, &stageErr) {
+		return true
+	}
+	return !retryableLimaTaskStage(stageErr.Stage)
 }
 
 func validateLimaTaskRequest(request LimaTaskRequest) error {
