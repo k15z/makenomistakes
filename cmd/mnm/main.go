@@ -171,7 +171,7 @@ timeout_minutes = 120
 opencode_task_timeout_minutes = 30
 max_leads = 42
 max_investigations = 42
-parallel_tasks = 2
+parallel_tasks = 0 # auto-size from host CPU, memory, and Lima disk; set >0 to pin
 
 [runner.setup]
 script = ""

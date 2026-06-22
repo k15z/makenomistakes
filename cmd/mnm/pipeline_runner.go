@@ -16,6 +16,7 @@ type AttemptPipelineRunner struct {
 	ManifestOpenCodePath         string
 	ManifestOpenCodeVersion      string
 	BootstrapWorkspaceToolchains bool
+	EffectiveParallelTasks       int
 }
 
 type HostPipelineRunner struct {
@@ -31,6 +32,14 @@ func (runner HostPipelineRunner) Preflight(ctx context.Context, request RunnerPr
 
 func (runner HostPipelineRunner) Run(ctx context.Context, request RunnerRequest) error {
 	taskRunner := runner.taskRunner()
+	effectiveParallelTasks := 0
+	if request.Config.Runner.ParallelTasks <= 0 {
+		resources, err := taskRunner.detectHostResources()
+		if err != nil {
+			return fmt.Errorf("inspect host resources: %w", err)
+		}
+		effectiveParallelTasks = effectiveParallelTasksForResources(request.Config.Runner, resources)
+	}
 	return AttemptPipelineRunner{
 		AttemptRunner: LimaTaskAttemptRunner{
 			Runner:       taskRunner,
@@ -44,6 +53,7 @@ func (runner HostPipelineRunner) Run(ctx context.Context, request RunnerRequest)
 		Stderr:                  runner.Stderr,
 		ManifestOpenCodePath:    "task-vm",
 		ManifestOpenCodeVersion: "task-vm",
+		EffectiveParallelTasks:  effectiveParallelTasks,
 	}.Run(ctx, request)
 }
 
@@ -105,6 +115,9 @@ func (runner AttemptPipelineRunner) Run(ctx context.Context, request RunnerReque
 	cfg, err := loadConfig(run.ConfigSnapshotPath)
 	if err != nil {
 		return err
+	}
+	if cfg.Runner.ParallelTasks <= 0 && runner.EffectiveParallelTasks > 0 {
+		cfg.Runner.ParallelTasks = runner.EffectiveParallelTasks
 	}
 
 	failure.Stage = "extract_snapshot"

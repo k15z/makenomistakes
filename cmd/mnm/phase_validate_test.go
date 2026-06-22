@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestValidatePromptIncludesRequiredLedgerCommands(t *testing.T) {
@@ -100,6 +104,32 @@ printf '{"type":"done"}\n'
 	}
 }
 
+func TestRunValidatePhaseUsesConfiguredParallelism(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	addCanonicalFindingForTest(t, runDir, "finding_one", "evidence/finding-one.md", "Candidate issue one.")
+	addCanonicalFindingForTest(t, runDir, "finding_two", "evidence/finding-two.md", "Candidate issue two.")
+	addCanonicalFindingForTest(t, runDir, "finding_three", "evidence/finding-three.md", "Candidate issue three.")
+
+	attemptRunner := &parallelValidationAttemptRunner{}
+	cfg := Config{
+		Models: ModelConfig{Default: "fake/model"},
+		Runner: RunnerConfig{ParallelTasks: 2},
+	}
+	if err := runValidatePhaseWithAttemptRunner(runDir, "run_validate", t.TempDir(), cfg, attemptRunner); err != nil {
+		t.Fatal(err)
+	}
+	if got := attemptRunner.maxInFlight(); got != 2 {
+		t.Fatalf("max concurrent validation tasks = %d, want 2", got)
+	}
+	pending, err := unvalidatedCanonicalFindings(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending validation findings, got %#v", pending)
+	}
+}
+
 func TestRunValidatePhaseRequiresProofEvidenceForProvenVerdict(t *testing.T) {
 	oldDelay := openCodeRetryDelay
 	openCodeRetryDelay = 0
@@ -145,6 +175,146 @@ printf '{"type":"done"}\n'
 	if !strings.Contains(err.Error(), "recorded proven verdict for finding finding_auth without registering proof evidence beyond evidence/validate-finding_auth-notes.md") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+type parallelValidationAttemptRunner struct {
+	mu       sync.Mutex
+	inFlight int
+	max      int
+}
+
+func (runner *parallelValidationAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, _, runDir string, task opencodeTask, _ int) (openCodeAttemptResult, error) {
+	runner.mu.Lock()
+	runner.inFlight++
+	if runner.inFlight > runner.max {
+		runner.max = runner.inFlight
+	}
+	runner.mu.Unlock()
+
+	defer func() {
+		runner.mu.Lock()
+		runner.inFlight--
+		runner.mu.Unlock()
+	}()
+
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+		return openCodeAttemptResult{TaskRunDir: runDir}, ctx.Err()
+	}
+
+	findingID := task.FindingID
+	safeFindingID := safeFileID(findingID)
+	notesRel := validationNotesRelPath(findingID)
+	proofRel := filepath.ToSlash(filepath.Join("evidence", "validate-"+safeFindingID+"-proof.log"))
+	handoffRel := filepath.ToSlash(filepath.Join("evidence", "handoff-validate-"+safeFindingID+".json"))
+	files := map[string]string{
+		notesRel:   "# Validation notes\n\nValidated " + findingID + ".\n",
+		proofRel:   "proof for " + findingID + "\n",
+		handoffRel: fmt.Sprintf(`{"version":1,"phase":"validate","task_id":%q,"finding_id":%q,"attempted_commands":["fake validate"],"setup_discoveries":[],"blockers":[],"likely_leads":[],"confirmed_dead_ends":[]}`+"\n", task.TaskID, findingID),
+	}
+	for rel, body := range files {
+		path := filepath.Join(runDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+			return openCodeAttemptResult{TaskRunDir: runDir}, err
+		}
+		if err := os.WriteFile(path, []byte(body), filePerm); err != nil {
+			return openCodeAttemptResult{TaskRunDir: runDir}, err
+		}
+	}
+	notesSHA, err := evidenceFileSHA256(runDir, notesRel)
+	if err != nil {
+		return openCodeAttemptResult{TaskRunDir: runDir}, err
+	}
+	proofSHA, err := evidenceFileSHA256(runDir, proofRel)
+	if err != nil {
+		return openCodeAttemptResult{TaskRunDir: runDir}, err
+	}
+	handoffSHA, err := evidenceFileSHA256(runDir, handoffRel)
+	if err != nil {
+		return openCodeAttemptResult{TaskRunDir: runDir}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(task.LogPath), dirPerm); err != nil {
+		return openCodeAttemptResult{TaskRunDir: runDir}, err
+	}
+	if err := os.WriteFile(task.LogPath, []byte("{\"type\":\"done\"}\n"), filePerm); err != nil {
+		return openCodeAttemptResult{TaskRunDir: runDir}, err
+	}
+	return openCodeAttemptResult{TaskRunDir: runDir}, appendLedgerEvents(runDir, []LedgerEvent{
+		{
+			RunID:    task.RunID,
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_validate_notes_" + safeFindingID,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"kind":           "markdown",
+				"title":          "Validation notes",
+				"path":           notesRel,
+				"content_sha256": notesSHA,
+				"finding_id":     findingID,
+			},
+		},
+		{
+			RunID:    task.RunID,
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_validate_proof_" + safeFindingID,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"kind":           "log",
+				"title":          "Validation proof: " + findingID,
+				"path":           proofRel,
+				"content_sha256": proofSHA,
+				"finding_id":     findingID,
+			},
+		},
+		{
+			RunID:    task.RunID,
+			Type:     "evidence.added",
+			Object:   "evidence",
+			ObjectID: "evidence_validate_handoff_" + safeFindingID,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"kind":           "json",
+				"title":          "Task handoff: " + findingID,
+				"path":           handoffRel,
+				"content_sha256": handoffSHA,
+				"finding_id":     findingID,
+			},
+		},
+		{
+			RunID:    task.RunID,
+			Type:     "verdict.recorded",
+			Object:   "verdict",
+			ObjectID: "verdict_validate_" + safeFindingID,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"finding_id":           findingID,
+				"phase":                "validate",
+				"value":                "proven",
+				"reason":               "proven by fake validate runner",
+				"canonical_finding_id": "",
+			},
+		},
+		{
+			RunID:    task.RunID,
+			Type:     "task.completed",
+			Object:   "task",
+			ObjectID: task.TaskID,
+			TaskID:   task.TaskID,
+			Data: map[string]any{
+				"status":  "completed",
+				"summary": "validated by fake runner",
+			},
+		},
+	})
+}
+
+func (runner *parallelValidationAttemptRunner) maxInFlight() int {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	return runner.max
 }
 
 func TestRunValidatePhaseRequiresProofEvidenceBeforeProvenVerdict(t *testing.T) {

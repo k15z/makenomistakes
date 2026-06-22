@@ -96,7 +96,7 @@ func defaultHostResourceDetector() (HostResources, error) {
 }
 
 func validateHostResources(resources HostResources, runner RunnerConfig) error {
-	parallelTasks := effectiveParallelTasks(runner)
+	parallelTasks := effectiveParallelTasksForResources(runner, resources)
 	parallelTasksLabel := effectiveParallelTasksLabel(runner, parallelTasks)
 	if runner.CPUs > 0 {
 		if resources.CPUs <= 0 {

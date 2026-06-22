@@ -1335,7 +1335,38 @@ func TestLimaRunnerPreflightRejectsCPURequestAboveHost(t *testing.T) {
 	}
 }
 
-func TestLimaRunnerPreflightLabelsImplicitParallelism(t *testing.T) {
+func TestEffectiveParallelTasksForResourcesUsesHostCapacity(t *testing.T) {
+	runner := RunnerConfig{CPUs: 4, MemoryGB: 8, DiskGB: 80}
+	resources := HostResources{
+		CPUs:          16,
+		MemoryBytes:   24 * bytesPerGiB,
+		DiskFreeBytes: 500 * bytesPerGiB,
+		DiskPath:      "/tmp/lima",
+	}
+	if got := effectiveParallelTasksForResources(runner, resources); got != 3 {
+		t.Fatalf("effectiveParallelTasksForResources = %d, want 3", got)
+	}
+
+	runner.ParallelTasks = 5
+	if got := effectiveParallelTasksForResources(runner, resources); got != 5 {
+		t.Fatalf("explicit parallel_tasks should win, got %d", got)
+	}
+}
+
+func TestEffectiveParallelTasksForResourcesFloorsAtOne(t *testing.T) {
+	runner := RunnerConfig{CPUs: 4, MemoryGB: 8, DiskGB: 80}
+	resources := HostResources{
+		CPUs:          16,
+		MemoryBytes:   64 * bytesPerGiB,
+		DiskFreeBytes: 40 * bytesPerGiB,
+		DiskPath:      "/tmp/lima",
+	}
+	if got := effectiveParallelTasksForResources(runner, resources); got != 1 {
+		t.Fatalf("effectiveParallelTasksForResources = %d, want 1", got)
+	}
+}
+
+func TestLimaRunnerPreflightAutoScalesImplicitParallelism(t *testing.T) {
 	runner := limaRunnerWithHostResources(t, HostResources{
 		CPUs:          4,
 		MemoryBytes:   16 * bytesPerGiB,
@@ -1346,11 +1377,8 @@ func TestLimaRunnerPreflightLabelsImplicitParallelism(t *testing.T) {
 	err := runner.Preflight(context.Background(), RunnerPreflightRequest{
 		Config: Config{Runner: RunnerConfig{CPUs: 3}},
 	})
-	if err == nil {
-		t.Fatal("expected CPU resource error")
-	}
-	if !strings.Contains(err.Error(), "effective runner.parallel_tasks=2") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("preflight should auto-scale implicit parallelism: %v", err)
 	}
 }
 

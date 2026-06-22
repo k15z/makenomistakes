@@ -390,3 +390,32 @@ func effectiveParallelTasks(runner RunnerConfig) int {
 	}
 	return 1
 }
+
+func effectiveParallelTasksForResources(runner RunnerConfig, resources HostResources) int {
+	if runner.ParallelTasks > 0 {
+		return runner.ParallelTasks
+	}
+	var limits []int
+	if runner.CPUs > 0 && resources.CPUs > 0 {
+		limits = append(limits, resources.CPUs/runner.CPUs)
+	}
+	if runner.MemoryGB > 0 && resources.MemoryBytes > 0 {
+		limits = append(limits, int(resources.MemoryBytes/(uint64(runner.MemoryGB)*bytesPerGiB)))
+	}
+	if runner.DiskGB > 0 && resources.DiskFreeBytes > 0 {
+		limits = append(limits, int(resources.DiskFreeBytes/(uint64(runner.DiskGB)*bytesPerGiB)))
+	}
+	if len(limits) == 0 {
+		return effectiveParallelTasks(runner)
+	}
+	parallelTasks := limits[0]
+	for _, limit := range limits[1:] {
+		if limit < parallelTasks {
+			parallelTasks = limit
+		}
+	}
+	if parallelTasks < 1 {
+		return 1
+	}
+	return parallelTasks
+}
