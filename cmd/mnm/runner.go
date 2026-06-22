@@ -1089,6 +1089,7 @@ func openCodeRunCommand(opencodePath, workspace, model, title, promptPath string
 		"--title", title,
 		"--dangerously-skip-permissions",
 		"--file", promptPath,
+		"--",
 		"Read the attached prompt file and follow its instructions exactly.",
 	)
 }
@@ -1329,15 +1330,16 @@ func retryableOpenCodeError(logPath string, err error) bool {
 	if errors.As(err, &postconditionErr) {
 		return !postconditionErr.ledgerModified
 	}
-	text := strings.ToLower(err.Error())
+	processText := strings.ToLower(err.Error())
+	retryText := processText
 	var attemptErr openCodeAttemptError
 	if errors.As(err, &attemptErr) {
 		if attemptErr.ledgerModified {
 			return false
 		}
-		text += "\n" + strings.ToLower(attemptErr.logText)
+		retryText += "\n" + strings.ToLower(attemptErr.logText)
 	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
-		text += "\n" + strings.ToLower(string(b))
+		retryText += "\n" + strings.ToLower(string(b))
 	}
 	for _, marker := range []string{
 		"argument list too long",
@@ -1345,7 +1347,7 @@ func retryableOpenCodeError(logPath string, err error) bool {
 		"permission denied",
 		"exec format error",
 	} {
-		if strings.Contains(text, marker) {
+		if strings.Contains(processText, marker) {
 			return false
 		}
 	}
@@ -1362,7 +1364,7 @@ func retryableOpenCodeError(logPath string, err error) bool {
 		"timeout",
 		"timed out",
 	} {
-		if strings.Contains(text, marker) {
+		if strings.Contains(retryText, marker) {
 			return true
 		}
 	}

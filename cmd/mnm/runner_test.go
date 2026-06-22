@@ -2071,6 +2071,7 @@ fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
 if [ "$count" -eq 1 ]; then
+  printf 'permission denied while reading optional local docs\n'
   printf '{"code":502,"message":"Network connection lost.","metadata":{"error_type":"provider_unavailable"}}\n'
   exit 1
 fi
@@ -2128,9 +2129,15 @@ for arg in "$@"; do
   fi
 done
 while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--" ]; then
+    break
+  fi
   if [ "$1" = "--file" ]; then
     shift
     prompt_file="${1:-}"
+  elif [ -n "$prompt_file" ] && [ "${1#-}" = "$1" ]; then
+    echo "unexpected file argument after --file: $1" >&2
+    exit 1
   fi
   shift
 done
