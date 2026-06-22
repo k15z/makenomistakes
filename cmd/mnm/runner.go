@@ -1390,6 +1390,10 @@ func retryableOpenCodeError(logPath string, err error) bool {
 	} else if b, readErr := os.ReadFile(logPath); readErr == nil {
 		retryText += "\n" + strings.ToLower(string(b))
 	}
+	var stageErr limaTaskStageError
+	if errors.As(err, &stageErr) && retryableLimaTaskStage(stageErr.Stage) {
+		return true
+	}
 	for _, marker := range []string{
 		"argument list too long",
 		"executable file not found",

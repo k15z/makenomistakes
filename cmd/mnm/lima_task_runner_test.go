@@ -552,6 +552,9 @@ func TestLimaTaskAttemptRunnerReportsStartupFailureWithoutTranscriptNoise(t *tes
 	if !strings.Contains(err.Error(), "task VM start failed") {
 		t.Fatalf("startup error missing stage context: %v", err)
 	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("startup error missing inner failure: %v", err)
+	}
 	if strings.Contains(err.Error(), "copy task transcript") {
 		t.Fatalf("startup error should not include missing transcript noise: %v", err)
 	}
@@ -564,6 +567,55 @@ func TestLimaTaskAttemptRunnerReportsStartupFailureWithoutTranscriptNoise(t *tes
 	joined := strings.Join(executor.commands, "\n")
 	if !strings.Contains(joined, "limactl stop --tty=false") || !strings.Contains(joined, "limactl delete --force --tty=false") {
 		t.Fatalf("startup failure should still clean up VM instance:\n%s", joined)
+	}
+}
+
+func TestLimaTaskAttemptRunnerRequiresTranscriptForGuestFailure(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "tasks"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(runDir, "mnm-linux-test")
+	if err := os.WriteFile(payload, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", payload)
+	snapshot := filepath.Join(runDir, "snapshot.tar.zst")
+	if err := os.WriteFile(snapshot, []byte("snapshot"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	taskRecord := TaskRecord{RunID: "run_guest_fail", TaskID: "task_review_finding_auth", Phase: "review"}
+	taskPath := filepath.Join(runDir, "tasks", taskRecord.TaskID+".json")
+	if err := writeTaskFile(taskPath, taskRecord); err != nil {
+		t.Fatal(err)
+	}
+	task := opencodeTask{
+		RunID:    taskRecord.RunID,
+		TaskID:   taskRecord.TaskID,
+		Phase:    taskRecord.Phase,
+		Title:    "mnm review auth",
+		Model:    "openrouter/test",
+		Prompt:   "review auth",
+		LogPath:  filepath.Join(runDir, "evidence", "opencode-review-auth.jsonl"),
+		TaskFile: taskPath,
+	}
+
+	executor := &guestFailingNoLogTaskExecutor{}
+	attemptRunner := LimaTaskAttemptRunner{
+		Runner:       LimaRunner{Executor: executor, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}},
+		Config:       RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20},
+		SnapshotPath: snapshot,
+	}
+	_, err := attemptRunner.RunOpenCodeTaskAttempt(context.Background(), workspace, runDir, task, 1)
+	if err == nil {
+		t.Fatal("expected guest task failure")
+	}
+	if !strings.Contains(err.Error(), "task VM guest task failed") {
+		t.Fatalf("guest task error missing stage context: %v", err)
+	}
+	if !strings.Contains(err.Error(), "copy task transcript") {
+		t.Fatalf("guest task failure without log should report missing transcript: %v", err)
 	}
 }
 
@@ -591,7 +643,22 @@ type startupFailingTaskExecutor struct {
 func (executor *startupFailingTaskExecutor) Run(_ context.Context, name string, args ...string) error {
 	executor.commands = append(executor.commands, name+" "+strings.Join(args, " "))
 	if name == "limactl" && len(args) >= 1 && args[0] == "start" {
-		return errors.New("limactl start failed")
+		return errors.New("permission denied")
+	}
+	return nil
+}
+
+type guestFailingNoLogTaskExecutor struct {
+	commands []string
+}
+
+func (executor *guestFailingNoLogTaskExecutor) Run(_ context.Context, name string, args ...string) error {
+	executor.commands = append(executor.commands, name+" "+strings.Join(args, " "))
+	if name == "limactl" && len(args) >= 5 && args[0] == "copy" && strings.HasSuffix(args[len(args)-2], ":/tmp/mnm-output") {
+		return os.MkdirAll(filepath.Join(args[len(args)-1], "mnm-output"), dirPerm)
+	}
+	if name == "limactl" && len(args) >= 4 && args[0] == "shell" && strings.Contains(strings.Join(args, " "), "/tmp/mnm runner task") {
+		return errors.New("guest task failed")
 	}
 	return nil
 }

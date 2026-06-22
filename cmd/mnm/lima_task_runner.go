@@ -94,7 +94,7 @@ func (runner LimaTaskAttemptRunner) RunOpenCodeTaskAttempt(ctx context.Context, 
 		KeepVM:       runner.KeepVM,
 		SkipVerify:   true,
 	})
-	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath, runErr == nil)
+	logText, logErr := copyLimaAttemptLog(outputDir, logRelPath, task.LogPath, limaAttemptShouldRequireLog(runErr))
 	if runErr != nil {
 		if logErr != nil {
 			runErr = errors.Join(runErr, logErr)
@@ -231,6 +231,21 @@ func (err limaTaskStageError) Error() string {
 
 func (err limaTaskStageError) Unwrap() error {
 	return err.Err
+}
+
+func retryableLimaTaskStage(stage string) bool {
+	return oneOf(stage, "create", "start", "copy inputs", "copy output")
+}
+
+func limaAttemptShouldRequireLog(runErr error) bool {
+	if runErr == nil {
+		return true
+	}
+	var stageErr limaTaskStageError
+	if !errors.As(runErr, &stageErr) {
+		return true
+	}
+	return !retryableLimaTaskStage(stageErr.Stage)
 }
 
 func validateLimaTaskRequest(request LimaTaskRequest) error {
