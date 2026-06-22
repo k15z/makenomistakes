@@ -49,6 +49,194 @@ func TestConfigUsesReconModelWhenSet(t *testing.T) {
 	if resolved.Model != "openrouter/test-recon" {
 		t.Fatalf("expected recon model, got %q", resolved.Model)
 	}
+	if resolved.ModelProvider != "openrouter" {
+		t.Fatalf("expected openrouter provider, got %q", resolved.ModelProvider)
+	}
+	if resolved.ModelAuth["openrouter"] != "test-key" {
+		t.Fatalf("unexpected model auth: %#v", resolved.ModelAuth)
+	}
+}
+
+func TestConfigSupportsOfficialModelProviders(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		envName  string
+	}{
+		{name: "openrouter", provider: "openrouter", model: "openrouter/anthropic/claude-sonnet-4-5", envName: "OPENROUTER_API_KEY"},
+		{name: "openai", provider: "openai", model: "openai/gpt-5.1", envName: "OPENAI_API_KEY"},
+		{name: "anthropic", provider: "anthropic", model: "anthropic/claude-sonnet-4-5", envName: "ANTHROPIC_API_KEY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "mnm.toml")
+			config := defaultConfig()
+			config = strings.ReplaceAll(config, `"openrouter/deepseek/deepseek-v4-pro"`, `"`+tt.model+`"`)
+			if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(tt.envName, "test-key")
+
+			cfg, err := loadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := cfg.validate(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.ModelProvider != tt.provider {
+				t.Fatalf("provider = %q, want %q", resolved.ModelProvider, tt.provider)
+			}
+			if resolved.APIKeyEnv != tt.envName {
+				t.Fatalf("API key env = %q, want %q", resolved.APIKeyEnv, tt.envName)
+			}
+			if resolved.ModelAuth[tt.provider] != "test-key" {
+				t.Fatalf("unexpected model auth: %#v", resolved.ModelAuth)
+			}
+		})
+	}
+}
+
+func TestConfigNormalizesExplicitProviderModelForOpenCode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := defaultConfig()
+	config = strings.Replace(config, `[models]`+"\n", `[models]`+"\n"+`provider = "openai"`+"\n", 1)
+	config = strings.ReplaceAll(config, `"openrouter/deepseek/deepseek-v4-pro"`, `"gpt-5.1"`)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.validate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model != "openai/gpt-5.1" {
+		t.Fatalf("model = %q, want openai/gpt-5.1", resolved.Model)
+	}
+	if got := phaseModel(cfg, "validate"); got != "openai/gpt-5.1" {
+		t.Fatalf("validate model = %q, want openai/gpt-5.1", got)
+	}
+}
+
+func TestConfigSupportsMixedOfficialModelProviders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := defaultConfig()
+	config = strings.Replace(config, `recon = "openrouter/deepseek/deepseek-v4-pro"`, `recon = "openai/gpt-5.1"`, 1)
+	config = strings.Replace(config, `validate = "openrouter/deepseek/deepseek-v4-pro"`, `validate = "anthropic/claude-sonnet-4-5"`, 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.validate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ModelProvider != "openai" {
+		t.Fatalf("primary provider = %q, want openai", resolved.ModelProvider)
+	}
+	for provider, want := range map[string]string{
+		"openrouter": "openrouter-key",
+		"openai":     "openai-key",
+		"anthropic":  "anthropic-key",
+	} {
+		if got := resolved.ModelAuth[provider]; got != want {
+			t.Fatalf("model auth[%s] = %q, want %q in %#v", provider, got, want, resolved.ModelAuth)
+		}
+	}
+}
+
+func TestConfigIgnoresUnusedDefaultProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := defaultConfig()
+	for _, phase := range []string{"recon", "investigate", "review", "deduplicate", "validate", "finalize"} {
+		config = strings.Replace(config, phase+` = "openrouter/deepseek/deepseek-v4-pro"`, phase+` = "openai/gpt-5.1"`, 1)
+	}
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.validate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ModelProvider != "openai" {
+		t.Fatalf("provider = %q, want openai", resolved.ModelProvider)
+	}
+	if _, ok := resolved.ModelAuth["openrouter"]; ok {
+		t.Fatalf("unused default provider should not require auth: %#v", resolved.ModelAuth)
+	}
+}
+
+func TestConfigSupportsLegacyAPIKeyEnvFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := strings.Replace(defaultConfig(), `openrouter_api_key_env = "OPENROUTER_API_KEY"`+"\n", "", 1)
+	config = strings.Replace(config, `[models]`+"\n", `[models]`+"\n"+`api_key_env = "CUSTOM_OPENROUTER_KEY"`+"\n", 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CUSTOM_OPENROUTER_KEY", "custom-key")
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.validate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKeyEnv != "CUSTOM_OPENROUTER_KEY" {
+		t.Fatalf("API key env = %q, want custom legacy env", resolved.APIKeyEnv)
+	}
+	if resolved.ModelAuth["openrouter"] != "custom-key" {
+		t.Fatalf("unexpected model auth: %#v", resolved.ModelAuth)
+	}
+}
+
+func TestConfigRejectsUnsupportedModelProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mnm.toml")
+	config := defaultConfig()
+	config = strings.Replace(config, `default = "openrouter/deepseek/deepseek-v4-pro"`, `default = "unsupported/model"`, 1)
+	config = strings.Replace(config, `recon = "openrouter/deepseek/deepseek-v4-pro"`, `recon = "unsupported/model"`, 1)
+	if err := os.WriteFile(path, []byte(config), filePerm); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cfg.validate(dir)
+	if err == nil {
+		t.Fatal("expected unsupported provider error")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider prefix") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestConfigDefaultsOpenCodeTaskTimeoutWhenOmitted(t *testing.T) {

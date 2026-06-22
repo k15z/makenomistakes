@@ -37,6 +37,7 @@ func (runner HostPipelineRunner) Run(ctx context.Context, request RunnerRequest)
 			Config:       request.Config.Runner,
 			SnapshotPath: request.Run.SnapshotPath,
 			ModelAPIKey:  request.ModelAPIKey,
+			ModelAuth:    request.ModelAuth,
 			KeepVM:       request.KeepVM,
 		},
 		Stdout:                  runner.Stdout,

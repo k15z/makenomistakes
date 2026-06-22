@@ -74,6 +74,23 @@ passed to the task process. The hook also receives `MNM_RUN_DIR`,
 and stderr are captured under each task output bundle as
 `evidence/setup-TASK-attempt-N.log`.
 
+Model execution uses provider-prefixed `opencode` model ids. OpenRouter,
+OpenAI, and Anthropic are first-class providers:
+
+```toml
+[models]
+default = "openrouter/deepseek/deepseek-v4-pro"
+openrouter_api_key_env = "OPENROUTER_API_KEY"
+openai_api_key_env = "OPENAI_API_KEY"
+anthropic_api_key_env = "ANTHROPIC_API_KEY"
+```
+
+If phase-specific models use multiple provider prefixes, `mnm` injects each
+corresponding API key into the task VM's OpenCode auth file. The older
+`api_key_env` setting remains supported as a single-provider fallback. For
+unprefixed single-provider model ids, set `provider` to `openrouter`, `openai`,
+or `anthropic`.
+
 ## Audit Pipeline
 
 Every stage of the audit pipeline runs inside task VMs through non-interactive
@@ -146,6 +163,9 @@ through Lima and `opencode`:
 ```sh
 OPENROUTER_API_KEY=... scripts/acceptance-vulnerable-workspace.sh
 ```
+
+Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` instead when the configured models
+use `openai/...` or `anthropic/...` provider prefixes.
 
 The script copies the fixture to a scratch workspace, runs `mnm analyze`, and
 fails unless the final structured report contains at least one proven

@@ -281,8 +281,12 @@ func (runner LimaRunner) copyInputs(ctx context.Context, instanceName, payloadPa
 			return err
 		}
 	}
-	if request.ModelAPIKey != "" {
-		authPath, cleanup, err := writeOpenCodeAuthFile(request.ModelAPIKey)
+	modelAuth := request.ModelAuth
+	if len(modelAuth) == 0 && request.ModelAPIKey != "" {
+		modelAuth = map[string]string{"openrouter": request.ModelAPIKey}
+	}
+	if len(modelAuth) != 0 {
+		authPath, cleanup, err := writeOpenCodeAuthFile(modelAuth)
 		if err != nil {
 			return err
 		}

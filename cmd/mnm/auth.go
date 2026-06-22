@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-func writeOpenCodeAuthFile(apiKey string) (string, func(), error) {
+func writeOpenCodeAuthFile(providerKeys map[string]string) (string, func(), error) {
 	file, err := os.CreateTemp("", "mnm-opencode-auth-*.json")
 	if err != nil {
 		return "", nil, err
@@ -16,11 +16,12 @@ func writeOpenCodeAuthFile(apiKey string) (string, func(), error) {
 		cleanup()
 		return "", nil, err
 	}
-	auth := map[string]any{
-		"openrouter": map[string]any{
+	auth := map[string]any{}
+	for provider, apiKey := range providerKeys {
+		auth[provider] = map[string]any{
 			"type": "api",
 			"key":  apiKey,
-		},
+		}
 	}
 	data, err := json.MarshalIndent(auth, "", "  ")
 	if err != nil {

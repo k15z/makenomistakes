@@ -2934,7 +2934,8 @@ func reconTestConfig() Config {
 }
 
 type recordingExecutor struct {
-	commands []string
+	commands    []string
+	copiedFiles map[string][]byte
 }
 
 type recordingAttemptRunner struct {
@@ -2970,6 +2971,20 @@ func (runner *recordingAttemptRunner) RunOpenCodeTaskAttempt(_ context.Context, 
 
 func (executor *recordingExecutor) Run(_ context.Context, name string, args ...string) error {
 	executor.commands = append(executor.commands, name+" "+strings.Join(args, " "))
+	if name == "limactl" && len(args) >= 4 && args[0] == "copy" {
+		source := args[len(args)-2]
+		destination := args[len(args)-1]
+		if strings.Contains(destination, ":/tmp/opencode-auth.json") {
+			data, err := os.ReadFile(source)
+			if err != nil {
+				return err
+			}
+			if executor.copiedFiles == nil {
+				executor.copiedFiles = map[string][]byte{}
+			}
+			executor.copiedFiles[destination] = data
+		}
+	}
 	if name == "limactl" && len(args) >= 5 && args[0] == "copy" && strings.HasSuffix(args[len(args)-2], ":/tmp/mnm-run") {
 		dst := args[len(args)-1]
 		outDir := filepath.Join(dst, "mnm-run")

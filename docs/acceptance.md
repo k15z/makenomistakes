@@ -59,7 +59,9 @@ Set `MNM_NODEGOAT_CLEANUP=1` to remove it when the script exits.
 ## Why These Are Manual
 
 - It launches a Lima VM.
-- It uses a real model provider.
+- It uses a real model provider. Configure `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` to match the provider prefixes in
+  `mnm.toml`.
 - It can take several minutes to hours.
 - It depends on local machine resources and network access.
 - It consumes model-provider quota and may incur provider costs.

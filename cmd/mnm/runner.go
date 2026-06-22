@@ -38,6 +38,7 @@ type RunnerRequest struct {
 	Run            RunRecord
 	Config         Config
 	ModelAPIKey    string
+	ModelAuth      map[string]string
 	KeepVM         bool
 	Resume         bool
 	StopAfterPhase string
@@ -1358,36 +1359,46 @@ func prepareTaskWorkspace(baseWorkspace, runID, taskID string) (string, func(), 
 func phaseModel(cfg Config, phase string) string {
 	defaultModel := strings.TrimSpace(cfg.Models.Default)
 	reconModel := strings.TrimSpace(cfg.Models.Recon)
+	model := ""
 	switch phase {
 	case "recon":
 		if reconModel != "" {
-			return reconModel
+			model = reconModel
 		}
 	case "investigate":
 		if strings.TrimSpace(cfg.Models.Investigate) != "" {
-			return strings.TrimSpace(cfg.Models.Investigate)
+			model = strings.TrimSpace(cfg.Models.Investigate)
 		}
 	case "review":
 		if strings.TrimSpace(cfg.Models.Review) != "" {
-			return strings.TrimSpace(cfg.Models.Review)
+			model = strings.TrimSpace(cfg.Models.Review)
 		}
 	case "deduplicate":
 		if strings.TrimSpace(cfg.Models.Deduplicate) != "" {
-			return strings.TrimSpace(cfg.Models.Deduplicate)
+			model = strings.TrimSpace(cfg.Models.Deduplicate)
 		}
 	case "validate":
 		if strings.TrimSpace(cfg.Models.Validate) != "" {
-			return strings.TrimSpace(cfg.Models.Validate)
+			model = strings.TrimSpace(cfg.Models.Validate)
 		}
 	case "finalize":
 		if strings.TrimSpace(cfg.Models.Finalize) != "" {
-			return strings.TrimSpace(cfg.Models.Finalize)
+			model = strings.TrimSpace(cfg.Models.Finalize)
 		}
 	}
-	if defaultModel == "" {
-		return reconModel
+	if model == "" {
+		model = defaultModel
 	}
-	return defaultModel
+	if model == "" {
+		model = reconModel
+	}
+	if model == "" {
+		return ""
+	}
+	if normalized, err := normalizeModelForOpenCode(cfg.Models.Provider, model); err == nil {
+		return normalized
+	}
+	return model
 }
 
 func validateReconLedgerOutputs(runDir, taskID string) error {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -105,6 +106,80 @@ func TestLimaTaskRunnerCommandSequence(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(outputDir, "evidence", "task-output-marker.txt")); !strings.Contains(got, "copied") {
 		t.Fatalf("task output was not copied back:\n%s", got)
+	}
+}
+
+func TestLimaTaskRunnerCopiesProviderAuth(t *testing.T) {
+	runDir := t.TempDir()
+	ledgerDir := filepath.Join(runDir, "ledger")
+	outputDir := filepath.Join(runDir, "task-output")
+	for _, dir := range []string{ledgerDir, outputDir} {
+		if err := os.MkdirAll(filepath.Join(dir, "evidence"), dirPerm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload := filepath.Join(runDir, "mnm-linux-test")
+	if err := os.WriteFile(payload, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", payload)
+	snapshot := filepath.Join(runDir, "snapshot.tar.zst")
+	if err := os.WriteFile(snapshot, []byte("snapshot"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(runDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("prompt"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	task := TaskRecord{
+		RunID:  "run_auth",
+		TaskID: "task_validate",
+		Phase:  "validate",
+	}
+	if err := writeTaskFile(filepath.Join(outputDir, currentTaskFile), task); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &recordingExecutor{}
+	runner := LimaRunner{Executor: executor, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	err := runner.RunTask(context.Background(), LimaTaskRequest{
+		RunID:        "run_auth",
+		Task:         task,
+		Attempt:      1,
+		Config:       RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20},
+		SnapshotPath: snapshot,
+		LedgerDir:    ledgerDir,
+		OutputDir:    outputDir,
+		PromptPath:   promptPath,
+		Model:        "openai/gpt-5.1",
+		ModelAuth: map[string]string{
+			"anthropic": "anthropic-key",
+			"openai":    "openai-key",
+		},
+	})
+	if err != nil {
+		t.Fatalf("task runner failed: %v", err)
+	}
+
+	var authData []byte
+	for destination, data := range executor.copiedFiles {
+		if strings.Contains(destination, ":/tmp/opencode-auth.json") {
+			authData = data
+			break
+		}
+	}
+	if len(authData) == 0 {
+		t.Fatalf("expected copied opencode auth file, commands:\n%s", strings.Join(executor.commands, "\n"))
+	}
+	var auth map[string]map[string]string
+	if err := json.Unmarshal(authData, &auth); err != nil {
+		t.Fatal(err)
+	}
+	if auth["openai"]["key"] != "openai-key" || auth["anthropic"]["key"] != "anthropic-key" {
+		t.Fatalf("unexpected auth payload: %#v", auth)
+	}
+	if _, ok := auth["openrouter"]; ok {
+		t.Fatalf("unexpected openrouter auth entry: %#v", auth)
 	}
 }
 
