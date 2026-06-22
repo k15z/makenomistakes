@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 func runValidatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
@@ -25,12 +27,44 @@ func runValidatePhaseWithAttemptRunnerContext(ctx context.Context, runDir, runID
 	if err != nil {
 		return err
 	}
+	return runValidateBatchWithAttemptRunnerContext(ctx, runDir, runID, workspace, cfg, attemptRunner, findings)
+}
+
+func runValidateBatchWithAttemptRunnerContext(ctx context.Context, runDir, runID, workspace string, cfg Config, attemptRunner opencodeTaskAttemptRunner, findings []FindingRecord) error {
+	parallelism := taskParallelism(cfg)
+	jobs := make(chan FindingRecord)
+	errs := make(chan error, len(findings))
+	var wg sync.WaitGroup
+	for i := 0; i < parallelism; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for finding := range jobs {
+				if err := runValidateTaskWithAttemptRunnerContext(ctx, runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	var sendErr error
+sendLoop:
 	for _, finding := range findings {
-		if err := runValidateTaskWithAttemptRunnerContext(ctx, runDir, runID, workspace, cfg, attemptRunner, finding); err != nil {
-			return err
+		select {
+		case jobs <- finding:
+		case <-ctx.Done():
+			sendErr = ctx.Err()
+			break sendLoop
 		}
 	}
-	return nil
+	close(jobs)
+	wg.Wait()
+	close(errs)
+
+	var joined error
+	for err := range errs {
+		joined = errors.Join(joined, err)
+	}
+	return errors.Join(sendErr, joined)
 }
 
 func runValidateTask(runDir, runID, workspace string, cfg Config, opencodePath string, finding FindingRecord) error {

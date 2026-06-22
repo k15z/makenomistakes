@@ -46,7 +46,9 @@ failure evidence.
 The default runner target is macOS with Lima/QEMU. Future runner targets may
 include cloud VMs. Before it creates run state, `mnm analyze` checks for the
 local VM tooling plus requested aggregate CPU, memory, and Lima disk capacity
-for the configured local task parallelism.
+for the configured local task parallelism. Set `runner.parallel_tasks = 0` to
+auto-size task concurrency from available host CPU, memory, and Lima disk
+capacity, or set a positive value to pin concurrency explicitly.
 `mnm analyze --prepare-only` only snapshots local inputs and does not require
 Lima.
 
