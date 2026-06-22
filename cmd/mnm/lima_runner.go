@@ -14,6 +14,7 @@ import (
 )
 
 const bytesPerGiB = 1024 * 1024 * 1024
+const auditToolbeltVersion = "1"
 
 type LimaRunner struct {
 	Executor         CommandExecutor
@@ -48,8 +49,8 @@ func (runner LimaRunner) Preflight(ctx context.Context, request RunnerPreflightR
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("limactl"); err != nil {
-		return fmt.Errorf("limactl is required to run the audit VM; install Lima or use mnm analyze --prepare-only: %w", err)
+	if err := preflightLimaExecutable(ctx); err != nil {
+		return err
 	}
 	if os.Getenv("MNM_LINUX_RUNNER_PAYLOAD") == "" {
 		if _, err := exec.LookPath("go"); err != nil {
@@ -62,6 +63,22 @@ func (runner LimaRunner) Preflight(ctx context.Context, request RunnerPreflightR
 	}
 	if err := validateHostResources(resources, request.Config.Runner); err != nil {
 		return err
+	}
+	return nil
+}
+
+func preflightLimaExecutable(ctx context.Context) error {
+	path, err := exec.LookPath("limactl")
+	if err != nil {
+		return fmt.Errorf("limactl is required to run the audit VM; install Lima or use mnm analyze --prepare-only: %w", err)
+	}
+	output, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return fmt.Errorf("limactl is installed but failed to run limactl --version: %w: %s", err, detail)
+		}
+		return fmt.Errorf("limactl is installed but failed to run limactl --version: %w", err)
 	}
 	return nil
 }
@@ -321,6 +338,7 @@ func guestRunnerCommand(run RunRecord, stopAfterPhase string) string {
 
 func bootstrapAuditToolbeltCommand() string {
 	return strings.Join([]string{
+		"baseline_marker=\"$HOME/.cache/mnm/audit-toolbelt-v" + auditToolbeltVersion + "\"",
 		"baseline_missing=0",
 		"for tool in rg git curl jq unzip tar xz file make pkg-config python3 pip3 docker; do",
 		"  if ! command -v \"$tool\" >/dev/null 2>&1; then baseline_missing=1; fi",
@@ -354,6 +372,8 @@ func bootstrapAuditToolbeltCommand() string {
 		"  echo \"mnm: docker daemon is required in the audit VM baseline but is not reachable\" >&2",
 		"  exit 1",
 		"fi",
+		"mkdir -p \"$(dirname \"$baseline_marker\")\"",
+		"printf '%s\\n' " + shellQuote(auditToolbeltVersion) + " > \"$baseline_marker\"",
 	}, "\n")
 }
 
