@@ -1638,6 +1638,8 @@ Recon discipline:
 - If focused risk areas are configured, create leads inside those areas and avoid broad unrelated audit passes.
 - Use docs, tutorials, examples, tests, TODOs, comments, and "fix for" notes as candidate lead sources, but never as proof by themselves.
 - In the risk register, briefly mark each coverage-matrix class as lead opened, not applicable, or needs targeted pass.
+- For auth/session risk, include lifecycle paths such as login, logout, registration, password reset, token/session rotation, session invalidation, cookie flags, CSRF coupling, and server-side versus signed-cookie session storage.
+- For dependency/runtime risk, inspect manifests, lockfiles, imports, framework configuration, and reachable call paths. Open leads for vulnerable usage or risky runtime configuration, not generic package-name CVE chores without an application path to inspect.
 - Run only bounded inspection commands such as find, rg, package metadata reads, and quick tests when needed to understand the workspace.
 - Do not build end-to-end proof scripts, start long-lived services, fuzz, install heavy dependencies, or keep exploring after you have enough context for focused leads.
 - Register the codebase map and risk register as soon as they are useful, then create leads promptly. Unregistered files are scratch and may be lost.

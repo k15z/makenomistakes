@@ -344,6 +344,8 @@ Validation quality bar:
 
 - Prefer runnable proof commands, request/response captures, logs, stack traces, and minimized reproduction scripts over prose.
 - Do not mark proven without observing concrete behavior.
+- For session, cookie, CSRF, and account-lifecycle findings, prove the exact capability claimed. Distinguish script execution from document.cookie theft, CSRF action triggering from auth bypass, session fixation from session forgery, and hardcoded secret exposure from a forged authenticated session.
+- For dependency, framework, or runtime findings, validate the installed version plus a reachable application path to the vulnerable API or configuration. If the VM cannot fetch advisories or build the full path, record the missing source, command, or service as an inconclusive blocker instead of overclaiming.
 - When validation proves a class of issue, run a bounded sibling-instance check for the same bug class in nearby files, routes, handlers, templates, configuration blocks, or data flows.
 - Record under-covered follow-up areas, sibling instances, adjacent risk classes, and blocked reproduction paths in likely_leads or blockers in the structured handoff.
 - If validation shows a finding bundles separable root causes whose proof, remediation, or ownership differs, preserve that split in validation notes and likely_leads.

@@ -246,6 +246,8 @@ Markdown report requirements:
 - If there are no findings, say that clearly and summarize what phases ran.
 - Preserve nuance. A rejected, failed, duplicate, or inconclusive finding must not be presented as proven.
 - Do not upgrade a configuration weakness into a stronger exploit claim unless the validation evidence proves that exact exploit. For example, a hardcoded session signing secret is not by itself proof of forged authenticated sessions when the application uses a server-side session store.
+- For session, cookie, CSRF, and account-lifecycle findings, name only the proven capability: script execution, cookie read, CSRF action, fixation, signed-cookie tampering, server-side session mutation, or full auth bypass are different claims.
+- For dependency, framework, or runtime findings, state the reachable vulnerable usage, affected version, and validation limit. If the report lacks a reachable path or proof, place the item in the appropriate inconclusive or failed bucket rather than presenting a package-only risk as proven impact.
 
 JSON report requirements:
 

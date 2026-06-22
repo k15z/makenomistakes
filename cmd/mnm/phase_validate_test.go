@@ -40,6 +40,8 @@ func TestValidatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"bounded sibling-instance check",
 		"under-covered follow-up areas, sibling instances, adjacent risk classes",
 		"bundles separable root causes",
+		"script execution from document.cookie theft",
+		"installed version plus a reachable application path",
 		"mnm task complete --status completed",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "validate-finding_auth-notes.md")),
 	} {

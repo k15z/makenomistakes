@@ -279,6 +279,8 @@ Review quality bar:
 - Do not create new findings in Review. Record a verdict for this candidate only.
 - Preserve important commands, setup discoveries, blockers, under-covered follow-up areas, sibling instances, adjacent risk classes, and confirmed dead ends in the structured handoff.
 - If the candidate bundles separable root causes whose proof, remediation, or ownership differs, call that out in review notes and likely_leads instead of accepting it as one broad issue.
+- For session, cookie, CSRF, and account-lifecycle candidates, keep the claim at the exact proven boundary. Distinguish server-side sessions from signed cookies, httpOnly cookie theft from script execution, CSRF from auth bypass, and fixation from forgery.
+- For dependency, framework, or runtime candidates, require a reachable vulnerable usage, affected version, or dangerous configuration path. Reject or narrow package-only claims that do not map to application code or runtime behavior.
 - When a candidate survives review, do a bounded sibling-instance check for the same class of bug in nearby files, routes, handlers, templates, configuration blocks, or data flows.
 - Record uncertainty in the review notes and reason rather than overstating the result.
 `, workspace, runDir, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, finding.LeadID, scopeText(cfg), bodyPath, string(body), formatEvidenceList(runDir, findingEvidence), sourceLead, formatEvidenceList(runDir, leadEvidence), handoffRel, safeFindingID, taskHandoffSchemaText()), nil

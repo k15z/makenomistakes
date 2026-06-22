@@ -3217,6 +3217,10 @@ func TestReconPromptIncludesLeadBodyFileCommand(t *testing.T) {
 		"dependency, framework, runtime",
 		"Use docs, tutorials, examples, tests, TODOs, comments, and \"fix for\" notes as candidate lead sources, but never as proof by themselves.",
 		"lead opened, not applicable, or needs targeted pass",
+		"login, logout, registration, password reset",
+		"server-side versus signed-cookie session storage",
+		"reachable call paths",
+		"not generic package-name CVE chores",
 		"Do not build end-to-end proof scripts, start long-lived services",
 		"Unregistered files are scratch and may be lost.",
 	} {

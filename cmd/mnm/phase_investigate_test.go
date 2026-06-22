@@ -52,6 +52,8 @@ func TestInvestigatePromptIncludesRequiredLedgerCommands(t *testing.T) {
 		"under-covered follow-up area, adjacent risk class, or sibling instance",
 		"bounded sibling-instance check",
 		"Split separable root causes",
+		"server-side session store versus signed cookie",
+		"installed version, reachable import/call/config path",
 		"mnm lead close --id lead_auth",
 		"mnm task complete --status completed",
 		filepath.ToSlash(filepath.Join(runDir, "evidence", "investigate-lead_auth-notes.md")),
