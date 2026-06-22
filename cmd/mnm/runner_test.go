@@ -1292,6 +1292,23 @@ func TestLimaRunnerPreflightRequiresLima(t *testing.T) {
 	}
 }
 
+func TestLimaRunnerPreflightRejectsBrokenLima(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "limactl"), []byte("#!/bin/sh\necho broken lima >&2\nexit 42\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", filepath.Join(dir, "mnm-linux"))
+
+	err := (LimaRunner{}).Preflight(context.Background(), RunnerPreflightRequest{})
+	if err == nil {
+		t.Fatal("expected broken limactl error")
+	}
+	if !strings.Contains(err.Error(), "limactl --version") || !strings.Contains(err.Error(), "broken lima") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLimaRunnerPreflightRequiresGoWhenBuildingPayload(t *testing.T) {
 	dir := t.TempDir()
 	writeExecutable(t, filepath.Join(dir, "limactl"))
@@ -1466,6 +1483,10 @@ func TestGuestRunnerCommandBootstrapsRipgrepBeforeRunner(t *testing.T) {
 	}
 	if !strings.Contains(command, "audit VM baseline toolbelt is required") {
 		t.Fatalf("guest runner command should fail clearly when the baseline cannot be installed:\n%s", command)
+	}
+	if !strings.Contains(command, "baseline_marker=\"$HOME/.cache/mnm/audit-toolbelt-v"+auditToolbeltVersion+"\"") ||
+		!strings.Contains(command, "printf '%s\\n' '"+auditToolbeltVersion+"' > \"$baseline_marker\"") {
+		t.Fatalf("guest runner command should write the baseline marker:\n%s", command)
 	}
 	if _, err := exec.LookPath("bash"); err == nil {
 		check := exec.Command("bash", "-n")
