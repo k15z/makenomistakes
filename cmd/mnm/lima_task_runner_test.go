@@ -507,6 +507,66 @@ func TestLimaTaskAttemptRunnerCopiesFailureLogForRetry(t *testing.T) {
 	}
 }
 
+func TestLimaTaskAttemptRunnerReportsStartupFailureWithoutTranscriptNoise(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "tasks"), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(runDir, "mnm-linux-test")
+	if err := os.WriteFile(payload, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNM_LINUX_RUNNER_PAYLOAD", payload)
+	snapshot := filepath.Join(runDir, "snapshot.tar.zst")
+	if err := os.WriteFile(snapshot, []byte("snapshot"), filePerm); err != nil {
+		t.Fatal(err)
+	}
+	taskRecord := TaskRecord{RunID: "run_start_fail", TaskID: "task_review_finding_auth", Phase: "review"}
+	taskPath := filepath.Join(runDir, "tasks", taskRecord.TaskID+".json")
+	if err := writeTaskFile(taskPath, taskRecord); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(runDir, "evidence", "opencode-review-auth.jsonl")
+	task := opencodeTask{
+		RunID:    taskRecord.RunID,
+		TaskID:   taskRecord.TaskID,
+		Phase:    taskRecord.Phase,
+		Title:    "mnm review auth",
+		Model:    "openrouter/test",
+		Prompt:   "review auth",
+		LogPath:  logPath,
+		TaskFile: taskPath,
+	}
+
+	executor := &startupFailingTaskExecutor{}
+	attemptRunner := LimaTaskAttemptRunner{
+		Runner:       LimaRunner{Executor: executor, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}},
+		Config:       RunnerConfig{CPUs: 2, MemoryGB: 4, DiskGB: 20},
+		SnapshotPath: snapshot,
+	}
+	_, err := attemptRunner.RunOpenCodeTaskAttempt(context.Background(), workspace, runDir, task, 1)
+	if err == nil {
+		t.Fatal("expected VM startup failure")
+	}
+	if !strings.Contains(err.Error(), "task VM start failed") {
+		t.Fatalf("startup error missing stage context: %v", err)
+	}
+	if strings.Contains(err.Error(), "copy task transcript") {
+		t.Fatalf("startup error should not include missing transcript noise: %v", err)
+	}
+	if !retryableOpenCodeError(task.LogPath, err) {
+		t.Fatalf("startup failure should remain retryable: %v", err)
+	}
+	if _, statErr := os.Stat(logPath); !os.IsNotExist(statErr) {
+		t.Fatalf("startup failure should not create host transcript, stat err=%v", statErr)
+	}
+	joined := strings.Join(executor.commands, "\n")
+	if !strings.Contains(joined, "limactl stop --tty=false") || !strings.Contains(joined, "limactl delete --force --tty=false") {
+		t.Fatalf("startup failure should still clean up VM instance:\n%s", joined)
+	}
+}
+
 func TestLimaTaskAttemptRunnerRequiresBundleTask(t *testing.T) {
 	result, err := (LimaTaskAttemptRunner{}).RunOpenCodeTaskAttempt(context.Background(), t.TempDir(), t.TempDir(), opencodeTask{
 		RunID:  "run_no_bundle",
@@ -522,6 +582,18 @@ func TestLimaTaskAttemptRunnerRequiresBundleTask(t *testing.T) {
 	if result.Bundle {
 		t.Fatalf("non-bundle task should not report bundle result: %#v", result)
 	}
+}
+
+type startupFailingTaskExecutor struct {
+	commands []string
+}
+
+func (executor *startupFailingTaskExecutor) Run(_ context.Context, name string, args ...string) error {
+	executor.commands = append(executor.commands, name+" "+strings.Join(args, " "))
+	if name == "limactl" && len(args) >= 1 && args[0] == "start" {
+		return errors.New("limactl start failed")
+	}
+	return nil
 }
 
 type failingTaskExecutor struct {
