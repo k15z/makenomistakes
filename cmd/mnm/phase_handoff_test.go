@@ -142,6 +142,73 @@ func TestBuildPhaseHandoffContextAggregatesPriorLearning(t *testing.T) {
 	}
 }
 
+func TestPreparePhaseHandoffContextCompactsTaskHandoffs(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	longText := "important prefix " + strings.Repeat("A", phaseHandoffMaxTextRunes+200) + " important tail"
+	extraCommands := make([]string, 0, phaseHandoffMaxListItems+3)
+	for i := 0; i < phaseHandoffMaxListItems+3; i++ {
+		extraCommands = append(extraCommands, "extra command")
+	}
+	handoffRel := "evidence/handoff-investigate-lead_auth.json"
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
+		Version:           phaseHandoffVersion,
+		Phase:             "investigate",
+		TaskID:            "task_investigate_lead_auth",
+		LeadID:            "lead_auth",
+		AttemptedCommands: append([]string{longText}, extraCommands...),
+		SetupDiscoveries:  []string{longText},
+		Blockers: []taskHandoffBlocker{{
+			Summary:         longText,
+			RequiredService: longText,
+			NextCommand:     longText,
+		}},
+		LikelyLeads: []string{longText},
+		ConfirmedDeadEnds: []taskHandoffDeadEnd{{
+			Summary:                  longText,
+			NegativeProofBoundary:    longText,
+			NegativeProofEnforcement: longText,
+			NegativeProofExposure:    longText,
+			NegativeProofEdgeCases:   longText,
+		}},
+		Notes: longText,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:  "run_test",
+		TaskID: "task_investigate_lead_auth",
+		Kind:   "json",
+		Title:  "Task handoff: Investigate auth",
+		Path:   handoffRel,
+		LeadID: "lead_auth",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	relPath, err := preparePhaseHandoffContext(runDir, "run_test", TaskRecord{
+		RunID:  "run_test",
+		TaskID: "task_review_finding_auth",
+		Phase:  "review",
+	}, "", "finding_auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := readFile(t, filepath.Join(runDir, filepath.FromSlash(relPath)))
+	if strings.Contains(data, "important tail") {
+		t.Fatalf("phase handoff context included unbounded task handoff text:\n%s", data)
+	}
+	for _, want := range []string{
+		"important prefix",
+		"[truncated]",
+		"[truncated; ",
+		handoffRel,
+	} {
+		if !strings.Contains(data, want) {
+			t.Fatalf("phase handoff context missing %q:\n%s", want, data)
+		}
+	}
+}
+
 func TestBuildPhaseHandoffContextRejectsMalformedTaskHandoff(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	handoffRel := "evidence/handoff-investigate-bad.json"

@@ -12,6 +12,10 @@ import (
 )
 
 func copyDirContents(src, dst string) error {
+	return copyDirContentsFiltered(src, dst, nil)
+}
+
+func copyDirContentsFiltered(src, dst string, shouldCopyFile func(relPath string) bool) error {
 	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -23,6 +27,7 @@ func copyDirContents(src, dst string) error {
 		if rel == "." {
 			return nil
 		}
+		rel = filepath.ToSlash(rel)
 		target := filepath.Join(dst, rel)
 		info, err := entry.Info()
 		if err != nil {
@@ -30,6 +35,9 @@ func copyDirContents(src, dst string) error {
 		}
 		if entry.IsDir() {
 			return os.MkdirAll(target, info.Mode())
+		}
+		if shouldCopyFile != nil && !shouldCopyFile(rel) {
+			return nil
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			link, err := os.Readlink(path)

@@ -1161,11 +1161,25 @@ func copyRunContextForTaskBundle(runDir, outputDir string) error {
 		} else if err != nil {
 			return err
 		}
-		if err := copyDirContents(source, filepath.Join(outputDir, relDir)); err != nil {
+		if err := copyDirContentsFiltered(source, filepath.Join(outputDir, relDir), shouldCopyTaskBundleEvidence); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func shouldCopyTaskBundleEvidence(relPath string) bool {
+	base := filepath.Base(relPath)
+	if strings.HasPrefix(base, "opencode-") && strings.HasSuffix(base, ".jsonl") {
+		return false
+	}
+	if strings.HasSuffix(base, "-prompt.md") {
+		return false
+	}
+	if base == "runner-failure.json" {
+		return false
+	}
+	return true
 }
 
 func taskBundlePrompt(prompt, runDir, outputDir string) string {

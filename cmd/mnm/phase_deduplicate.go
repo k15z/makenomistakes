@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	deduplicateFindingBodyPreviewRunes  = 4000
+	deduplicateReviewReasonPreviewRunes = 1600
+)
+
 func runDeduplicatePhase(runDir, runID, workspace string, cfg Config, opencodePath string) error {
 	return runDeduplicatePhaseWithAttemptRunner(runDir, runID, workspace, cfg, directOpenCodeTaskAttemptRunner{opencodePath: opencodePath})
 }
@@ -227,6 +232,7 @@ func formatDeduplicateFindings(runDir string, findings []FindingRecord, pending 
 		if ok {
 			reviewReason = review.Reason
 		}
+		reviewReason = previewRunes(reviewReason, deduplicateReviewReasonPreviewRunes, fmt.Sprintf(" [truncated; inspect ledger events for the full review reason for %s]", finding.ID))
 		status := "Pending deduplicate verdict"
 		if _, isPending := pending[finding.ID]; !isPending {
 			status = "Existing deduplicate verdict"
@@ -243,6 +249,7 @@ func formatDeduplicateFindings(runDir string, findings []FindingRecord, pending 
 		if err != nil {
 			return "", err
 		}
+		bodyPreview := previewRunes(string(body), deduplicateFindingBodyPreviewRunes, fmt.Sprintf("\n\n[truncated; read the full finding body at %s]", bodyPath))
 		fmt.Fprintf(&builder, `## %s
 
 Title: %s
@@ -260,7 +267,7 @@ Finding body:
 
 %s
 
-`, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, status, bodyPath, reviewReason, formatEvidenceList(runDir, evidence), string(body))
+`, finding.ID, finding.Title, finding.Category, finding.Severity, finding.Confidence, status, bodyPath, reviewReason, formatEvidenceList(runDir, evidence), bodyPreview)
 	}
 	return builder.String(), nil
 }
