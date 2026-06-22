@@ -239,7 +239,7 @@ Markdown report requirements:
 
 - Start with a concise executive summary.
 - List proven findings first, then inconclusive findings, failed validations, rejected findings, and duplicate findings.
-- For each finding, include ID, title, severity, confidence, status, affected paths when known, evidence paths, reproduction or validation summary, and limits of confidence.
+- For each finding, include ID, title, severity, confidence, status, affected paths when known, evidence paths, reproduction or validation summary, limits of confidence, and blocked-validation remediation when present.
 - Mention every ledger finding ID exactly as written in the final Markdown report.
 - Mention every cited evidence path exactly as written in the final Markdown report.
 - Every path listed in JSON "evidence_paths" must also appear literally in the Markdown report.
@@ -254,6 +254,7 @@ JSON report requirements:
 - "counts" must include integer fields "findings_proven", "findings_inconclusive", "findings_failed", "findings_rejected", "findings_duplicate", and "findings_unvalidated"; each count must match the corresponding array length.
 - "report_paths.markdown" must be exactly "report.md" and "report_paths.json" must be exactly "report.json". Do not use absolute VM paths such as "%[2]s/report.md" in the JSON; the reports must stay portable after the task bundle is copied back to the host.
 - For each finding object, include id, title, category, severity, confidence, source_lead_id, status, verdicts, evidence_paths, summary, and affected_paths when known.
+- If the finalize context for a finding includes validation_blockers, copy them exactly into the report item as "validation_blockers" with summary, missing_dependency, failed_command, required_service, suspected_config_gap, next_command, and source_path. Mention the next command and missing service/dependency/config gap in Markdown.
 - For each duplicate finding object, also include canonical_finding_id matching the deduplication verdict.
 - "verdicts" must exactly match ledger verdicts in phase order using strings like "review accepted", "deduplicate canonical", and "validation proven".
 - Use empty arrays instead of null for absent lists.
@@ -282,25 +283,26 @@ type finalizeContextReportPath struct {
 }
 
 type finalizeFindingContext struct {
-	ID                           string                    `json:"id"`
-	Title                        string                    `json:"title"`
-	Category                     string                    `json:"category"`
-	Severity                     string                    `json:"severity"`
-	Confidence                   string                    `json:"confidence"`
-	SourceLeadID                 string                    `json:"source_lead_id"`
-	Status                       string                    `json:"status"`
-	Bucket                       string                    `json:"bucket"`
-	CanonicalFindingID           string                    `json:"canonical_finding_id,omitempty"`
-	FindingBodyPath              string                    `json:"finding_body_path"`
-	FindingBodyExcerpt           string                    `json:"finding_body_excerpt,omitempty"`
-	ValidationNotesPath          string                    `json:"validation_notes_path,omitempty"`
-	ValidationNotesExcerpt       string                    `json:"validation_notes_excerpt,omitempty"`
-	Verdicts                     []string                  `json:"verdicts"`
-	VerdictDetails               []finalizeVerdictContext  `json:"verdict_details"`
-	RecommendedEvidencePaths     []string                  `json:"recommended_evidence_paths"`
-	ValidationProofEvidencePaths []string                  `json:"validation_proof_evidence_paths"`
-	RegisteredEvidence           []finalizeEvidenceContext `json:"registered_evidence"`
-	AffectedPathCandidates       []string                  `json:"affected_path_candidates"`
+	ID                           string                     `json:"id"`
+	Title                        string                     `json:"title"`
+	Category                     string                     `json:"category"`
+	Severity                     string                     `json:"severity"`
+	Confidence                   string                     `json:"confidence"`
+	SourceLeadID                 string                     `json:"source_lead_id"`
+	Status                       string                     `json:"status"`
+	Bucket                       string                     `json:"bucket"`
+	CanonicalFindingID           string                     `json:"canonical_finding_id,omitempty"`
+	FindingBodyPath              string                     `json:"finding_body_path"`
+	FindingBodyExcerpt           string                     `json:"finding_body_excerpt,omitempty"`
+	ValidationNotesPath          string                     `json:"validation_notes_path,omitempty"`
+	ValidationNotesExcerpt       string                     `json:"validation_notes_excerpt,omitempty"`
+	ValidationBlockers           []validationBlockerContext `json:"validation_blockers,omitempty"`
+	Verdicts                     []string                   `json:"verdicts"`
+	VerdictDetails               []finalizeVerdictContext   `json:"verdict_details"`
+	RecommendedEvidencePaths     []string                   `json:"recommended_evidence_paths"`
+	ValidationProofEvidencePaths []string                   `json:"validation_proof_evidence_paths"`
+	RegisteredEvidence           []finalizeEvidenceContext  `json:"registered_evidence"`
+	AffectedPathCandidates       []string                   `json:"affected_path_candidates"`
 }
 
 type finalizeVerdictContext struct {
@@ -315,6 +317,16 @@ type finalizeEvidenceContext struct {
 	Kind   string `json:"kind"`
 	Title  string `json:"title"`
 	TaskID string `json:"task_id"`
+}
+
+type validationBlockerContext struct {
+	Summary            string `json:"summary"`
+	MissingDependency  string `json:"missing_dependency"`
+	FailedCommand      string `json:"failed_command"`
+	RequiredService    string `json:"required_service"`
+	SuspectedConfigGap string `json:"suspected_config_gap"`
+	NextCommand        string `json:"next_command"`
+	SourcePath         string `json:"source_path"`
 }
 
 func buildFinalizeContext(runDir, runID string) ([]byte, error) {
@@ -358,7 +370,7 @@ func buildFinalizeContext(runDir, runID string) ([]byte, error) {
 		context.Counts["findings_"+bucket]++
 		context.Buckets[bucket] = append(context.Buckets[bucket], finding.ID)
 
-		item, err := buildFinalizeFindingContext(runDir, finding, verdicts, state.FindingEvidence[finding.ID], workspaceFiles, bucket, status)
+		item, err := buildFinalizeFindingContext(runDir, finding, verdicts, state.FindingEvidence[finding.ID], state.ValidationBlockers[finding.ID], workspaceFiles, bucket, status)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +384,7 @@ func buildFinalizeContext(runDir, runID string) ([]byte, error) {
 	return data, nil
 }
 
-func buildFinalizeFindingContext(runDir string, finding FindingRecord, verdicts map[string]VerdictRecord, evidence map[string]EvidenceRecord, workspaceFiles []string, bucket, status string) (finalizeFindingContext, error) {
+func buildFinalizeFindingContext(runDir string, finding FindingRecord, verdicts map[string]VerdictRecord, evidence map[string]EvidenceRecord, blockers []validationBlockerContext, workspaceFiles []string, bucket, status string) (finalizeFindingContext, error) {
 	item := finalizeFindingContext{
 		ID:                 finding.ID,
 		Title:              finding.Title,
@@ -384,6 +396,7 @@ func buildFinalizeFindingContext(runDir string, finding FindingRecord, verdicts 
 		Bucket:             bucket,
 		FindingBodyPath:    finding.BodyPath,
 		Verdicts:           reportVerdictLabels(verdicts),
+		ValidationBlockers: sortedValidationBlockers(blockers),
 		RegisteredEvidence: []finalizeEvidenceContext{},
 	}
 	if dedup, ok := verdicts["deduplicate"]; ok && dedup.Value == "duplicate" {
@@ -560,4 +573,18 @@ func sortedEvidenceRecords(items map[string]EvidenceRecord) []EvidenceRecord {
 		return records[i].Path < records[j].Path
 	})
 	return records
+}
+
+func sortedValidationBlockers(items []validationBlockerContext) []validationBlockerContext {
+	out := append([]validationBlockerContext(nil), items...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SourcePath != out[j].SourcePath {
+			return out[i].SourcePath < out[j].SourcePath
+		}
+		if out[i].Summary != out[j].Summary {
+			return out[i].Summary < out[j].Summary
+		}
+		return out[i].NextCommand < out[j].NextCommand
+	})
+	return out
 }

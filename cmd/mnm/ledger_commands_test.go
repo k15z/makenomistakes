@@ -844,6 +844,201 @@ func TestReportFinalizeRejectsProvenFindingWithoutValidationProofCitation(t *tes
 	}
 }
 
+func TestReportFinalizeRequiresValidationBlockersForInconclusiveFinding(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	handoffRel := addValidationHandoffForFindingForTest(t, runDir, findingID, []taskHandoffBlocker{{
+		Summary:            "database service was unavailable",
+		MissingDependency:  "docker compose",
+		FailedCommand:      "go test ./cmd/mnm",
+		RequiredService:    "postgres",
+		SuspectedConfigGap: "DATABASE_URL was unset",
+		NextCommand:        "docker compose up -d postgres && go test ./cmd/mnm",
+	}})
+	recordVerdictForTest(t, runDir, findingID, "validate", "inconclusive", "")
+
+	item := map[string]any{
+		"id":             findingID,
+		"title":          "Missing authorization check",
+		"category":       "authz",
+		"severity":       "high",
+		"confidence":     "medium",
+		"source_lead_id": leadID,
+		"status":         "validation_inconclusive",
+		"verdicts":       []string{"review accepted", "deduplicate canonical", "validation inconclusive"},
+		"evidence_paths": []string{},
+		"summary":        "Validation remained plausible but blocked by setup.",
+		"affected_paths": []string{},
+	}
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"inconclusive": {item},
+	}))
+
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing validation blockers error")
+	}
+	if !strings.Contains(err.Error(), "validation_blockers") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ledgerReportFinalized(runDir) {
+		t.Fatal("report without validation blockers should not be finalized")
+	}
+
+	item["validation_blockers"] = []map[string]any{{
+		"summary":              "database service was unavailable",
+		"missing_dependency":   "docker compose",
+		"failed_command":       "go test ./cmd/mnm",
+		"required_service":     "postgres",
+		"suspected_config_gap": "DATABASE_URL was unset",
+		"next_command":         "docker compose up -d postgres && go test ./cmd/mnm",
+		"source_path":          handoffRel,
+	}}
+	reportMD = writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\nNext: docker compose up -d postgres && go test ./cmd/mnm\n")
+	reportJSON = writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"inconclusive": {item},
+	}))
+
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected missing markdown validation blocker coverage error")
+	}
+	if !strings.Contains(err.Error(), "markdown report missing validation blocker") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reportMD = writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+`
+
+Blocked validation:
+- Summary: database service was unavailable
+- Missing dependency: docker compose
+- Failed command: go test ./cmd/mnm
+- Required service: postgres
+- Suspected config gap: DATABASE_URL was unset
+- Next command: docker compose up -d postgres && go test ./cmd/mnm
+`)
+	reportJSON = writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"inconclusive": {item},
+	}))
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("report finalize failed: %v\nstderr: %s", err, stderr.String())
+	}
+}
+
+func TestReportFinalizeRejectsInconclusiveFindingWithoutValidationBlockers(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+	recordVerdictForTest(t, runDir, findingID, "review", "accepted", "")
+	recordVerdictForTest(t, runDir, findingID, "deduplicate", "canonical", "")
+	recordVerdictForTest(t, runDir, findingID, "validate", "inconclusive", "")
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"inconclusive": {{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "validation_inconclusive",
+			"verdicts":       []string{"review accepted", "deduplicate canonical", "validation inconclusive"},
+			"evidence_paths": []string{},
+			"summary":        "Validation was recorded as inconclusive without a blocker handoff.",
+			"affected_paths": []string{},
+		}},
+	}))
+
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected inconclusive validation without blocker error")
+	}
+	if !strings.Contains(err.Error(), "must include at least one blocker") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReportFinalizeRejectsUnexpectedValidationBlockers(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	leadID := createLeadForTest(t, runDir)
+	findingID := createFindingForTest(t, runDir, leadID)
+
+	reportMD := writeRunFile(t, runDir, "report.md", "# Report\n\nFinding: "+findingID+"\n")
+	reportJSON := writeRunFile(t, runDir, "report.json", validReportJSONFromBuckets(t, "run_test", "report.md", "report.json", map[string][]map[string]any{
+		"unvalidated": {{
+			"id":             findingID,
+			"title":          "Missing authorization check",
+			"category":       "authz",
+			"severity":       "high",
+			"confidence":     "medium",
+			"source_lead_id": leadID,
+			"status":         "candidate",
+			"verdicts":       []string{},
+			"evidence_paths": []string{},
+			"summary":        "Candidate finding.",
+			"affected_paths": []string{},
+			"validation_blockers": []map[string]any{{
+				"summary":              "fabricated blocker",
+				"missing_dependency":   "",
+				"failed_command":       "",
+				"required_service":     "postgres",
+				"suspected_config_gap": "",
+				"next_command":         "docker compose up -d postgres",
+				"source_path":          "evidence/handoff-validate-finding.json",
+			}},
+		}},
+	}))
+
+	setCurrentTaskPhaseForTest(t, runDir, "finalize")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"report", "finalize",
+		"--run-dir", runDir,
+		"--markdown", reportMD,
+		"--json", reportJSON,
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected unexpected validation blockers error")
+	}
+	if !strings.Contains(err.Error(), "no validation handoff blockers were recorded") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestReportFinalizeRejectsLateValidationProofCitation(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	leadID := createLeadForTest(t, runDir)
@@ -4024,6 +4219,32 @@ func addValidationProofForFindingForTest(t *testing.T, runDir, findingID string)
 			"lead_id":        "",
 			"finding_id":     findingID,
 		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return relPath
+}
+
+func addValidationHandoffForFindingForTest(t *testing.T, runDir, findingID string, blockers []taskHandoffBlocker) string {
+	t.Helper()
+	taskID := "task_validate_" + safeFileID(findingID)
+	relPath := taskHandoffRelPath("validate", findingID)
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(relPath)), taskHandoffFile{
+		Version:   phaseHandoffVersion,
+		Phase:     "validate",
+		TaskID:    taskID,
+		FindingID: findingID,
+		Blockers:  blockers,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registerTaskEvidence(runDir, taskEvidenceRegistration{
+		RunID:     "run_test",
+		TaskID:    taskID,
+		Kind:      "json",
+		Title:     "Task handoff: " + findingID,
+		Path:      relPath,
+		FindingID: findingID,
 	}); err != nil {
 		t.Fatal(err)
 	}

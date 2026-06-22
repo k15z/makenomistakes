@@ -170,10 +170,11 @@ func TestBuildPhaseHandoffContextRejectsChangedTaskHandoff(t *testing.T) {
 	runDir := newLedgerTestRun(t)
 	handoffRel := "evidence/handoff-investigate-lead_auth.json"
 	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
-		Version: phaseHandoffVersion,
-		Phase:   "investigate",
-		TaskID:  "task_investigate_lead_auth",
-		LeadID:  "lead_auth",
+		Version:           phaseHandoffVersion,
+		Phase:             "investigate",
+		TaskID:            "task_investigate_lead_auth",
+		LeadID:            "lead_auth",
+		AttemptedCommands: []string{"go test ./..."},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -181,21 +182,13 @@ func TestBuildPhaseHandoffContextRejectsChangedTaskHandoff(t *testing.T) {
 		RunID:  "run_test",
 		TaskID: "task_investigate_lead_auth",
 		Kind:   "json",
-		Title:  "Task handoff: Investigate auth",
+		Title:  "Task handoff: lead_auth",
 		Path:   handoffRel,
 		LeadID: "lead_auth",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
-		Version:          phaseHandoffVersion,
-		Phase:            "investigate",
-		TaskID:           "task_investigate_lead_auth",
-		LeadID:           "lead_auth",
-		SetupDiscoveries: []string{"changed after registration"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	writeRunFile(t, runDir, handoffRel, `{"version":1,"phase":"investigate","task_id":"task_investigate_lead_auth","lead_id":"lead_auth","blockers":[{"summary":"late edit"}]}`)
 
 	_, err := buildPhaseHandoffContext(runDir, "run_test", "validate")
 	if err == nil {
@@ -326,10 +319,11 @@ func TestValidateRequiredTaskHandoffRejectsChangedProducerArtifact(t *testing.T)
 	runDir := newLedgerTestRun(t)
 	handoffRel := taskHandoffRelPath("validate", "finding_auth")
 	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
-		Version:   phaseHandoffVersion,
-		Phase:     "validate",
-		TaskID:    "task_validate_finding_auth",
-		FindingID: "finding_auth",
+		Version:           phaseHandoffVersion,
+		Phase:             "validate",
+		TaskID:            "task_validate_finding_auth",
+		FindingID:         "finding_auth",
+		AttemptedCommands: []string{"go test ./..."},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -343,15 +337,7 @@ func TestValidateRequiredTaskHandoffRejectsChangedProducerArtifact(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
-		Version:           phaseHandoffVersion,
-		Phase:             "validate",
-		TaskID:            "task_validate_finding_auth",
-		FindingID:         "finding_auth",
-		AttemptedCommands: []string{"changed after registration"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	writeRunFile(t, runDir, handoffRel, `{"version":1,"phase":"validate","task_id":"task_validate_finding_auth","finding_id":"finding_auth","blockers":[{"summary":"late edit"}]}`)
 
 	err := validateRequiredTaskHandoff(runDir, "validate", "task_validate_finding_auth", "", "finding_auth")
 	if err == nil {
@@ -359,6 +345,84 @@ func TestValidateRequiredTaskHandoffRejectsChangedProducerArtifact(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "changed after registration") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateBlockedValidationHandoffRequiresActionableBlocker(t *testing.T) {
+	runDir := newLedgerTestRun(t)
+	handoffRel := taskHandoffRelPath("validate", "finding_auth")
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
+		Version:   phaseHandoffVersion,
+		Phase:     "validate",
+		TaskID:    "task_validate_finding_auth",
+		FindingID: "finding_auth",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := validateBlockedValidationHandoff(runDir, "finding_auth")
+	if err == nil {
+		t.Fatal("expected missing blocker error")
+	}
+	if !strings.Contains(err.Error(), "requires at least one task handoff blocker") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
+		Version:   phaseHandoffVersion,
+		Phase:     "validate",
+		TaskID:    "task_validate_finding_auth",
+		FindingID: "finding_auth",
+		Blockers: []taskHandoffBlocker{{
+			Summary:         "database service was absent",
+			RequiredService: "postgres",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = validateBlockedValidationHandoff(runDir, "finding_auth")
+	if err == nil {
+		t.Fatal("expected missing next command error")
+	}
+	if !strings.Contains(err.Error(), "next_command is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
+		Version:   phaseHandoffVersion,
+		Phase:     "validate",
+		TaskID:    "task_validate_finding_auth",
+		FindingID: "finding_auth",
+		Blockers: []taskHandoffBlocker{{
+			Summary:     "database service was absent",
+			NextCommand: "docker compose up -d db && go test ./...",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = validateBlockedValidationHandoff(runDir, "finding_auth")
+	if err == nil {
+		t.Fatal("expected missing blocker cause error")
+	}
+	if !strings.Contains(err.Error(), "must include a missing dependency, failed command, required service, or suspected config gap") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := writeJSON(filepath.Join(runDir, filepath.FromSlash(handoffRel)), taskHandoffFile{
+		Version:   phaseHandoffVersion,
+		Phase:     "validate",
+		TaskID:    "task_validate_finding_auth",
+		FindingID: "finding_auth",
+		Blockers: []taskHandoffBlocker{{
+			Summary:         "database service was absent",
+			RequiredService: "postgres",
+			NextCommand:     "docker compose up -d db && go test ./...",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBlockedValidationHandoff(runDir, "finding_auth"); err != nil {
+		t.Fatalf("expected actionable blocker to pass: %v", err)
 	}
 }
 
